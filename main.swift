@@ -26,7 +26,7 @@ enum Cfg {
   static func clearDisplayThemes() { for k in d.dictionaryRepresentation().keys where k.hasPrefix("theme.display.") { d.removeObject(forKey: k) } }
   static let themes: [(String, String)] = [("estate", "Marauders · very low"), ("gallery", "Gallery · none"), ("wind", "Wind Map · medium"), ("lava", "Lava Lamp · low"),
     ("tunnel", "Wind Tunnel · high"), ("reef", "Koi Reef · medium"), ("snow", "Snowfall · low"), ("celestial", "Celestial Atlas · none"),
-    ("inkmap", "Ink Map · very low"), ("garden", "Garden Plan · very low"), ("meadow", "Meadow · high"), ("beach", "Beach · medium")]
+    ("inkmap", "Ink Map · very low"), ("garden", "Garden Plan · very low"), ("railway", "Model Railway · very low"), ("meadow", "Meadow · high"), ("beach", "Beach · medium")]
   /// each theme's own sub-choice (Wind Map's region, Lava Lamp's colours, …), declared in themes/variants.json
   static var variantOverride: String?
   static func variant(_ t: String) -> String? { (t == theme ? variantOverride : nil) ?? d.string(forKey: "variant.\(t)") }
@@ -36,7 +36,9 @@ enum Cfg {
   static var fps: Double { get { d.object(forKey: "fps") as? Double ?? 0 } set { d.set(newValue, forKey: "fps") } }
   /// seeds the generated names (your walker, the strangers); stable across launches
   static var seed: Int { if let v = d.object(forKey: "seed") as? Int { return v }; let v = Int.random(in: 1..<Int(Int32.max)); d.set(v, forKey: "seed"); return v }
-  static var mask: Bool { get { d.object(forKey: "mask") as? Bool ?? true } set { d.set(newValue, forKey: "mask") } }
+  /// pause the animation when nobody has touched the mouse or keyboard for a while; any input brings it straight back
+  static var restWhenIdle: Bool { get { d.object(forKey: "restWhenIdle") as? Bool ?? true } set { d.set(newValue, forKey: "restWhenIdle") } }
+  static var mask: Bool { get { d.object(forKey: "mask") as? Bool ?? false }   /* every theme opts out of the mask now */ set { d.set(newValue, forKey: "mask") } }
 }
 
 let args = CommandLine.arguments
@@ -96,7 +98,7 @@ func earlyScript(fps: Double, opaque: Bool) -> String { """
   HTMLCanvasElement.prototype.getContext = function (type, opts) {
     if (type === 'webgl2' && !window.__gl) {
       // opaque: the scene covers every pixel anyway; an opaque layer lets WindowServer copy instead of blend
-      const g = gc.call(this, type, Object.assign({}, opts, { stencil: true, alpha: window.__opaque === false }));
+      const g = gc.call(this, type, Object.assign({}, opts, { stencil: false, depth: false, alpha: window.__opaque === false }));   // no theme uses depth or the stencil mask: no buffers for them
       window.__gl = g; return g;
     }
     return gc.call(this, type, opts);
@@ -189,8 +191,26 @@ func unlockHighRefresh(_ prefs: WKPreferences) {
 
 // MARK: - One wallpaper per screen
 
+/// What a screen shows while its page is let go: the last frame, as a still picture (a few MB, no web process at all)
+final class StillWall {
+  let window: NSWindow
+  init(frame: NSRect, image: NSImage) {
+    window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+    window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
+    window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
+    window.ignoresMouseEvents = true; window.isOpaque = true; window.hasShadow = false; window.isReleasedWhenClosed = false
+    // one bitmap, handed straight to the layer (an image view would keep extra copies of the picture)
+    let v = NSView(frame: NSRect(origin: .zero, size: frame.size)); v.wantsLayer = true
+    var r = NSRect(origin: .zero, size: image.size); v.layer?.contents = image.cgImage(forProposedRect: &r, context: nil, hints: nil); v.layer?.contentsGravity = .resize
+    window.contentView = v; window.setFrame(frame, display: true); window.orderFront(nil)
+  }
+  func close() { window.orderOut(nil); window.close() }
+}
+
 final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   let screenID: CGDirectDisplayID
+  static let pool = WKProcessPool()
+  static weak var anyWeb: WKWebView?
   var cgFrame: CGRect                         // screen in CG global coords (top-left origin), points
   let window: NSWindow
   let web: WKWebView
@@ -198,11 +218,15 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   var paused: Bool?
   var lastIcons = "", lastMask = "", lastWins = ""
   var pending: (() -> Void)?
+  var onShown: (() -> Void)?                  // called once a page that started hidden has drawn and is on show
 
-  init(screen: NSScreen) {
+  init(screen: NSScreen, hidden: Bool = false) {
     screenID = screen.displayID
     cgFrame = screen.cgFrame
     let cfg = WKWebViewConfiguration()
+    // every screen's page in ONE web process: the engine, its libraries and caches are paid for once, not per display
+    cfg.processPool = Wallpaper.pool
+    if let r = Wallpaper.anyWeb, cfg.responds(to: NSSelectorFromString("_setRelatedWebView:")) { cfg.perform(NSSelectorFromString("_setRelatedWebView:"), with: r) }
     cfg.setURLSchemeHandler(SchemeHandler(), forURLScheme: "driftland")
     cfg.suppressesIncrementalRendering = true
     unlockHighRefresh(cfg.preferences)
@@ -219,6 +243,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     window.hasShadow = false
     window.isReleasedWhenClosed = false
     web = WKWebView(frame: NSRect(origin: .zero, size: screen.frame.size), configuration: cfg)
+    if Wallpaper.anyWeb == nil { Wallpaper.anyWeb = web }
     web.setValue(false, forKey: "drawsBackground")
     super.init()
     ucc.add(WeakHandler(self), name: "host")
@@ -230,13 +255,14 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     }
     window.contentView = web
     window.setFrame(screen.frame, display: false)
+    if hidden { window.alphaValue = 0 }      // built behind the still picture; shown once it has drawn
     window.orderFront(nil)
     load()
   }
 
   func load() {
     ready = false; paused = nil; lastIcons = ""; lastMask = ""; lastWins = ""; wantsCursor = true
-    let page = ["beach": "flat", "meadow": "meadow", "inkmap": "inkmap", "celestial": "celestial", "snow": "snow", "reef": "reef", "wind": "wind", "lava": "lava", "tunnel": "tunnel", "gallery": "gallery", "garden": "garden"][Cfg.theme(for: screenID)] ?? "estate"
+    let page = ["beach": "flat", "meadow": "meadow", "inkmap": "inkmap", "celestial": "celestial", "snow": "snow", "reef": "reef", "wind": "wind", "lava": "lava", "tunnel": "tunnel", "gallery": "gallery", "garden": "garden", "railway": "railway"][Cfg.theme(for: screenID)] ?? "estate"
     let v = Cfg.variant(Cfg.theme(for: screenID)).flatMap { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) }.map { "&v=\($0)" } ?? ""
     web.load(URLRequest(url: URL(string: "driftland://app/\(page).html?wallpaper=1\(v)")!))
   }
@@ -271,6 +297,10 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   func userContentController(_ u: WKUserContentController, didReceive m: WKScriptMessage) {
     let s = "\(m.body)"
     if s == "nocursor" { wantsCursor = false; return }
+    if s == "ready" && window.alphaValue < 1 {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in guard let self else { return }
+        NSAnimationContext.runAnimationGroup { c in c.duration = 0.35; self.window.animator().alphaValue = 1 } completionHandler: { self.onShown?(); self.onShown = nil } }
+    }
     if s == "ready" { ready = true; sendDesk(); send("{\"t\":\"me\",\"seed\":\(Cfg.seed)}")
       if let p = pending { pending = nil; p() } else if let a = lastArgs { update(rects: a.0, owners: a.1, live: false, pause: a.3) }
       return }
@@ -404,7 +434,7 @@ final class Tracker {
     } else if !fast, let a = activity, t - lastFastT > 2 { ProcessInfo.processInfo.endActivity(a); activity = nil }
     if fast { lastFastT = t }
     // fast: every tick (60 Hz) — the page itself paces to its own fps; idle: 2 Hz
-    guard fast || t - lastPoll >= (Self.allHidden ? 0.5 : Self.idleInterval) else { return }
+    guard fast || t - lastPoll >= (Self.idle ? 2 : Self.allHidden ? 0.5 : Self.idleInterval) else { return }   // nobody's at the Mac: a look every 2 s is plenty
     if fast && lastPoll > 0 { maxGap = max(maxGap, t - lastPoll) }
     lastPoll = t
     let t0 = DispatchTime.now().uptimeNanoseconds
@@ -560,7 +590,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var walls: [CGDirectDisplayID: Wallpaper] = [:]
   let tracker = Tracker()
   var status: NSStatusItem!
-  var userPaused = false, locked = false, displaysAsleep = false
+  var userPaused = false, locked = false, displaysAsleep = false, awayTimer: Timer?, releasedAway = false, idleRest = false, idleTimer: Timer?, testPauseArmed = false
   var asleep: Bool { locked || displaysAsleep }
   var lastRects: [CGRect] = []
   var lastOwners: [String] = []
@@ -580,6 +610,21 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       w.cursor(p)
     }
     tracker.start()
+    // nobody at the Mac (no mouse or key for 3 minutes): every page rests; the first touch wakes them. A once-a-second
+    // look at the system's input clock, which needs no permission.
+    if !benchMode || argValue("--idletest") != nil {
+      let limit = Double(argValue("--idletest") ?? "180") ?? 180
+      idleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        guard let self else { return }
+        let quiet = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        let rest = Cfg.restWhenIdle && quiet > limit
+        if rest != self.idleRest { self.idleRest = rest; log(rest ? "idle: resting" : "input: awake"); self.dispatch(live: false) }
+      }
+    }
+    if let t = argValue("--testpause"), let a = Double(t), !testPauseArmed {   /* bench: pause at a, resume at a + 8 */
+      testPauseArmed = true
+      DispatchQueue.main.asyncAfter(deadline: .now() + a) { self.userPaused = true; self.dispatch(live: false) }
+      DispatchQueue.main.asyncAfter(deadline: .now() + a + 8) { self.userPaused = false; self.dispatch(live: false) } }
     NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.buildWalls() }
     let wnc = NSWorkspace.shared.notificationCenter
     wnc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.displaysAsleep = true; self?.dispatch(live: false) }
@@ -605,12 +650,31 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     guard coverTimer == nil, !coveredSince.isEmpty else { return }
     coverTimer = Timer.scheduledTimer(withTimeInterval: 16, repeats: false) { [weak self] _ in self?.coverTimer = nil; self?.dispatch(live: false) }
   }
+  var stills: [CGDirectDisplayID: StillWall] = [:]
+  /// let every page go, leaving each screen showing its last frame as a still picture
+  func releaseToStills() {
+    let ws = walls; walls = [:]; releasedAway = true
+    for (id, w) in ws {
+      w.web.takeSnapshot(with: nil) { [weak self] img, _ in
+        guard let self else { w.close(); return }
+        if let img, self.releasedAway {
+          self.stills[id]?.close(); self.stills[id] = StillWall(frame: w.window.frame, image: img)
+          if let path = argValue("--stilldump"), let t = img.tiffRepresentation, let r = NSBitmapImageRep(data: t), let png = r.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: path)) }
+        }
+        w.close()
+      }
+    }
+    log("away: released every page (still pictures on show)")
+  }
   func buildWalls() {
+    if releasedAway { return }                                     // away: the pages come back when you do
     let ids = Set(NSScreen.screens.map { $0.displayID })
     for (id, w) in walls where !ids.contains(id) { w.close(); walls[id] = nil }
     for s in NSScreen.screens where (!benchMode || s == NSScreen.screens[0]) && !dormant.contains(s.displayID) {
       if let w = walls[s.displayID] { w.cgFrame = s.cgFrame; w.window.setFrame(s.frame, display: true); w.sendDesk() }
-      else { walls[s.displayID] = Wallpaper(screen: s) }
+      else { let id = s.displayID, still = stills[id]; let w = Wallpaper(screen: s, hidden: still != nil); walls[id] = w
+        if let still { w.onShown = { [weak self] in still.close(); if self?.stills[id] === still { self?.stills[id] = nil } }
+          DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in if self?.stills[id] === still { w.window.alphaValue = 1; still.close(); self?.stills[id] = nil } } } }   // never leave a stale still up
     }
     tracker.forceResend()
   }
@@ -632,14 +696,26 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
     }
     scheduleCoverCheck()
-    Tracker.idle = userPaused || asleep
+    Tracker.idle = userPaused || asleep || idleRest
+    // away for a while (locked, displays asleep, or paused from the menu): every page is let go, all of its memory with it,
+    // and the wallpapers are rebuilt the moment you're back
+    if userPaused || asleep || idleRest {
+      // locked, asleep or paused: let go after 90 s; just idle at the desk: after 10 minutes
+      let wait = userPaused || asleep ? (Double(argValue("--away") ?? "90") ?? 90) : (Double(argValue("--idleaway") ?? "600") ?? 600)
+      if awayTimer == nil && !walls.isEmpty { awayTimer = Timer.scheduledTimer(withTimeInterval: wait, repeats: false) { [weak self] _ in
+        guard let self, self.userPaused || self.asleep || self.idleRest else { return }
+        self.releaseToStills() } }
+    } else {
+      awayTimer?.invalidate(); awayTimer = nil
+      if releasedAway { releasedAway = false; log("back: rebuilding pages"); buildWalls() }
+    }
     let hidden = NSScreen.screens.allSatisfy { s in dormant.contains(s.displayID) || coveredSince[s.displayID] != nil }
     if hidden != Tracker.allHidden { Tracker.allHidden = hidden; log(hidden ? "everything covered: idling" : "something visible again") }
     for w in walls.values {
       let idx = lastRects.indices.filter { lastRects[$0].intersects(w.cgFrame) }
       let mine = idx.map { lastRects[$0] }, names = idx.map { $0 < lastOwners.count ? lastOwners[$0] : "" }
       // never pause while windows are moving (a sliver of the town is still on show and must keep up)
-      let pause = userPaused || asleep || (!live && uncoveredArea(w.cgFrame, mine) < 1)
+      let pause = userPaused || asleep || idleRest || (!live && uncoveredArea(w.cgFrame, mine) < 1)
       w.update(rects: mine, owners: names, live: live, pause: pause)
     }
   }
@@ -723,11 +799,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     sub("Margin around windows", [60.0, 100, 140, 200].map { v in ("\(Int(v)) pt", Cfg.margin == v, { Cfg.margin = v; self.tracker.forceResend(); self.buildMenu() }) })
     sub("Frame rate", [0.0, 15, 20, 30].map { v in (v == 0 ? "Uncapped" : "\(Int(v)) fps", Cfg.fps == v, { Cfg.fps = v; self.reloadAll(); self.buildMenu() }) })
-    let mk = ClosureItem("Skip pixels under windows") { Cfg.mask.toggle(); self.tracker.forceResend(); self.buildMenu() }
-    mk.state = Cfg.mask ? .on : .off; m.addItem(mk)
     m.addItem(.separator())
+    let ri = ClosureItem("Rest when idle") { Cfg.restWhenIdle.toggle(); self.buildMenu() }; ri.state = Cfg.restWhenIdle ? .on : .off
     let p = ClosureItem("Pause") { self.userPaused.toggle(); self.dispatch(live: false); self.buildMenu() }
-    p.state = userPaused ? .on : .off; m.addItem(p)
+    p.state = userPaused ? .on : .off; m.addItem(p); m.addItem(ri)
     m.addItem(ClosureItem("Reload") { self.reloadAll() })
     let li = ClosureItem("Start at login") { LoginItem.set(!LoginItem.enabled); self.buildMenu() }
     li.state = LoginItem.enabled ? .on : .off; m.addItem(li)
@@ -767,6 +842,13 @@ enum Bench {
                   (R(1320, 790, 170, 170), "Notification Centre", false), (R(1140, 790, 170, 170), "Notification Centre", false)],
       "edge": [(R(700, 300, 812, 682), "Code", false), (R(16, 16, 170, 170), "Notification Centre", false), (R(196, 16, 170, 170), "Notification Centre", false)],
       "widgets": [(R(1320, 790, 170, 170), "Notification Centre", false), (R(1320, 600, 170, 170), "Notification Centre", false), (R(40, 60, 344, 170), "Notification Centre", false), (R(1060, 480, 170, 170), "Notification Centre", false), (R(300, 200, 560, 420), "Google Chrome", false)],
+      "mine": [(R(16, 193, 100, 130), "Slack", true), (R(16, 337, 118, 149), "Google Chrome", true), (R(16, 512, 118, 155), "Electron", true), (R(16, 675, 118, 147), "Claude", true),
+               (R(-7, 263, 66, 82), "WindowManager", false), (R(-7, 441, 66, 82), "WindowManager", false), (R(-7, 622, 66, 82), "WindowManager", false), (R(-7, 777, 66, 82), "WindowManager", false),
+               (R(1324, 794, 180, 180), "Notification Centre", false)],
+      "big": [(R(16, 193, 100, 130), "Slack", true), (R(16, 337, 118, 149), "Google Chrome", true), (R(16, 512, 118, 155), "Electron", true), (R(16, 675, 118, 147), "Claude", true),
+              (R(236, 146, 979, 676), "WhatsApp", false), (R(1324, 794, 180, 180), "Notification Centre", false)],
+      "slack": [(R(16, 193, 100, 130), "WhatsApp", true), (R(16, 337, 118, 149), "Google Chrome", true), (R(16, 512, 118, 155), "Electron", true), (R(16, 675, 118, 147), "Claude", true),
+                (R(231, 140, 1155, 670), "Slack", false), (R(1324, 794, 180, 180), "Notification Centre", false)],
       "empty": []]
     var owners0 = ["Slack", "WhatsApp", "Notes", "Electron", "Claude", "Notification Centre"], rects0 = fixed, stage0: [CGRect] = []
     if let name = argValue("--layout"), let l = layouts[name] { rects0 = l.map { $0.0 }; owners0 = l.map { $0.1 }; stage0 = l.filter { $0.2 }.map { $0.0 } }

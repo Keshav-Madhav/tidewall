@@ -14,11 +14,13 @@
 <title>Gallery</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #d9cdc2; }
-  #wall { position: fixed; inset: 0; background: url(gallery/wall.jpg) center bottom / cover no-repeat; }
-  #house { position: fixed; inset: 0; pointer-events: none; transition: background-color 4s ease;   /* the house lights */
-    background: radial-gradient(ellipse 120% 95% at 50% 38%, rgba(20,12,6,.24) 0%, rgba(20,12,6,.38) 70%, rgba(20,12,6,.5) 100%); }   /* the room is a little dim: the spotlights do the lighting */
-  #night { position: fixed; inset: 0; pointer-events: none; background: #0b0806; opacity: 0; transition: opacity 6s ease; mix-blend-mode: multiply; }
-  .layer { position: fixed; inset: 0; pointer-events: none; }
+  /* the whole room is ONE layer: the wall and its dimness are its background, everything else is drawn inside it (each
+     extra full-screen layer costs ~22 MB of graphics memory per display) */
+  #room { position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 120% 95% at 50% 38%, rgba(20,12,6,.24) 0%, rgba(20,12,6,.38) 70%, rgba(20,12,6,.5) 100%),   /* the room is a little dim: the spotlights do the lighting */
+                url(gallery/wall.jpg) center bottom / cover no-repeat; }
+  #night { position: absolute; inset: 0; pointer-events: none; background: #0b0806; opacity: 0; transition: opacity 6s ease; mix-blend-mode: multiply; display: none; }
+  .layer { position: absolute; inset: 0; pointer-events: none; }
   .piece { position: absolute; }
   .shadow { position: absolute; transition: opacity .8s ease;
     box-shadow: 0 1px 2px rgba(0,0,0,.35), 5px 12px 22px rgba(35,20,8,.30), 14px 30px 60px rgba(35,20,8,.20); }
@@ -47,14 +49,14 @@
 </style>
 </head>
 <body>
-<div id="wall"></div>
-<div id="house"></div>
+<div id="room">
 <div class="layer" id="Lniche"></div>
 <div class="layer" id="Lshadow"></div>
 <div class="layer" id="Lframe"></div>
 <div class="layer" id="Lplate"></div>
 <div id="night"></div>
 <div class="layer" id="Llight"></div>
+</div>
 <script>
 'use strict';
 window.__noMask = true;
@@ -325,7 +327,7 @@ const pad = b => [b[0] - 30, b[1] - 30, b[2] + 30, b[3] + 30];
 function houseLights() {
   const hr = new Date().getHours() + new Date().getMinutes() / 60;
   const night = hr >= 22 || hr < 6.5 ? 1 : hr >= 20 ? (hr - 20) / 2 : hr < 8 ? 1 - (hr - 6.5) / 1.5 : 0;
-  document.getElementById('night').style.opacity = (night * .72).toFixed(3);   // the wall goes dark; the spotlights (above it) stay on
+  const n = document.getElementById('night'); n.style.display = night > 0 ? 'block' : 'none'; n.style.opacity = (night * .72).toFixed(3);   // gone entirely by day: no layer for it   // the wall goes dark; the spotlights (above it) stay on
 }
 
 /* ======================= host protocol ======================= */

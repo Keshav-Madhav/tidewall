@@ -90,7 +90,7 @@ function sampleS(F, x, y) {
 }
 
 /* ---------- WebGL: the map itself ---------- */
-const gl = cv.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
+const gl = cv.getContext('webgl2', { antialias: false });   // every draw redraws the whole map: no need to preserve the buffer (a full-screen copy)
 const VS = `#version 300 es
 void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
 const FS = `#version 300 es
@@ -518,6 +518,7 @@ function layoutOverlay() {
     if (!boxes.every(far)) continue;
     whale(x, ox, oy, R() < .5 ? 1 : -1); boxes.push([ox - 45, oy - 30, ox + 45, oy + 20]); whales++; }
   const old = labFront; back.style.opacity = 1; old.style.opacity = 0; labFront = back;
+  clearTimeout(old._free); old._free = setTimeout(() => { if (old !== labFront) old.width = old.height = 1; }, 1600);   // the faded-out sheet gives its memory back (~24 MB)
   clearTimeout(old._free); old._free = setTimeout(() => { if (old !== labFront) old.width = old.height = 1; }, 1600);
 }
 function whale(x, cx, cy, dir) {

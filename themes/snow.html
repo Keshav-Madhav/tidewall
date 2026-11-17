@@ -39,7 +39,9 @@ function panelFor(i, n) { const P = ['backdrop_l', 'backdrop', 'backdrop_r']; re
 const showPanel = (i, n) => { const src = `snow/${panelFor(i, n)}.jpg`; if (!PAINT.src.endsWith(src)) PAINT.src = src; };
 setTimeout(() => { if (!PAINT.src) showPanel(0, 1); }, 600);              // no word from the host about other screens
 PAINT.onload = () => drawBackdrop();
-function drawBackdrop() {
+// the backdrop is painted once into a 2D canvas, then handed to WebGL as a texture and the canvas freed: one layer, not two
+function drawBackdrop() { paintBackdrop(); backdropToGL(); }
+function paintBackdrop() {
   if (PAINT.complete && PAINT.naturalWidth) {
     cv.width = Math.round(W * K); cv.height = Math.round(H * K);
     const x = cv.getContext('2d'), iw = PAINT.naturalWidth, ih = PAINT.naturalHeight, s = Math.max(cv.width / iw, cv.height / ih);
@@ -222,8 +224,25 @@ gl.bindVertexArray(fVao); gl.bindBuffer(gl.ARRAY_BUFFER, fBuf); { const l = gl.g
 gl.bindVertexArray(null);
 gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 let dArr = new Float32Array(1 << 16), fArr = new Float32Array(1 << 14);
+let bgTex = null;
+const BG = program(`#version 300 es
+out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUV = vec2(p.x, 1. - p.y); gl_Position = vec4(p * 2. - 1., 0., 1.); }`, `#version 300 es
+precision mediump float; in vec2 vUV; uniform sampler2D uT; out vec4 o; void main() { o = vec4(texture(uT, vUV).rgb, 1.); }`);
+const bgVao = gl.createVertexArray();
+function backdropToGL() {
+  if (typeof gl === 'undefined' || !gl) return;
+  if (!bgTex) bgTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, bgTex); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, cv);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  cv.width = cv.height = 1; cv.style.display = 'none';
+  if (typeof wake === 'function') wake();
+}
 function render() {
   gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  if (bgTex) { gl.disable(gl.BLEND); gl.useProgram(BG); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, bgTex); gl.uniform1i(U(BG, 'uT'), 0);
+    gl.bindVertexArray(bgVao); gl.drawArrays(gl.TRIANGLES, 0, 3); gl.enable(gl.BLEND); }
   // far flakes first (behind the drifts), then drifts, then near flakes and clumps
   const pts = (far) => { let n = 0; for (let i = 0; i < flakes.length; i++) { const f = flakes[i]; if ((f.layer === 0) !== far) continue;
       if (n * 4 + 4 > fArr.length) { const g = new Float32Array(fArr.length * 2); g.set(fArr); fArr = g; } const o = n * 4; fArr[o] = f.x; fArr[o + 1] = f.y; fArr[o + 2] = f.size; fArr[o + 3] = f.a; n++; } return n; };
