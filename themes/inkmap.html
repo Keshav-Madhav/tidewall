@@ -1,0 +1,671 @@
+<!doctype html>
+<!--
+  Ink Map — a Driftland theme. Pen-and-ink archipelago on parchment: your windows are islands.
+  Land field adapted from Deskland's Beach theme (flat.html, GPL-3.0, github.com/BLEZZ0102/Deskland).
+  Perf model: the full-screen map is rendered ONLY when the land changes (morph / drag / resize).
+  Everything that moves (ship, serpent, footprints) is a small compositor layer moved by transform.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Ink Map</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #efe4cc; }
+  #map { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .sprite { position: fixed; left: 0; top: 0; will-change: transform; pointer-events: none; }
+  #compass { transition: opacity 1.2s ease; }
+  .step { position: fixed; left: 0; top: 0; pointer-events: none; animation: stepfade 5s ease-in forwards; }
+  .labels { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; transition: opacity 1.4s cubic-bezier(.4, 0, .2, 1); }
+  .wake { position: fixed; left: 0; top: 0; pointer-events: none; animation: wakefade 2.2s ease-out forwards; will-change: opacity, transform; }
+  @keyframes wakefade { 0% { opacity: .75; } 100% { opacity: 0; } }
+  @keyframes stepfade { 0% { opacity: 0; } 6% { opacity: .85; } 55% { opacity: .7; } 100% { opacity: 0; } }
+</style>
+<script src="companion.js"></script>
+</head>
+<body>
+<canvas id="map"></canvas>
+<canvas id="labelsA" class="labels" style="opacity:0"></canvas>
+<canvas id="labelsB" class="labels" style="opacity:0"></canvas>
+<script>
+'use strict';
+const INK = 'rgba(58,42,28,0.92)';
+const P = { quality: 2, sigma: 70, warp: 30 };            // P.quality only for bench compatibility
+const STEP = 6, MORPH_MS = 1500;
+const cv = document.getElementById('map');
+let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1;
+let icons = [], paused = false, fpsEMA = 0, fieldMs = 0;
+window.__noMask = true;                                    // static map: nothing to save by masking
+
+/* ---------- noise (JS side, for the field warp) ---------- */
+const h2 = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
+function vnoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = h2(ix, iy), b = h2(ix + 1, iy), c = h2(ix, iy + 1), d = h2(ix + 1, iy + 1);
+  return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy;
+}
+const fbm = (x, y, o) => { let v = 0, a = 0.5, f = 1; for (let i = 0; i < 4; i++) { v += a * vnoise(x * f + o * 17, y * f + o * 31); f *= 2; a *= 0.5; } return v; };
+
+/* ---------- land field (signed distance-ish, px; <0 land, >0 sea) ---------- */
+let NZ = null;
+function buildNoise() {
+  const N = Gw * Gh; NZ = { wx: new Float32Array(N), wy: new Float32Array(N) };
+  for (let gy = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++) {
+    const i = gy * Gw + gx, x = gx * STEP, y = gy * STEP;
+    NZ.wx[i] = fbm(x * 0.0035, y * 0.0035, 1) - 0.47 + 0.45 * (fbm(x * 0.017, y * 0.017, 3) - 0.47);
+    NZ.wy[i] = fbm(x * 0.0035, y * 0.0035, 2) - 0.47 + 0.45 * (fbm(x * 0.017, y * 0.017, 4) - 0.47);
+  }
+}
+function computeField(rects) {
+  const t0 = performance.now();
+  const N = Gw * Gh, f1 = new Float32Array(N);
+  const sig = P.sigma, is1 = 1 / (sig * sig), wa = P.warp * 2.2, wmax = wa * 0.5;
+  for (const r of rects) {
+    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5 + wmax;
+    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    // coast (f = 0.35) lands on the rect edge: core = rect shrunk by σ·√(−ln 0.35)
+    const chw = Math.max(r.hw - 1.025 * sig, 0), chh = Math.max(r.hh - 1.025 * sig, 0), wgt = r.w || 1;
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const i = gy * Gw + gx;
+      const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
+      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+      f1[i] += wgt * Math.exp(-(dx * dx + dy * dy) * is1);
+    }
+  }
+  const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
+  for (let i = 0; i < N; i++) {
+    const g = Math.log(Math.max(f1[i], fMin));
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
+  }
+  fieldMs = performance.now() - t0;
+  return { s };
+}
+function sampleS(F, x, y) {
+  if (!F) return 999;
+  const fx = Math.min(Math.max(x / STEP, 0), Gw - 1.001), fy = Math.min(Math.max(y / STEP, 0), Gh - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix, a = F.s;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
+}
+
+/* ---------- WebGL: the map itself ---------- */
+const gl = cv.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
+const VS = `#version 300 es
+void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`;
+const FS = `#version 300 es
+precision highp float;
+uniform sampler2D uA, uB; uniform float uMix, uScale, uH, uStep; uniform vec2 uGrid, uCompass;
+uniform vec4 uTowns[16]; uniform int uNT;          // x, y, fade, seed
+out vec4 o;
+float h12(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+vec2 h22(vec2 p) { return vec2(h12(p), h12(p + 19.19)); }
+float vn(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h12(i), h12(i + vec2(1, 0)), u.x), mix(h12(i + vec2(0, 1)), h12(i + vec2(1, 1)), u.x), u.y); }
+float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * vn(p); p = p * 2.03 + 7.1; a *= 0.5; } return v; }
+float S(vec2 p) { vec2 uv = (p / uStep + 0.5) / uGrid; return mix(texture(uA, uv).r, texture(uB, uv).r, uMix); }
+float seg(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0)); }
+float aa;                                     // ~1 output pixel in CSS px
+float line(float d, float w) { return 1.0 - smoothstep(w - aa * 0.5, w + aa * 0.5, d); }
+
+// little glyphs in local coords (y down)
+float wave(vec2 q) {                          // two stacked tilde strokes
+  float k = 0.0;
+  for (int i = 0; i < 2; i++) {
+    vec2 r = q - vec2(float(i) * 5.0, float(i) * 5.5);
+    float d = abs(r.y - 2.0 * sin(r.x * 0.45)) * 0.85;
+    k = max(k, line(d, 0.55) * smoothstep(9.5, 6.0, abs(r.x)));
+  }
+  return k;
+}
+float peak(vec2 q, float s) {                 // ^ mountain with hatched right flank
+  vec2 a = vec2(-8.0, 5.0) * s, b = vec2(0.0, -7.0) * s, c = vec2(8.0, 5.0) * s;
+  float k = line(min(seg(q, a, b), seg(q, b, c)), 0.6);
+  // hatching on the right flank
+  if (q.x > 0.0 && q.y > b.y && q.y < c.y) {
+    float edge = mix(b.x, c.x, (q.y - b.y) / (c.y - b.y));
+    if (q.x < edge - 0.8) k = max(k, line(abs(fract((q.x + q.y) * 0.32) - 0.5) * 3.1, 0.45) * 0.8);
+  }
+  return k;
+}
+float hill(vec2 q) { float d = abs(length(q - vec2(0, 3)) - 6.0); return q.y < 3.0 ? line(d, 0.55) : 0.0; }
+float pine(vec2 q) {
+  return line(min(min(seg(q, vec2(-4, 3), vec2(0, -7)), seg(q, vec2(0, -7), vec2(4, 3))),
+             min(seg(q, vec2(-4, 3), vec2(4, 3)), seg(q, vec2(0, 3), vec2(0, 6)))), 0.55);
+}
+float house(vec2 q) {
+  float b = min(min(seg(q, vec2(-4, 0), vec2(-4, 5)), seg(q, vec2(4, 0), vec2(4, 5))), seg(q, vec2(-4, 5), vec2(4, 5)));
+  float r = min(seg(q, vec2(-5, 0.5), vec2(0, -4)), seg(q, vec2(0, -4), vec2(5, 0.5)));
+  return line(min(b, r), 0.55);
+}
+float roundTree(vec2 q) {                     // a round canopy on a short trunk, shaded on the right
+  float r = length(q - vec2(0.0, -2.6));
+  float k = max(line(abs(r - 3.3), 0.5), line(seg(q, vec2(0.0, 0.8), vec2(0.0, 4.2)), 0.5));
+  if (r < 2.9 && q.x > 0.4) k = max(k, line(abs(fract((q.x + q.y) * 0.65) - 0.5) * 1.5, 0.3) * 0.7);
+  return k;
+}
+float church(vec2 q) {                        // a house with a spire and a little cross
+  float k = house(q);
+  k = max(k, line(min(seg(q, vec2(-1.6, -3.4), vec2(0.0, -11.0)), seg(q, vec2(0.0, -11.0), vec2(1.6, -3.4))), 0.5));
+  k = max(k, line(min(seg(q, vec2(0.0, -11.0), vec2(0.0, -14.0)), seg(q, vec2(-1.3, -12.8), vec2(1.3, -12.8))), 0.45));
+  return k;
+}
+float field(vec2 q, float a) {                 // a ploughed field: outline + furrows
+  float c = cos(a), sn = sin(a); q = vec2(c * q.x - sn * q.y, sn * q.x + c * q.y);
+  vec2 b = abs(q) - vec2(8.0, 5.0);
+  float k = line(abs(max(b.x, b.y)), 0.42);
+  if (b.x < 0.0 && b.y < 0.0) k = max(k, line(abs(fract(q.y * 0.45) - 0.5) * 2.2, 0.28) * 0.75);
+  return k;
+}
+float lighthouse(vec2 q) {                     // a tapered tower, a lamp and its beams
+  float k = line(min(min(seg(q, vec2(-2.6, 4.0), vec2(-1.4, -6.0)), seg(q, vec2(2.6, 4.0), vec2(1.4, -6.0))), seg(q, vec2(-3.4, 4.0), vec2(3.4, 4.0))), 0.5);
+  k = max(k, line(abs(length(q - vec2(0.0, -7.6)) - 1.6), 0.45));
+  if (q.y > -3.2 && q.y < -1.6 && abs(q.x) < 2.0) k = max(k, 0.8);
+  vec2 c = vec2(0.0, -7.6);
+  for (int i = 0; i < 3; i++) { float a = -0.45 + float(i) * 0.45; vec2 d = vec2(cos(a), sin(a));
+    k = max(k, line(seg(q, c + d * 2.8, c + d * 6.5), 0.32) * 0.8);
+    k = max(k, line(seg(q, c + vec2(-d.x, d.y) * 2.8, c + vec2(-d.x, d.y) * 6.5), 0.32) * 0.8); }
+  return k;
+}
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uH * uScale - gl_FragCoord.y) / uScale;  // CSS px, y down
+  aa = 1.0 / uScale;
+  vec2 pw = p + 1.4 * vec2(vn(p * 0.06) - 0.5, vn(p * 0.06 + 9.0) - 0.5);   // hand-drawn wobble
+  float s = S(pw);
+  vec2 g = vec2(S(pw + vec2(2, 0)) - S(pw - vec2(2, 0)), S(pw + vec2(0, 2)) - S(pw - vec2(0, 2)));
+  vec2 n = g / max(length(g), 1e-4);         // points out to sea
+
+  // parchment
+  float st = fbm(p * 0.0022), st2 = fbm(p * 0.011 + 3.0);
+  vec3 paper = mix(vec3(0.945, 0.902, 0.800), vec3(0.835, 0.745, 0.585), smoothstep(0.35, 0.85, st) * 0.75);
+  paper *= 0.97 + 0.05 * st2;
+  paper -= 0.025 * h12(floor(p * 1.5));      // fibre grain
+  vec2 vc = p / vec2(uGrid * uStep) - 0.5; paper *= 1.0 - 0.28 * smoothstep(0.25, 0.75, length(vc * vec2(1.0, 1.25)));
+  if (s < 0.0) paper = mix(paper, paper * vec3(1.02, 1.0, 0.95), 0.6);
+
+  float ink = 0.0;
+  // coastline: bold line + inner shadow line + hatching on the lee (south-east) side
+  ink = max(ink, line(abs(s), 1.25));
+  ink = max(ink, line(abs(s + 4.5), 0.5) * 0.85);
+  float lee = smoothstep(0.1, 0.7, dot(-n, normalize(vec2(-1.0, -1.0))));
+  if (s < -5.5 && s > -13.0) ink = max(ink, lee * line(abs(fract((p.x - p.y) * 0.28) - 0.5) * 3.6, 0.42) * smoothstep(-13.0, -7.0, s));
+  // ripple rings around the coast: dotted then dashed
+  float dots = step(0.55, vn(p * 0.55));
+  ink = max(ink, line(abs(s - 11.0), 0.6) * dots * 0.8);
+  float dash = step(0.45, fract(dot(p, vec2(-n.y, n.x)) * 0.09));
+  ink = max(ink, line(abs(s - 22.0), 0.45) * dash * 0.55);
+
+  // rocks in the shallows
+  vec2 rc = floor(p / 13.0), rq = p - (rc + 0.5) * 13.0 - (h22(rc) - 0.5) * 6.0;
+  float sr = S((rc + 0.5) * 13.0);
+  if (sr > 9.0 && sr < 34.0 && h12(rc * 1.7) < 0.09) {
+    float r = 1.6 + 2.0 * h12(rc + 4.0);
+    ink = max(ink, line(abs(length(rq * vec2(1.0, 1.3)) - r), 0.5));
+  }
+
+  // sea: grid, rhumb lines from the compass, wave marks
+  if (s > 4.0) {
+    vec2 gq = abs(fract(p / 190.0 + 0.5) - 0.5) * 190.0;
+    ink = max(ink, line(min(gq.x, gq.y), 0.35) * 0.32);
+    vec2 cp = p - uCompass; float ang = atan(cp.y, cp.x);
+    float sect = 3.14159265 / 8.0, da = abs(fract(ang / sect + 0.5) - 0.5) * sect;
+    ink = max(ink, line(length(cp) * sin(da), 0.3) * 0.22 * step(70.0, length(cp)));
+    vec2 wc = floor((p + vec2(0.0, 0.0)) / vec2(62.0, 40.0));
+    vec2 wo = (wc + 0.5) * vec2(62.0, 40.0) + (h22(wc) - 0.5) * vec2(30.0, 16.0);
+    if (h12(wc + 2.0) < 0.42 && S(wo) > 42.0) ink = max(ink, wave(p - wo) * 0.8);
+  }
+  // towns (placed by the page so they can fade): a church and its houses
+  float nearTown = 1e9;
+  for (int i = 0; i < 16; i++) {
+    if (i >= uNT) break;
+    vec4 T = uTowns[i]; vec2 d = p - T.xy; float dd = dot(d, d);
+    if (T.z > 0.05) nearTown = min(nearTown, dd);
+    if (dd > 1900.0 || T.z <= 0.0) continue;
+    for (int j = 0; j < 7; j++) {
+      float fj = float(j);
+      vec2 off = j == 0 ? vec2(0.0) : (vec2(h12(vec2(T.w, fj)), h12(vec2(fj + 3.1, T.w))) - 0.5) * vec2(50.0, 32.0);
+      ink = max(ink, (j == 0 ? church(p - T.xy - off) : house((p - T.xy - off) * 1.25)) * T.z);
+    }
+  }
+  if (s < -8.0 && nearTown > 1500.0) {
+    // mountain ranges: peaks packed along ridgelines, foothills on their flanks
+    vec2 mc = floor(p / vec2(22.0, 17.0));
+    vec2 mo = (mc + 0.5) * vec2(22.0, 17.0) + (h22(mc) - 0.5) * vec2(9.0, 6.0);
+    float sm = S(mo), ridge = 1.0 - abs(vn(mo * 0.011 + 5.0) * 2.0 - 1.0);
+    float mz = fbm(mo * 0.0042 + 23.0) + ridge * 0.18;
+    bool range = mz > 0.74;
+    if (sm < -22.0 && range && h12(mc * 1.7) < 0.88) ink = max(ink, peak(p - mo, 0.75 + 0.65 * ridge));
+    else if (sm < -16.0 && mz > 0.66 && h12(mc * 2.3) < 0.45) ink = max(ink, hill(p - mo));
+    if (!range) {
+      // forests: dense stands of pines and round trees
+      vec2 tc = floor(p / vec2(13.0, 11.0));
+      vec2 to = (tc + 0.5) * vec2(13.0, 11.0) + (h22(tc + 9.0) - 0.5) * vec2(7.0, 5.0);
+      float forest = fbm(to * 0.0055 + 11.0);
+      if (S(to) < -13.0 && forest > 0.56 && h12(tc * 1.9) < smoothstep(0.56, 0.7, forest) * 0.92)
+        ink = max(ink, h12(tc + 4.0) < fbm(to * 0.01 + 40.0) ? pine(p - to) : roundTree(p - to));
+      else if (nearTown < 26000.0 && forest < 0.5 && mz < 0.62) {
+        // farmland: a patchwork of fields around each town
+        vec2 fc = floor(p / vec2(30.0, 24.0));
+        vec2 fo = (fc + 0.5) * vec2(30.0, 24.0) + (h22(fc + 2.0) - 0.5) * vec2(8.0, 6.0);
+        if (S(fo) < -16.0 && h12(fc * 3.1) < 0.62) ink = max(ink, field(p - fo, h12(fc + 8.0) * 0.5 - 0.25) * 0.72);
+      }
+    }
+  }
+  // lighthouses on headlands
+  {
+    vec2 lc = floor(p / 40.0); vec2 lo = (lc + 0.5) * 40.0 + (h22(lc + 5.0) - 0.5) * 20.0; float sl = S(lo);
+    if (sl > -12.0 && sl < -5.0 && h12(lc * 7.7) < 0.04) ink = max(ink, lighthouse(p - lo));
+  }
+
+  vec3 inkc = vec3(0.23, 0.165, 0.11) * (0.9 + 0.2 * vn(p * 0.15));
+  o = vec4(mix(paper, inkc, ink * (0.82 + 0.18 * st2)), 1.0);
+}`;
+function program(vs, fs) {
+  const sh = (t, s) => { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x);
+    if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+  const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+}
+const PR = program(VS, FS); gl.useProgram(PR);
+const U = {}; for (const k of ['uA', 'uB', 'uMix', 'uScale', 'uH', 'uStep', 'uGrid', 'uCompass', 'uTowns', 'uNT']) U[k] = gl.getUniformLocation(PR, k);
+const townBuf = new Float32Array(16 * 4);
+gl.bindVertexArray(gl.createVertexArray());
+const tex = [gl.createTexture(), gl.createTexture()];
+function allocField() {
+  for (const t of tex) {
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, Gw, Gh, 0, gl.RED, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+}
+function uploadField(i, F) {
+  gl.bindTexture(gl.TEXTURE_2D, tex[i]);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Gw, Gh, gl.RED, gl.FLOAT, F.s);
+}
+
+/* ---------- morph state (same contract as the Deskland pages: commit / refresh / FB) ---------- */
+let fromI = 0, toI = 0, morphT0 = -1e9, morphDur = MORPH_MS, FA = null, FB = null, mixNow = 1;
+let ISLETS = [];
+function seedIslets() {
+  let z = 1337; const rnd = () => (z = (z * 16807) % 2147483647) / 2147483647;
+  const n = Math.round(W * H / 52000); ISLETS = [];
+  for (let i = 0; i < n; i++) {
+    const big = rnd() < 0.18;
+    ISLETS.push({ cx: rnd() * W, cy: rnd() * H, hw: big ? 30 + rnd() * 50 : 0, hh: big ? 20 + rnd() * 35 : 0, w: big ? 0.8 + rnd() * 0.3 : 0.37 + rnd() * 0.2 });
+  }
+}
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2, hh: ic.h / 2 })).concat(ISLETS);
+function commit(fromEmpty = false) {
+  const nf = computeField(iconRects());
+  const target = 1 - toI;
+  if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); }
+  else if (FA && FB && FA !== FB && mixNow < 1 && FA.s.length === FB.s.length) {
+    const s = new Float32Array(FB.s.length), a = FA.s, b = FB.s, m = mixNow;
+    for (let i = 0; i < s.length; i++) s[i] = a[i] + (b[i] - a[i]) * m;
+    FA = Object.assign({}, FB, { s }); uploadField(toI, FA);
+  } else FA = FB;
+  FB = nf; uploadField(target, FB);
+  fromI = toI; toI = target; morphT0 = performance.now(); morphDur = fromEmpty ? 2200 : MORPH_MS; landMoved();
+  layoutChanged(); wake();
+}
+function landMoved() { layoutDirty = true; lastLandChange = performance.now(); }
+function refresh() {
+  FA = FB = computeField(iconRects());
+  uploadField(toI, FB); fromI = toI; morphT0 = -1e9; landMoved();
+  layoutChanged(); wake();
+}
+
+/* ---------- compass rose (static 2D sprite, placed in the emptiest sea) ---------- */
+const compass = document.createElement('canvas');
+compass.id = 'compass'; compass.className = 'sprite';
+let compassAt = { x: 120, y: 120 };
+function drawCompass() {
+  const R = 78, k = devicePixelRatio, c = compass, x = c.getContext('2d');
+  c.width = c.height = Math.round(R * 2.3 * k); c.style.width = c.style.height = (R * 2.3) + 'px';
+  x.scale(k, k); x.translate(R * 1.15, R * 1.15); x.strokeStyle = INK; x.fillStyle = INK; x.lineJoin = 'round';
+  x.lineWidth = 1.1; x.beginPath(); x.arc(0, 0, R * 0.62, 0, 7); x.stroke();
+  x.lineWidth = 0.6; x.beginPath(); x.arc(0, 0, R * 0.56, 0, 7); x.stroke();
+  for (let i = 0; i < 32; i++) { const a = i * Math.PI / 16, l = i % 2 ? 0.05 : 0.09;
+    x.beginPath(); x.moveTo(Math.cos(a) * R * 0.56, Math.sin(a) * R * 0.56); x.lineTo(Math.cos(a) * R * (0.56 + l), Math.sin(a) * R * (0.56 + l)); x.stroke(); }
+  const star = (n, r1, r2, rot, fillHalf) => { for (let i = 0; i < n; i++) { const a = rot + i * 2 * Math.PI / n, b = a + Math.PI / n, c2 = a - Math.PI / n;
+    const tip = [Math.cos(a) * r1, Math.sin(a) * r1], l = [Math.cos(b) * r2, Math.sin(b) * r2], r = [Math.cos(c2) * r2, Math.sin(c2) * r2];
+    x.beginPath(); x.moveTo(0, 0); x.lineTo(...tip); x.lineTo(...l); x.closePath(); x.lineWidth = 0.9; x.stroke(); if (fillHalf) x.fill();
+    x.beginPath(); x.moveTo(0, 0); x.lineTo(...tip); x.lineTo(...r); x.closePath(); x.stroke(); } };
+  star(8, R * 0.62, R * 0.13, Math.PI / 8, false);
+  star(4, R, R * 0.17, -Math.PI / 2, true);
+  x.font = `600 ${R * 0.2}px "Iowan Old Style", Georgia, serif`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  [['N', 0, -1.1], ['E', 1.1, 0], ['S', 0, 1.1], ['W', -1.1, 0]].forEach(([t, a, b]) => x.fillText(t, a * R, b * R));
+  // fleur-de-lis-ish north mark
+  x.beginPath(); x.arc(0, -R * 0.98, R * 0.04, 0, 7); x.fill();
+  x.beginPath(); x.arc(0, 0, R * 0.05, 0, 7); x.fillStyle = '#f1e6cf'; x.fill(); x.stroke();
+}
+function placeCompass() {
+  if (!FB) return;
+  let best = -1, bx = 120, by = 120;
+  for (let y = 110; y < H - 110; y += 40) for (let x = 110; x < W - 110; x += 40) {
+    const s = sampleS(FB, x, y) - 0.15 * Math.hypot(x - W * 0.08, y - H * 0.12);   // prefer the top-left
+    if (s > best) { best = s; bx = x; by = y; }
+  }
+  if (Math.hypot(bx - compassAt.x, by - compassAt.y) < 60) return;
+  compass.style.opacity = 0;
+  clearTimeout(placeCompass.t);
+  placeCompass.t = setTimeout(() => { compassAt = { x: bx, y: by }; const r = compass.width / devicePixelRatio / 2; compass.style.transform = `translate(${bx - r}px,${by - r}px)`; compass.style.opacity = 1; wake(); }, 1300);
+}
+
+/* ---------- ship + serpent: tiny 2D sprites that steer around land ---------- */
+function makeSprite(w, h, draw) {
+  const c = document.createElement('canvas'), k = devicePixelRatio;
+  c.width = w * k; c.height = h * k; c.style.width = w + 'px'; c.style.height = h + 'px'; c.className = 'sprite';
+  const x = c.getContext('2d'); x.scale(k, k); x.strokeStyle = INK; x.fillStyle = INK; x.lineCap = 'round'; x.lineJoin = 'round'; draw(x);
+  document.body.appendChild(c); return c;
+}
+const ship = makeSprite(64, 56, x => {
+  x.lineWidth = 1.3;
+  x.beginPath(); x.moveTo(8, 38); x.quadraticCurveTo(32, 50, 58, 36); x.lineTo(52, 44); x.quadraticCurveTo(30, 52, 13, 45); x.closePath();
+  x.fillStyle = 'rgba(241,230,207,1)'; x.fill(); x.stroke();
+  for (let i = 0; i < 4; i++) { x.beginPath(); x.moveTo(15 + i * 9, 42); x.lineTo(16 + i * 9, 47); x.lineWidth = 0.6; x.stroke(); }
+  x.lineWidth = 1.2; x.beginPath(); x.moveTo(32, 40); x.lineTo(32, 6); x.stroke();
+  x.beginPath(); x.moveTo(33, 9); x.quadraticCurveTo(48, 20, 34, 34); x.closePath(); x.fillStyle = 'rgba(241,230,207,1)'; x.fill(); x.lineWidth = 1; x.stroke();
+  x.beginPath(); x.moveTo(31, 12); x.quadraticCurveTo(18, 22, 30, 34); x.closePath(); x.fill(); x.stroke();
+  x.fillStyle = INK; x.beginPath(); x.moveTo(32, 6); x.lineTo(40, 8); x.lineTo(32, 10); x.fill();
+  x.lineWidth = 0.7; x.beginPath(); x.moveTo(4, 50); x.quadraticCurveTo(10, 47, 16, 50); x.moveTo(46, 50); x.quadraticCurveTo(53, 47, 60, 50); x.stroke();
+});
+const serpent = makeSprite(96, 40, x => {
+  x.lineWidth = 1.3; x.fillStyle = 'rgba(241,230,207,1)';
+  for (const [cx, r] of [[22, 9], [44, 11], [66, 8]]) {
+    x.beginPath(); x.arc(cx, 28, r, Math.PI, 0); x.fill(); x.stroke();
+    for (let i = -2; i <= 2; i++) { x.beginPath(); x.moveTo(cx + i * r * 0.35, 28 - Math.sqrt(Math.max(0, r * r - (i * r * 0.35) ** 2)) + 2); x.lineTo(cx + i * r * 0.35, 28 - 2); x.lineWidth = 0.5; x.stroke(); }
+    x.lineWidth = 1.3;
+  }
+  // head
+  x.beginPath(); x.moveTo(76, 28); x.quadraticCurveTo(80, 10, 90, 12); x.quadraticCurveTo(95, 14, 90, 18); x.quadraticCurveTo(84, 18, 84, 28); x.fill(); x.stroke();
+  x.fillStyle = INK; x.beginPath(); x.arc(89, 14, 1.1, 0, 7); x.fill();
+  x.lineWidth = 0.7; x.beginPath(); x.moveTo(4, 30); x.quadraticCurveTo(10, 27, 16, 30); x.moveTo(52, 31); x.quadraticCurveTo(56, 28, 60, 31); x.moveTo(82, 31); x.quadraticCurveTo(87, 28, 94, 31); x.stroke();
+});
+document.body.appendChild(compass);
+const movers = [
+  { el: ship, w: 64, h: 56, x: 0, y: 0, a: 0.4, v: 13, bob: 0, phase: 0, flip: 1 },
+  { el: serpent, w: 96, h: 40, x: 0, y: 0, a: 2.6, v: 7, bob: 1, phase: 2, flip: 1 },
+];
+function spawn(m) {
+  let best = -1e9;
+  for (let i = 0; i < 60; i++) { const x = 80 + Math.random() * (W - 160), y = 80 + Math.random() * (H - 160), s = sampleS(FB, x, y);
+    if (s > best && Math.hypot(x - compassAt.x, y - compassAt.y) > 160) { best = s; m.x = x; m.y = y; } }
+}
+function stepMover(m, dt, t) {
+  const clear = (a, d) => sampleS(FB, m.x + Math.cos(a) * d, m.y + Math.sin(a) * d);
+  const ahead = clear(m.a, 70);
+  if (ahead < 55 || m.x < 50 || m.y < 50 || m.x > W - 50 || m.y > H - 50) {
+    const l = clear(m.a - 0.6, 70), r = clear(m.a + 0.6, 70);
+    m.a += (l > r ? -1 : 1) * 1.1 * dt;
+    if (m.x < 50) m.a = 0; if (m.x > W - 50) m.a = Math.PI; if (m.y < 50) m.a = Math.PI / 2; if (m.y > H - 50) m.a = -Math.PI / 2;
+  } else m.a += (vnoise(t * 0.05 + m.phase * 10, m.phase) - 0.5) * 0.25 * dt;
+  if (sampleS(FB, m.x, m.y) < 20) { const [gx, gy] = seaGrad(m.x, m.y), l = Math.hypot(gx, gy) || 1; m.x += gx / l * 70 * dt; m.y += gy / l * 70 * dt; }   // land grew under us: drift out to sea
+  m.x += Math.cos(m.a) * m.v * dt; m.y += Math.sin(m.a) * m.v * dt;
+  const f = Math.cos(m.a) >= 0 ? 1 : -1; m.flip += (f - m.flip) * Math.min(1, dt * 3);
+  const bob = m.bob ? Math.sin(t * 1.3 + m.phase) * 0.06 : 0;
+  m.el.style.transform = `translate(${(m.x - m.w / 2).toFixed(1)}px,${(m.y - m.h / 2 + Math.sin(t * 1.7 + m.phase) * 1.2).toFixed(1)}px) scale(${m.flip.toFixed(3)},${(1 + bob).toFixed(3)})`;
+}
+
+/* ---------- names ---------- */
+function rngS(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const hashS = str => { let h = 2166136261; for (const c of String(str)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
+const pick = (R, a) => a[Math.floor(R() * a.length)];
+const NM = {
+  pre: ['Ash', 'Bram', 'Cinder', 'Dusk', 'Elder', 'Fern', 'Gloam', 'Ivy', 'Moss', 'North', 'Oak', 'Quill', 'Raven', 'Salt', 'Thistle', 'Umber', 'Wick', 'Yew', 'Thorn', 'Lark', 'Crow', 'Mallow', 'Gull', 'Kelp', 'Drift'],
+  suf: ['wood', 'combe', 'ford', 'by', 'well', 'moor', 'haven', 'stead', 'field', 'brook', 'worth', 'gate', 'ley', 'hurst', 'mere', 'wick', 'port', 'holm'],
+  of: ['Quiet Ink', 'Lost Keys', 'the Small Hours', 'Glass', 'Whispers', 'Old Maps', 'Folded Paper', 'Patient Clocks', 'Unsent Letters'],
+  lat: ['Tenebrarum', 'Silentium', 'Vitreum', 'Somniorum', 'Incognitum', 'Atramenti', 'Chartarum'],
+  adj: ['Grey', 'Sleeping', 'Narrow', 'Shivering', 'Painted', 'Hollow', 'Restless', 'Wandering'],
+};
+const word = R => pick(R, NM.pre) + pick(R, NM.suf);
+function isleName(R) { const k = R(), w = word(R); return k < .35 ? `Isle of ${w}` : k < .6 ? `${w} Island` : k < .8 ? `Insula ${w}` : `The ${w} Isles`; }
+function seaName(R) { const k = R(); return k < .35 ? `Sea of ${pick(R, NM.of)}` : k < .65 ? `Mare ${pick(R, NM.lat)}` : `The ${pick(R, NM.adj)} Sea`; }
+const SCRIPT = '"Apple Chancery", "Snell Roundhand", "Iowan Old Style", serif', SERIF = '"Iowan Old Style", "Hoefler Text", Baskerville, serif';
+
+/* ---------- towns, roads and names: laid out once the land settles; they fade, never pop ---------- */
+let wins = [], towns = [], layoutDirty = true, lastLandChange = 0, labFront = document.getElementById('labelsB');
+const underWindow = (x, y, m) => wins.some(w => x > w.x - m && x < w.x + w.w + m && y > w.y - m && y < w.y + w.h + m);
+function landComponents() {
+  const st = 2, cw = Math.ceil(Gw / st), ch = Math.ceil(Gh / st), lab = new Int32Array(cw * ch).fill(-1), comps = [];
+  const land = (i, j) => FB.s[Math.min(Gh - 1, j * st) * Gw + Math.min(Gw - 1, i * st)] < -6;
+  for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) {
+    if (lab[j * cw + i] !== -1 || !land(i, j)) continue;
+    const id = comps.length, q = [j * cw + i], cells = []; lab[j * cw + i] = id;
+    while (q.length) { const c = q.pop(), ci = c % cw, cj = (c / cw) | 0; cells.push(c);
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ni = ci + di, nj = cj + dj, n = nj * cw + ni;
+        if (ni >= 0 && nj >= 0 && ni < cw && nj < ch && lab[n] === -1 && land(ni, nj)) { lab[n] = id; q.push(n); } } }
+    comps.push({ id, cells, area: cells.length * (st * STEP) ** 2 });
+  }
+  return { comps, lab, cw, cs: st * STEP };
+}
+function compAt(L, x, y) { const i = Math.floor(x / L.cs), j = Math.floor(y / L.cs); return i < 0 || j < 0 || i >= L.cw ? -1 : L.lab[j * L.cw + i] ?? -1; }
+function layoutOverlay() {
+  if (!FB) return;
+  layoutDirty = false;
+  const L = landComponents(), seed = hashS(icons.map(i => `${i.x | 0},${i.y | 0}`).join(';')), R = rngS(seed);
+  // towns: on visible coastal land, well spaced
+  const cand = [];
+  for (let y = 30; y < H - 30; y += 18) for (let x = 30; x < W - 30; x += 18) {
+    const sv = sampleS(FB, x, y); if (sv < -20 && sv > -70 && !underWindow(x, y, 30) && Math.hypot(x - compassAt.x, y - compassAt.y) > 110) cand.push([x, y, R()]);
+  }
+  cand.sort((a, b) => a[2] - b[2]);
+  const chosen = [];
+  for (const [x, y] of cand) { if (chosen.length >= 9) break; if (chosen.every(c => Math.hypot(c[0] - x, c[1] - y) > 170)) chosen.push([x, y]); }
+  // match old towns that still fit; the rest fade out, new ones fade in
+  for (const t of towns) t.target = 0;
+  for (const [x, y] of chosen) {
+    const old = towns.find(t => t.target === 0 && Math.hypot(t.x - x, t.y - y) < 60);
+    if (old) old.target = 1; else towns.push({ x, y, seed: (R() * 1000) | 0, a: 0, target: 1, name: word(R) });
+  }
+  // the label sheet: roads, names, whales — drawn fresh and cross-faded in
+  const back = labFront === document.getElementById('labelsA') ? document.getElementById('labelsB') : document.getElementById('labelsA');
+  const k = devicePixelRatio; back.width = Math.round(W * k); back.height = Math.round(H * k);
+  const x = back.getContext('2d'); x.scale(k, k); x.lineCap = 'round';
+  const live = towns.filter(t => t.target === 1);
+  // dotted roads between towns on the same island
+  x.strokeStyle = 'rgba(58,42,28,0.7)'; x.lineWidth = 1; x.setLineDash([1.2, 4]);
+  for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) {
+    const a = live[i], b = live[j], d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (d > 460 || compAt(L, a.x, a.y) !== compAt(L, b.x, b.y) || compAt(L, a.x, a.y) < 0) continue;
+    const mx = (a.x + b.x) / 2 + (R() - .5) * d * .25, my = (a.y + b.y) / 2 + (R() - .5) * d * .25;
+    let ok = true; for (let u = .1; u < .9; u += .1) { const px = (1 - u) ** 2 * a.x + 2 * (1 - u) * u * mx + u * u * b.x, py = (1 - u) ** 2 * a.y + 2 * (1 - u) * u * my + u * u * b.y; if (sampleS(FB, px, py) > -8) { ok = false; break; } }
+    if (!ok) continue;
+    x.beginPath(); x.moveTo(a.x, a.y + 8); x.quadraticCurveTo(mx, my, b.x, b.y + 8); x.stroke();
+  }
+  x.setLineDash([]);
+  const boxes = [[compassAt.x - 95, compassAt.y - 95, compassAt.x + 95, compassAt.y + 95]];
+  const place = (text, cx, cy, font, color, spacing = 0) => {
+    x.font = font; const w = x.measureText(text).width + spacing * text.length + 10, h = parseFloat(font) * 1.4;
+    const bx = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
+    if (bx[0] < 6 || bx[1] < 6 || bx[2] > W - 6 || bx[3] > H - 6 || boxes.some(o => bx[0] < o[2] && bx[2] > o[0] && bx[1] < o[3] && bx[3] > o[1])) return false;
+    if (underWindow(cx, cy, 6) || underWindow(bx[0], cy, 4) || underWindow(bx[2], cy, 4)) return false;
+    boxes.push(bx); x.fillStyle = color; x.textAlign = 'center'; x.textBaseline = 'middle';
+    if (spacing) { let px = cx - (w - 10) / 2; for (const ch of text) { const cw = x.measureText(ch).width; x.fillText(ch, px + cw / 2, cy); px += cw + spacing; } }
+    else { x.lineWidth = 3; x.strokeStyle = 'rgba(241,230,207,.75)'; x.strokeText(text, cx, cy); x.fillText(text, cx, cy); }
+    return true;
+  };
+  for (const t of live) boxes.push([t.x - 30, t.y - 24, t.x + 30, t.y + 16]);     // the houses themselves
+  // town names
+  for (const t of live) place(t.name, t.x, t.y + 24, `italic 11px ${SERIF}`, 'rgba(58,42,28,0.9)');
+  // island names on the visible part of each big island
+  for (const c of L.comps) {
+    if (c.area < 9000) continue;
+    const NR = rngS(hashS(`isle${c.cells[0]}`)), name = isleName(NR);
+    let best = null, bs = 1e9;
+    for (let n = 0; n < c.cells.length; n += 3) { const cell = c.cells[n], px = (cell % L.cw + .5) * L.cs, py = ((cell / L.cw | 0) + .5) * L.cs;
+      if (underWindow(px, py, 40)) continue; const sv = sampleS(FB, px, py); if (sv < bs) { bs = sv; best = [px, py]; } }
+    if (best && bs < -24) place(name.toUpperCase(), best[0], best[1], `600 10px ${SERIF}`, 'rgba(58,42,28,0.82)', 2.2);
+  }
+  // sea names in the widest open water
+  const open = [];
+  for (let y = 60; y < H - 60; y += 30) for (let x2 = 80; x2 < W - 80; x2 += 30) {
+    const sv = sampleS(FB, x2, y), edge = Math.min(x2, W - x2, y, H - y);
+    if (sv > 110 && edge > 90 && !underWindow(x2, y, 30)) open.push([x2, y, Math.min(sv, 220) + Math.min(edge, 300) * .3]);
+  }
+  open.sort((a, b) => b[2] - a[2]);
+  const seaAt = [];
+  for (const [ox, oy] of open) { if (seaAt.length >= 2) break; if (seaAt.some(([a, b]) => Math.hypot(a - ox, b - oy) < 420)) continue;
+    if (place(seaName(rngS(seed + seaAt.length * 7)), ox, oy, `italic 19px ${SCRIPT}`, 'rgba(58,42,28,0.62)')) seaAt.push([ox, oy]); }
+  // a whale or two, spouting, well clear of every label
+  let whales = 0; const wantWhales = 1 + (R() < .5);
+  for (const [ox, oy] of open.slice(3)) { if (whales >= wantWhales) break;
+    // at least 90 px of open water between the whale and every label
+    const far = o => Math.hypot(Math.max(o[0] - ox, 0, ox - o[2]), Math.max(o[1] - oy, 0, oy - o[3])) > 90;
+    if (!boxes.every(far)) continue;
+    whale(x, ox, oy, R() < .5 ? 1 : -1); boxes.push([ox - 45, oy - 30, ox + 45, oy + 20]); whales++; }
+  const old = labFront; back.style.opacity = 1; old.style.opacity = 0; labFront = back;
+  clearTimeout(old._free); old._free = setTimeout(() => { if (old !== labFront) old.width = old.height = 1; }, 1600);
+}
+function whale(x, cx, cy, dir) {
+  x.save(); x.translate(cx, cy); x.scale(dir, 1); x.strokeStyle = INK; x.fillStyle = 'rgba(241,230,207,1)'; x.lineWidth = 1.1; x.lineJoin = 'round';
+  x.beginPath(); x.moveTo(-26, 4); x.bezierCurveTo(-22, -12, 14, -14, 22, 0); x.quadraticCurveTo(26, 6, 18, 8); x.lineTo(-18, 8); x.quadraticCurveTo(-24, 8, -26, 4); x.closePath(); x.fill(); x.stroke();
+  x.beginPath(); x.moveTo(-26, 4); x.lineTo(-34, -4); x.moveTo(-26, 4); x.lineTo(-35, 8); x.stroke();     // tail
+  x.fillStyle = INK; x.beginPath(); x.arc(14, -2, 1, 0, 7); x.fill();
+  x.lineWidth = .7; x.beginPath(); for (let i = -2; i <= 2; i++) { x.moveTo(6 + i * 4, 6); x.lineTo(5 + i * 4, 8); } x.stroke();
+  x.beginPath(); x.moveTo(8, -11); x.quadraticCurveTo(4, -20, -1, -18); x.moveTo(8, -11); x.quadraticCurveTo(12, -21, 17, -18); x.moveTo(8, -11); x.lineTo(8, -22); x.stroke();   // spout
+  x.lineWidth = .7; x.beginPath(); x.moveTo(-30, 12); x.quadraticCurveTo(-22, 9, -14, 12); x.moveTo(10, 12); x.quadraticCurveTo(18, 9, 26, 12); x.stroke();
+  x.restore();
+}
+function stepTowns(dt) {
+  let changed = false;
+  for (const t of towns) { const d = t.target - t.a; if (Math.abs(d) > .004) { t.a += d * Math.min(1, dt * 2.4); changed = true; } else t.a = t.target; }
+  towns = towns.filter(t => t.target > 0 || t.a > .004);
+  return changed;
+}
+
+/* ---------- your boat: follows the cursor over the water, steering round the land ---------- */
+const boat = makeSprite(60, 56, x => {
+  x.lineWidth = 1.25; x.fillStyle = 'rgba(241,230,207,1)';
+  x.beginPath(); x.moveTo(6, 40); x.quadraticCurveTo(30, 52, 56, 38); x.lineTo(50, 46); x.quadraticCurveTo(29, 54, 12, 47); x.closePath(); x.fill(); x.stroke();
+  x.lineWidth = .6; for (let i = 0; i < 4; i++) { x.beginPath(); x.arc(17 + i * 9, 44, 1.1, 0, 7); x.stroke(); }
+  x.lineWidth = 1.1; x.beginPath(); x.moveTo(30, 42); x.lineTo(30, 6); x.moveTo(42, 40); x.lineTo(42, 16); x.stroke();
+  x.fillStyle = 'rgba(241,230,207,1)';
+  for (const [mx, top, h, w] of [[30, 9, 28, 13], [42, 19, 18, 9]]) {
+    x.beginPath(); x.moveTo(mx + 1, top); x.quadraticCurveTo(mx + w + 4, top + h * .45, mx + 1, top + h); x.closePath(); x.fill(); x.stroke();
+    x.lineWidth = .5; x.beginPath(); x.moveTo(mx + 1, top + h * .35); x.quadraticCurveTo(mx + w * .7, top + h * .45, mx + 1, top + h * .62); x.stroke(); x.lineWidth = 1.1;
+  }
+  x.beginPath(); x.moveTo(30, 12); x.quadraticCurveTo(14, 24, 29, 36); x.closePath(); x.fill(); x.stroke();
+  x.fillStyle = 'rgba(122,34,26,0.92)'; x.beginPath(); x.moveTo(30, 6); x.quadraticCurveTo(36, 4, 41, 7); x.quadraticCurveTo(36, 8, 30, 10); x.fill();   // red pennant
+  x.strokeStyle = INK; x.lineWidth = .7; x.beginPath(); x.moveTo(2, 52); x.quadraticCurveTo(8, 49, 14, 52); x.moveTo(46, 52); x.quadraticCurveTo(52, 49, 58, 52); x.stroke();
+});
+boat.style.zIndex = 5; boat.style.opacity = 0; boat.style.transition = 'opacity 1.2s ease';
+const wakeImg = (() => { const c = document.createElement('canvas'), k = devicePixelRatio; c.width = 26 * k; c.height = 16 * k;
+  const x = c.getContext('2d'); x.scale(k, k); x.strokeStyle = INK; x.lineWidth = .9; x.lineCap = 'round';
+  x.beginPath(); x.moveTo(24, 8); x.quadraticCurveTo(12, 3, 2, 1); x.moveTo(24, 8); x.quadraticCurveTo(12, 13, 2, 15); x.stroke();
+  x.lineWidth = .6; x.beginPath(); x.moveTo(16, 8); x.quadraticCurveTo(9, 6, 4, 5.5); x.moveTo(16, 8); x.quadraticCurveTo(9, 10, 4, 10.5); x.stroke();
+  return c.toDataURL(); })();
+let liveWake = 0;
+function wakeMark(px, py, ang) {
+  if (liveWake > 40) return;
+  const img = document.createElement('img'); img.src = wakeImg; img.className = 'wake'; img.width = 26; img.height = 16;
+  img.style.transform = `translate3d(${(px - 13).toFixed(1)}px,${(py - 8).toFixed(1)}px,0) rotate(${(ang * 57.2958).toFixed(1)}deg)`;
+  img.addEventListener('animationend', () => { img.remove(); liveWake--; });
+  document.body.insertBefore(img, boat); liveWake++;
+}
+const B = { x: 0, y: 0, vx: 0, vy: 0, flip: 1, flipT: 1, tilt: 0, dist: 0, on: false };
+const inkWake = DLWake('rgba(58,42,28,0.75)', 0.9, 1.8, 13);
+let cursor = null;
+const seaGrad = (x, y) => { const e = 6; return [sampleS(FB, x + e, y) - sampleS(FB, x - e, y), sampleS(FB, x, y + e) - sampleS(FB, x, y - e)]; };
+function toWater(x, y, need = 34) {           // walk downhill out to open water
+  let sv = sampleS(FB, x, y);
+  for (let i = 0; i < 80 && sv < need; i++) { const [gx, gy] = seaGrad(x, y), l = Math.hypot(gx, gy) || 1; x += gx / l * 7; y += gy / l * 7; sv = sampleS(FB, x, y); }
+  return [x, y];
+}
+function stepBoat(dt, t) {
+  if (!FB) return;
+  if (!B.on) { [B.x, B.y] = toWater(W * .5, H * .7, 50); B.on = true; boat.style.opacity = 1; }
+  const [tx, ty] = cursor ? toWater(cursor.x, cursor.y) : [B.x, B.y];
+  const dx = tx - B.x, dy = ty - B.y, d = Math.hypot(dx, dy), maxV = 230;
+  const want = d < 12 ? 0 : Math.min(maxV, (d - 12) * 1.8);
+  let dvx = d > 1 ? dx / d * want : 0, dvy = d > 1 ? dy / d * want : 0;
+  // feel the coast ahead and steer along it
+  const ax = B.x + B.vx * .4, ay = B.y + B.vy * .4, sa = sampleS(FB, ax, ay);
+  if (sa < 32) { const [gx, gy] = seaGrad(ax, ay), l = Math.hypot(gx, gy) || 1, push = (32 - sa) * 7; dvx += gx / l * push; dvy += gy / l * push; }
+  const acc = 480 * dt; let ex = dvx - B.vx, ey = dvy - B.vy; const el = Math.hypot(ex, ey); if (el > acc) { ex *= acc / el; ey *= acc / el; }
+  B.vx += ex; B.vy += ey; B.x += B.vx * dt; B.y += B.vy * dt;
+  const sNow = sampleS(FB, B.x, B.y);
+  if (sNow < 16) { const [gx, gy] = seaGrad(B.x, B.y), l = Math.hypot(gx, gy) || 1; B.x += gx / l * (16 - sNow) * .5; B.y += gy / l * (16 - sNow) * .5; }
+  const sp = Math.hypot(B.vx, B.vy);
+  if (Math.abs(B.vx) > 8) B.flipT = B.vx > 0 ? 1 : -1;
+  B.flip += (B.flipT - B.flip) * Math.min(1, dt * 5);
+  const tiltT = Math.max(-.2, Math.min(.2, B.vy / maxV * .35)) * B.flipT; B.tilt += (tiltT - B.tilt) * Math.min(1, dt * 4);
+  const bob = Math.sin(t * 2.1) * 1.2 * (1 - Math.min(1, sp / maxV) * .6);
+  boat.style.transform = `translate3d(${(B.x - 30).toFixed(1)}px,${(B.y - 44 + bob).toFixed(1)}px,0) rotate(${B.tilt.toFixed(3)}rad) scaleX(${B.flip.toFixed(3)})`;
+  if (sp > 30) inkWake.feed(B.x - B.vx / sp * 26, B.y - B.vy / sp * 26 + 4, Math.atan2(B.vy, B.vx), performance.now()); else inkWake.reset();
+  inkWake.draw(performance.now());
+}
+
+/* ---------- frame loop: only runs while something is due ---------- */
+let rafOn = false, lastT = 0, needMap = true;
+function wake() { needMap = true; if (!rafOn && !paused) { rafOn = true; lastT = 0; requestAnimationFrame(frame); } }
+function frame(now) { try { frame0(now); } catch (e) { rafOn = false; try { webkit.messageHandlers.host.postMessage('JSERR frame ' + e.message); } catch (_) {} setTimeout(wake, 1000); } }
+function frame0(now) {
+  if (paused) { rafOn = false; return; }
+  const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
+  if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + 0.1 / dt : 1 / dt;
+  lastT = now;
+  const e = Math.min((now - morphT0) / morphDur, 1);
+  const morphing = e < 1;
+  if (morphing || needMap) {
+    mixNow = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+    renderMap(); needMap = false;
+  }
+  if (FB) { const t = now / 1000; for (const m of movers) stepMover(m, dt, t); stepBoat(dt, t); }
+  if (stepTowns(dt)) renderMap();
+  if (layoutDirty && !morphing && now - lastLandChange > 600) layoutOverlay();
+  requestAnimationFrame(frame);            // sprites keep sailing; the map only re-renders when the land changes
+}
+function renderMap() {
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex[fromI]); gl.uniform1i(U.uA, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tex[toI]); gl.uniform1i(U.uB, 1);
+  gl.uniform1f(U.uMix, mixNow); gl.uniform1f(U.uScale, cv.width / W); gl.uniform1f(U.uH, H); gl.uniform1f(U.uStep, STEP);
+  gl.uniform2f(U.uGrid, Gw, Gh); gl.uniform2f(U.uCompass, compassAt.x, compassAt.y);
+  const tw = towns.length > 16 ? towns.slice().sort((a, b) => b.a - a.a) : towns;
+  const nt = Math.min(tw.length, 16); townBuf.fill(0);
+  for (let i = 0; i < nt; i++) townBuf.set([tw[i].x, tw[i].y, tw[i].a, tw[i].seed], i * 4);
+  gl.uniform4fv(U.uTowns, townBuf); gl.uniform1i(U.uNT, nt);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+let layoutT = null;
+function layoutChanged() { clearTimeout(layoutT); layoutT = setTimeout(() => { placeCompass(); }, 400); }
+
+function resize() {
+  W = innerWidth; H = innerHeight;
+  cv.width = Math.round(W * devicePixelRatio); cv.height = Math.round(H * devicePixelRatio);   // always native pixels
+  Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
+  buildNoise(); allocField(); seedIslets();
+  FA = FB = null;
+}
+resize(); drawCompass();
+addEventListener('resize', () => { resize(); commit(true); });
+
+/* ---------- host protocol (Deskland-compatible + 'cursor') ---------- */
+const handle = m => {
+  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'cursor') { const k = devicePixelRatio; cursor = { x: m.x / k, y: m.y / k }; return; }
+  if (m.t === 'cursorOff') { cursor = null; return; }
+  if (m.t === 'windows') { const k = devicePixelRatio; wins = m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })); return; }
+  if (m.t !== 'icons') return;
+  const k = devicePixelRatio;
+  icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+  const first = !FB;
+  commit(first);
+  if (first) { placeCompass(); for (const m2 of movers) spawn(m2); }
+};
+const host = window.chrome && window.chrome.webview;
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
+else {   // plain browser: a few fake windows + mouse = footsteps
+  commit(true);
+  icons = [{ x: W * 0.25, y: H * 0.2, w: W * 0.45, h: H * 0.5 }, { x: 20, y: H * 0.3, w: 120, h: 150 }];
+  setTimeout(() => { commit(); placeCompass(); movers.forEach(spawn); }, 50);
+  addEventListener('mousemove', e => { cursor = { x: e.clientX, y: e.clientY }; });
+}
+window.__inkmap = { handle };
+</script>
+</body>
+</html>

@@ -1,0 +1,726 @@
+<!doctype html>
+<!--
+  Wind Map — a Driftland theme. The real surface wind over India, live.
+  Hourly 10 m wind from Open-Meteo (free, no key; only a fixed grid of lat/lon points over the region is sent)
+  is traced by ~32k particles as fine fading streaks, exactly as the data says. The base map is a quiet chart:
+  Natural Earth coastlines, hand-inked relief from a real elevation grid (contours, mountain marks, range names),
+  a graticule, the seas and cities. Paper by day, ink-blue by night, following the real sun over New Delhi.
+  Your windows don't disturb the wind: each one is a weather station, reading the real wind where it sits
+  (a standard wind barb, km/h, the nearest place). The cursor reads the wind under it when it rests.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Wind Map</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #ece6d9; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+  #cap { inset: auto auto 0 0; width: 420px; height: 96px; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="cap"></canvas>
+<script>
+'use strict';
+window.__noMask = true;
+let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
+const P = { quality: 2 };
+const cv = document.getElementById('gl');
+let FB = null; function commit() { } function refresh() { }
+const post = s => { try { webkit.messageHandlers.host.postMessage(s); } catch (_) { console.log(s); } };
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const D2R = Math.PI / 180;
+const VARIANT = new URLSearchParams(location.search).get('v') || 'IND';   // the region, chosen in the menu
+let WORLD = null, COUNTRY = null, HOME = { lat: 28.6139, lon: 77.2090, name: 'New Delhi' };
+const SERIF = '"Iowan Old Style", "Hoefler Text", Baskerville, Georgia, serif';
+
+/* ======================= the chart: an equirectangular view framed on the chosen country ======================= */
+let PJ = null;
+function project() {
+  const [b0, b1, b2, b3] = COUNTRY ? COUNTRY.bb : [68.17, 8.08, 97.34, 35.5];
+  let latC = (b1 + b3) / 2; const lonC = (b0 + b2) / 2, k = Math.cos(clamp(latC, -70, 70) * D2R);
+  // fit the country (with a margin) to the screen's shape, true to scale at the centre latitude
+  // several displays: one map laid across the whole desk (fitted to the screen the country sits on), each screen
+  // drawing its own part; the wind data covers the whole desk and is fetched once, shared between the screens
+  const UW = DESK.uw || W, UH = DESK.uh || H, FW = DESK.n > 1 ? (DESK.mw || W) : UW, FH = DESK.n > 1 ? (DESK.mh || H) : UH;   // every screen fits the map to the main display, so they all agree
+  let latSpan = Math.max((b3 - b1) * 1.36, (b2 - b0) * 1.24 * k * FH / FW, 9) * UH / FH;
+  latSpan = Math.min(latSpan, 150);
+  if (DESK.n <= 1) latC = clamp(latC, -84 + latSpan / 2, 84 - latSpan / 2);
+  const lonSpan = Math.min(359, UW / UH * latSpan / Math.cos(clamp(latC, -70, 70) * D2R));
+  // the country is centred on the main desk (the middle screen of three), not on the gap between screens
+  const midX = DESK.n > 1 ? (DESK.mx ?? UW / 2) : UW / 2, lon0 = lonC - midX / UW * lonSpan;
+  const midY = DESK.n > 1 ? (DESK.my ?? UH / 2) : UH / 2, lat1 = latC + midY / UH * latSpan;
+  PJU = { lon0, lon1: lon0 + lonSpan, lat0: lat1 - latSpan, lat1 };
+  PJ = { lon0: PJU.lon0 + DESK.x / UW * lonSpan, lon1: PJU.lon0 + (DESK.x + W) / UW * lonSpan,
+         lat1: PJU.lat1 - DESK.y / UH * latSpan, lat0: PJU.lat1 - (DESK.y + H) / UH * latSpan };
+  // wind data spacing: as fine as the free API's budget allows (~550 points a fetch)
+  // the grid, padding included, stays under ~540 points (the free API allows 600 locations a minute)
+  GS = [.25, .5, .75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6].find(v => { const g = gridSpec(v); return g.nx * g.ny <= 540; }) || 6;
+}
+const X = lon => (lon - PJ.lon0) / (PJ.lon1 - PJ.lon0) * W, Y = lat => (PJ.lat1 - lat) / (PJ.lat1 - PJ.lat0) * H;
+const LON = x => PJ.lon0 + x / W * (PJ.lon1 - PJ.lon0), LAT = y => PJ.lat1 - y / H * (PJ.lat1 - PJ.lat0);
+
+/* ======================= live wind ======================= */
+let GS = 2.5, PJU = null, DESK = { x: 0, y: 0, uw: 0, uh: 0, i: 0, n: 1 }, deskSeen = null;
+const deskKnown = new Promise(r => { deskSeen = r; setTimeout(r, 900); });                         // data grid spacing (degrees), set per country by project()
+const GS_cur = () => GS;
+const VS = 9;                         // drawn speed: px/s per m/s of real wind
+let DATA = null, dataNote = 'waiting for live wind…', fetching = false, nextFetchAt = 0;
+function gridSpec(gs) {
+  const GS = gs || GS_cur();
+  const lo0 = Math.floor((PJU.lon0 - 1) / GS) * GS, lo1 = Math.ceil((PJU.lon1 + 1) / GS) * GS;
+  const la0 = Math.floor((PJU.lat0 - 1) / GS) * GS, la1 = Math.ceil((PJU.lat1 + 1) / GS) * GS;
+  return { lo0, la0, gs: GS, nx: Math.round((lo1 - lo0) / GS) + 1, ny: Math.round((la1 - la0) / GS) + 1 };
+}
+const gridKey = g => `${g.lo0},${g.la0},${g.gs},${g.nx},${g.ny}`;
+async function fetchWind() {
+  const g = gridSpec(), lats = [], lons = [];
+  const num = v => String(+v.toFixed(2));                     // compact: "31.25", "130", not "31.25" padded
+  for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) { lats.push(num(g.la0 + j * GS)); lons.push(num((((g.lo0 + i * GS) + 540) % 360) - 180)); }
+  // a few requests of ≤180 points each, so no URL grows past the server's 8 KB limit
+  const arr = [];
+  for (let k = 0; k < lats.length; k += 180) {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.slice(k, k + 180).join(',')}&longitude=${lons.slice(k, k + 180).join(',')}` +
+      `&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&timeformat=unixtime&past_hours=3&forecast_hours=20&timezone=auto`;
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) { let why = ''; try { why = (await r.json()).reason || ''; } catch (_) { } throw new Error('HTTP ' + r.status + ' ' + why); }
+    const js = await r.json(); for (const o of (Array.isArray(js) ? js : [js])) arr.push(o);
+  }
+  if (arr.length !== g.nx * g.ny) throw new Error('grid mismatch ' + arr.length);
+  const times = arr[0].hourly.time, nt = times.length, n = g.nx * g.ny;
+  const u = new Array(nt * n), v = new Array(nt * n);
+  arr.forEach((loc, k) => {
+    const s = loc.hourly.wind_speed_10m, d = loc.hourly.wind_direction_10m;
+    for (let t = 0; t < nt; t++) {
+      const sp = s[t] == null ? 0 : s[t], dir = (d[t] == null ? 0 : d[t]) * D2R;   // meteorological: the direction it blows FROM
+      u[t * n + k] = -sp * Math.sin(dir); v[t * n + k] = -sp * Math.cos(dir);    // east, north components (m/s)
+    }
+  });
+  // the local clock: from the grid point nearest the capital
+  let best = 0, bd = 1e9; arr.forEach((loc, k) => { const d = (loc.latitude - HOME.lat) ** 2 + (loc.longitude - HOME.lon) ** 2; if (d < bd) { bd = d; best = k; } });
+  return { g, key: gridKey(g), times, u, v, fetched: Date.now(), tz: { off: arr[best].utc_offset_seconds || 0, abbr: arr[best].timezone_abbreviation || '' } };
+}
+function loadCache() {
+  try { const c = JSON.parse(localStorage.getItem('driftland-wind-' + VARIANT) || 'null'); if (c && c.key === gridKey(gridSpec())) return c; } catch (_) { }
+  return null;
+}
+function saveCache(d) { try { localStorage.setItem('driftland-wind-' + VARIANT, JSON.stringify(d)); } catch (_) { } }
+// the free API's daily allowance resets at midnight UTC: once it's spent, wait for that instead of asking again and again
+const untilTomorrow = () => { const d = new Date(); d.setUTCHours(24, 5, 0, 0); return d.getTime(); };
+async function maybeFetch() {
+  const now = Date.now();
+  if (fetching || now < nextFetchAt) return;
+  if (DESK.i > 0) { const c = loadCache(); if (c && (!DATA || c.fetched > DATA.fetched)) { DATA = c; buildTarget(); drawCaption(); }   // another screen fetched it
+    if (now < bootAt + DESK.i * 45e3) return; }                     // let the first screen fetch for everyone
+  const end = DATA ? DATA.times[DATA.times.length - 1] * 1000 : 0;
+  const stale = !DATA || now - DATA.fetched > 6 * 3600e3 || now > end - 2 * 3600e3;   // every 6 h: ~2,200 of the free API's 10,000 daily locations
+  if (!stale) return;
+  fetching = true;
+  try { DATA = await fetchWind(); saveCache(DATA); nextFetchAt = now + 20 * 60e3; buildTarget(); drawCaption(); }
+  catch (e) { nextFetchAt = /daily/i.test(e.message) ? untilTomorrow() : now + (DATA ? 10 * 60e3 : 65e3 + Math.random() * 20e3);   // no wind yet (e.g. the API's per-minute limit): try again in about a minute
+    post('JSERR wind fetch ' + e.message); dataNote = DATA ? 'offline · showing the last forecast' : 'offline · waiting for live wind'; drawCaption(); }
+  fetching = false;
+}
+// wind (m/s, east/north) at a place and time, from the hourly grid: bilinear in space, linear in time
+function sampleWind(lon, lat, tSec, out) {
+  const D = DATA, g = D.g, n = g.nx * g.ny, T = D.times;
+  let ti = 0; while (ti < T.length - 2 && T[ti + 1] <= tSec) ti++;
+  const ft = clamp((tSec - T[ti]) / (T[ti + 1] - T[ti]), 0, 1);
+  const gs = g.gs || GS, fx = clamp((lon - g.lo0) / gs, 0, g.nx - 1.001), fy = clamp((lat - g.la0) / gs, 0, g.ny - 1.001);
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy;
+  const cr = (a, b, c, d, t) => b + .5 * t * (c - a + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
+  const at = (A, o, i, j) => A[o + clamp(j, 0, g.ny - 1) * g.nx + clamp(i, 0, g.nx - 1)];
+  const bic = (A, o) => { const r = []; for (let j = -1; j <= 2; j++) r.push(cr(at(A, o, ix - 1, iy + j), at(A, o, ix, iy + j), at(A, o, ix + 1, iy + j), at(A, o, ix + 2, iy + j), tx));
+    return cr(r[0], r[1], r[2], r[3], ty); };
+  const o0 = ti * n, o1 = (ti + 1) * n;
+  out[0] = bic(D.u, o0) * (1 - ft) + bic(D.u, o1) * ft; out[1] = bic(D.v, o0) * (1 - ft) + bic(D.v, o1) * ft;
+}
+
+/* ======================= GL ======================= */
+const gl = cv.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: false });
+gl.getExtension('EXT_color_buffer_float'); gl.getExtension('OES_texture_float_linear');
+function sh(t, s, name) { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x);
+  if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { const e = gl.getShaderInfoLog(x); post('JSERR shader ' + name + ': ' + e); throw new Error(e); } return x; }
+function prog(vs, fs, name) {
+  const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs, name + '.vs')); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs, name + '.fs')); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) post('JSERR link ' + name + ' ' + gl.getProgramInfoLog(p));
+  p.u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); p.u[info.name.replace(/\[0\]$/, '')] = gl.getUniformLocation(p, info.name); }
+  return p;
+}
+function tex(w, h, internal, format, type, filter, data = null) {
+  const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  t.w = w; t.h = h; return t;
+}
+function fbo(t) { const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) post('JSERR fbo incomplete'); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return f; }
+const vao = gl.createVertexArray();
+const VS_FULL = `#version 300 es
+out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUV = p; gl_Position = vec4(p * 2. - 1., 0., 1.); }`;
+// the fluid grid: one cell per CELL css px, stored in screen orientation (y down) with velocities in px/s
+const CELL = 8;
+const SIM = `
+uniform vec2 uGrid; uniform float uCell, uDt; uniform vec2 uRes;
+uniform vec4 uR[32]; uniform vec2 uRV[32]; uniform int uN;
+vec2 cellP() { return vec2(gl_FragCoord.x, uGrid.y - gl_FragCoord.y) * uCell; }
+vec2 uvOf(vec2 p) { return vec2(p.x / (uCell * uGrid.x), 1. - p.y / (uCell * uGrid.y)); }
+float solid(vec2 p, out vec2 vel) {
+  vel = vec2(0.);
+  for (int i = 0; i < 32; i++) { if (i >= uN) break; vec4 r = uR[i];
+    if (p.x > r.x - 3. && p.x < r.z + 3. && p.y > r.y - 3. && p.y < r.w + 3.) { vel = uRV[i]; return 1.; } }
+  return 0.;
+}
+`;
+// particles: one texel each (x, y, age, life), stepped through the flow on the GPU
+const PW = 256, PH = 128, NP = PW * PH;
+const PSTEP = prog(VS_FULL, `#version 300 es
+precision highp float; out vec4 o; uniform sampler2D uP, uT; uniform float uSeed;
+${SIM}
+float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+void main() {
+  vec4 s = texelFetch(uP, ivec2(gl_FragCoord.xy), 0);
+  vec2 pos = s.xy, wv; float age = s.z, life = s.w;
+  vec2 v = texture(uT, uvOf(pos)).xy;
+  // midpoint step: streaks follow curved flow without cutting corners
+  vec2 mid = pos + v * uDt * .5; pos += texture(uT, uvOf(mid)).xy * uDt;
+  age += uDt;
+  if (age > life || pos.x < -4. || pos.y < -4. || pos.x > uRes.x + 4. || pos.y > uRes.y + 4. || solid(pos, wv) > .5) {
+    for (int k = 0; k < 6; k++) {
+      pos = vec2(hash(gl_FragCoord.xy + uSeed * 17.31 + float(k) * 3.7), hash(gl_FragCoord.yx * 1.37 + uSeed * 9.17 + float(k) * 5.3)) * uRes;
+      if (solid(pos, wv) < .5) break;
+    }
+    age = 0.; life = 3. + 5. * hash(gl_FragCoord.xy * .71 + uSeed);
+  }
+  o = vec4(pos, age, life);
+}`, 'pstep');
+// a streak segment per particle per frame, from where it was to where it is, anti-aliased, into the trail buffer
+const SEG = prog(`#version 300 es
+uniform sampler2D uP0, uP1; uniform vec2 uRes; uniform float uHW, uDt;
+out float vD; out float vA; out float vS;
+void main() {
+  int id = gl_InstanceID; ivec2 c = ivec2(id % ${PW}, id / ${PW});
+  vec4 a = texelFetch(uP0, c, 0), b = texelFetch(uP1, c, 0);
+  float len = distance(a.xy, b.xy);
+  bool skip = b.z < a.z || len > 40. || len < 1e-4;
+  vec2 dir = skip ? vec2(1., 0.) : (b.xy - a.xy) / len, nrm = vec2(-dir.y, dir.x);
+  float side = (gl_VertexID & 1) == 0 ? -1. : 1., end = gl_VertexID < 2 ? 0. : 1.;
+  vec2 p = mix(a.xy, b.xy, end) + nrm * side * uHW + dir * (end * 2. - 1.) * uHW;
+  vD = side;
+  float speed = len / uDt;
+  vS = clamp(speed / 120., 0., 1.);
+  float life = smoothstep(0., .7, b.z) * (1. - smoothstep(b.w - 1., b.w, b.z));
+  vA = skip ? 0. : life * smoothstep(2., 9., speed) * (.16 + .84 * smoothstep(9., 75., speed)) * .7;   // calm air whispers, strong wind stands out   // still air leaves no speckle
+  gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.);
+}`, `#version 300 es
+precision highp float; in float vD; in float vA; in float vS; out vec4 o;
+void main() { float a = vA * (1. - smoothstep(.35, 1., abs(vD))); o = vec4(a, a * vS, 0., a); }`, 'seg');
+const FADE = prog(VS_FULL, `#version 300 es
+precision highp float; out vec4 o; void main() { o = vec4(0.); }`, 'fade');
+const COMP = prog(VS_FULL, `#version 300 es
+precision highp float; in vec2 vUV; out vec4 o;
+uniform sampler2D uTrail, uMap; uniform vec3 uBg, uLand, uLine, uFast, uGrat, uInk; uniform float uK, uDayF;
+float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+void main() {
+  vec4 m = texture(uMap, vec2(vUV.x, 1. - vUV.y)); /* the chart canvas is stored top-down */ vec2 tr = texture(uTrail, vUV).rg;
+  vec3 c = mix(uBg, uLand, m.g);
+  c = mix(c, uGrat, m.b * .55);
+  float t = 1. - exp(-tr.r * 1.5), sp = tr.r > 1e-3 ? clamp(tr.g / tr.r, 0., 1.) : 0.;
+  c = mix(c, mix(uLine, uFast, smoothstep(.4, .95, sp)), t * mix(.58, .6, uDayF));   // light lines on a dark map read stronger: hold them back at night
+  c = mix(c, uInk, min(1., m.r * mix(1.15, .85, uDayF)));               // and let the ink come through at full strength
+  c *= .985 + .03 * hash(floor(gl_FragCoord.xy));                     // a whisper of paper grain
+  vec2 q = vUV - .5; c *= 1. - .08 * smoothstep(.35, .9, length(q * vec2(1.2, 1.)));
+  o = vec4(c, 1.);
+}`, 'comp');
+
+/* ---------- targets ---------- */
+let GW = 1, GH = 1, Tt = null, trailT, trailF, mapT = null, Ptx = [], Pfx = [], pi = 0, vi = 0, pj = 0;
+const fmtF = [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT];
+function buildTargets() {
+  const dw = Math.round(W * K), dh = Math.round(H * K); cv.width = dw; cv.height = dh;
+  for (const t of [Tt, trailT, ...Ptx]) if (t) gl.deleteTexture(t);
+  for (const f of [trailF, ...Pfx]) if (f) gl.deleteFramebuffer(f);
+  GW = Math.ceil(W / CELL); GH = Math.ceil(H / CELL);
+  Tt = tex(GW, GH, gl.RG32F, gl.RG, gl.FLOAT, gl.LINEAR);
+  trailT = tex(dw, dh, gl.RG16F, gl.RG, gl.HALF_FLOAT, gl.LINEAR); trailF = fbo(trailT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, trailF); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  // particles start scattered, at random points in their lives
+  const init = new Float32Array(NP * 4);
+  for (let i = 0; i < NP; i++) { init[i * 4] = Math.random() * W; init[i * 4 + 1] = Math.random() * H; init[i * 4 + 3] = 3 + Math.random() * 5; init[i * 4 + 2] = Math.random() * init[i * 4 + 3]; }
+  Ptx = [0, 1].map(() => tex(PW, PH, gl.RGBA32F, gl.RGBA, gl.FLOAT, gl.NEAREST, init)); Pfx = Ptx.map(fbo);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  buildTarget(true);
+}
+// the real wind on the fluid grid (px/s, y down), for the current minute
+const tgtBuf = { a: null };
+function buildTarget(seedVelocity) {
+  const n = GW * GH; if (!tgtBuf.a || tgtBuf.a.length !== n * 2) tgtBuf.a = new Float32Array(n * 2);
+  const A = tgtBuf.a, out = [0, 0], tSec = Date.now() / 1000;
+  for (let j = 0; j < GH; j++) {
+    const y = (j + .5) * CELL, lat = LAT(y), row = GH - 1 - j;          // texture rows run bottom-up
+    for (let i = 0; i < GW; i++) {
+      const x = (i + .5) * CELL;
+      if (DATA) sampleWind(LON(x), lat, tSec, out);
+      else { out[0] = -1.6 + .8 * Math.sin(y * .004 + 1); out[1] = -1.2 + .7 * Math.cos(x * .003); }   // a gentle stand-in until data arrives
+      const o = (row * GW + i) * 2; A[o] = clamp(out[0] * VS, -180, 180); A[o + 1] = clamp(-out[1] * VS, -180, 180);
+    }
+  }
+  gl.bindTexture(gl.TEXTURE_2D, Tt); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, GW, GH, gl.RG, gl.FLOAT, A);
+}
+
+/* ---------- the base chart, painted once: R ink (coast, cities, labels), G land, B graticule ---------- */
+let COAST = null, ELEV = null, LABEL_BOXES = [];
+// real elevation, a global 0.25° grid (from the AWS Terrain Tiles, built once and shipped with the theme), cubic-interpolated
+function elevAt(lon, lat) {
+  const E = ELEV; if (!E) return 0;
+  const fx = (((lon + 180) % 360 + 360) % 360) / .25 - .5, fy = clamp((90 - lat) / .25 - .5, 0, 718.999), ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy;
+  const at = (i, j) => E[clamp(j, 0, 719) * 1440 + ((i % 1440) + 1440) % 1440];
+  const cr = (a, b, c, d, t) => b + .5 * t * (c - a + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
+  const r = []; for (let j = -1; j <= 2; j++) r.push(cr(at(ix - 1, iy + j), at(ix, iy + j), at(ix + 1, iy + j), at(ix + 2, iy + j), tx));
+  return Math.max(0, cr(r[0], r[1], r[2], r[3], ty));
+}
+// relief, inked by hand: wobbly contours, little shaded peaks where the land rises, stippled desert, range names
+function drawRelief(y) {
+  if (!ELEV) return;
+  window.__relief = 'drawing';
+  const jit = (x, z) => [(vn(x * .09, z * .09) - .5) * 1.6, (vn(x * .09 + 40, z * .09) - .5) * 1.6];
+  // contours by marching squares on a fine screen grid
+  const st = 6, cw = Math.ceil(W / st) + 1, ch = Math.ceil(H / st) + 1, E = new Float32Array(cw * ch);
+  for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) E[j * cw + i] = elevAt(LON(i * st), LAT(j * st));
+  for (const [lev, ink, lw] of [[400, 52, .45], [1000, 70, .5], [2000, 84, .55], [3500, 96, .6], [5000, 104, .6]]) {
+    y.strokeStyle = `rgb(${ink},0,0)`; y.lineWidth = lw; y.beginPath();
+    for (let j = 0; j < ch - 1; j++) for (let i = 0; i < cw - 1; i++) {
+      const a = E[j * cw + i], b = E[j * cw + i + 1], c = E[(j + 1) * cw + i + 1], d = E[(j + 1) * cw + i];
+      const pts = [], x0 = i * st, y0 = j * st, lerp = (u, v) => (lev - u) / (v - u);
+      if ((a < lev) !== (b < lev)) pts.push([x0 + st * lerp(a, b), y0]);
+      if ((b < lev) !== (c < lev)) pts.push([x0 + st, y0 + st * lerp(b, c)]);
+      if ((d < lev) !== (c < lev)) pts.push([x0 + st * lerp(d, c), y0 + st]);
+      if ((a < lev) !== (d < lev)) pts.push([x0, y0 + st * lerp(a, d)]);
+      for (let k = 0; k + 1 < pts.length; k += 2) { const [p, q] = [pts[k], pts[k + 1]], jp = jit(p[0], p[1]), jq = jit(q[0], q[1]);
+        y.moveTo(p[0] + jp[0], p[1] + jp[1]); y.lineTo(q[0] + jq[0], q[1] + jq[1]); }
+    }
+    y.stroke();
+  }
+  // mountain marks: a little peak with its eastern flank hatched (light from the west, as old maps drew it)
+  const R = (() => { let a = 99; return () => (a = (a * 16807) % 2147483647) / 2147483647; })();
+  y.lineCap = 'round'; y.lineJoin = 'round';
+  const peaks = [];
+  for (let gy = 14; gy < H; gy += 16) for (let gx = 10 + (gy / 16 % 2) * 8; gx < W; gx += 17) {
+    const x = gx + (R() - .5) * 9, z = gy + (R() - .5) * 8, lon = LON(x), lat = LAT(z), e = elevAt(lon, lat);
+    if (e < 550) continue;
+    const g = Math.hypot(elevAt(LON(x + 6), lat) - elevAt(LON(x - 6), lat), elevAt(lon, LAT(z + 6)) - elevAt(lon, LAT(z - 6))) / 12;   // m per px
+    const pr = e > 4300 && g < 9 ? .08 : e > 1600 ? .5 : g > 7 ? .55 : e > 900 ? .2 : .06;      // sparse: a hint of the land, not a carpet
+    if (R() > pr) continue;
+    peaks.push([x, z, 3.2 + 8.5 * Math.sqrt(Math.min(e, 6500) / 6500) * (.8 + .4 * R())]);
+  }
+  peaks.sort((a, b) => a[1] - b[1]);
+  for (const [x, z, sz] of peaks) {
+    const w = sz * (.7 + .25 * R()), top = [x + (R() - .5) * sz * .2, z - sz];
+    y.strokeStyle = 'rgb(96,0,0)'; y.lineWidth = .7; y.beginPath(); y.moveTo(x - w, z); y.lineTo(top[0], top[1]); y.lineTo(x + w * .95, z + .2); y.stroke();
+    y.strokeStyle = 'rgb(64,0,0)'; y.lineWidth = .5; y.beginPath();
+    for (let k = 1; k <= 3; k++) { const t = k / 4, px = top[0] + (x + w * .95 - top[0]) * t, py = top[1] + (z - top[1]) * t; y.moveTo(px, py); y.lineTo(px - sz * .12, py + sz * (.45 - t * .25)); }
+    y.stroke();
+  }
+  // deserts stippled, and the names of ranges, plateaus and deserts set along their shapes (Natural Earth regions)
+  const inPoly = (lon, lat, r) => { let c = false; for (let i = 0, j = r.length - 2; i < r.length; j = i, i += 2) { const xi = r[i], yi = r[i + 1], xj = r[j], yj = r[j + 1];
+    if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) c = !c; } return c; };
+  y.fillStyle = 'rgb(70,0,0)';
+  const vis = r => { let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; for (let i = 0; i < r.length; i += 2) { x0 = Math.min(x0, r[i]); x1 = Math.max(x1, r[i]); y0 = Math.min(y0, r[i + 1]); y1 = Math.max(y1, r[i + 1]); }
+    return x1 > PJ.lon0 && x0 < PJ.lon1 && y1 > PJ.lat0 && y0 < PJ.lat1 ? [x0, y0, x1, y1] : null; };
+  const labels = [];
+  for (const g of WORLD.regions) for (const r of g.p) {
+    const bb = vis(r); if (!bb) continue;
+    if (g.k === 'Desert') {
+      const n = Math.min(9000, Math.round((X(bb[2]) - X(bb[0])) * (Y(bb[1]) - Y(bb[3])) / 55));
+      for (let k = 0; k < n; k++) { const lon = bb[0] + R() * (bb[2] - bb[0]), lat = bb[1] + R() * (bb[3] - bb[1]);
+        if (inPoly(lon, lat, r) && elevAt(lon, lat) < 1500) y.fillRect(X(lon), Y(lat), .8, .8); }
+    }
+    if (['Range/mtn', 'Plateau', 'Desert', 'Basin', 'Plain'].includes(g.k)) {
+      // the shape's long axis, from its points' spread (a quick principal-axis fit)
+      let mx = 0, my = 0, n = r.length / 2; for (let i = 0; i < r.length; i += 2) { mx += X(r[i]); my += Y(r[i + 1]); } mx /= n; my /= n;
+      let sxx = 0, syy = 0, sxy = 0; for (let i = 0; i < r.length; i += 2) { const dx = X(r[i]) - mx, dy = Y(r[i + 1]) - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+      let a = .5 * Math.atan2(2 * sxy, sxx - syy); if (a > Math.PI / 2) a -= Math.PI; if (a < -Math.PI / 2) a += Math.PI;
+      const len = Math.sqrt((sxx + syy) / n) * 2.2;
+      if (len < 90 || mx < 30 || mx > W - 30 || my < 20 || my > H - 20) continue;
+      labels.push({ t: g.n.toUpperCase().replace(/\bMTS\.?/, 'MOUNTAINS'), x: mx, y: my, a: Math.abs(a) < .12 ? 0 : a, len, rank: g.r, k: g.k });
+    }
+  }
+  y.fillStyle = 'rgb(112,0,0)'; labels.sort((p, q) => p.rank - q.rank || q.len - p.len);
+  const boxes = []; let shown = 0;
+  for (const L of labels) {
+    if (shown >= 12) break;
+    const size = clamp(L.len / 26, 9, 12.5); y.font = `italic ${size}px ${SERIF}`; y.letterSpacing = `${size * .45}px`;
+    const w = y.measureText(L.t).width; if (w > L.len * 1.5) continue;
+    const box = [L.x - w / 2 - 8, L.y - 14, L.x + w / 2 + 8, L.y + 14];
+    if (boxes.some(b => b[0] < box[2] && b[2] > box[0] && b[1] < box[3] && b[3] > box[1])) continue;
+    boxes.push(box); shown++;
+    y.save(); y.translate(L.x, L.y); y.rotate(L.a); y.textAlign = 'center'; y.fillText(L.t, 0, 0); y.restore();
+  }
+  y.letterSpacing = '0px'; LABEL_BOXES = boxes;
+  window.__relief = 'done ' + peaks.length;
+}
+const vn = (x, y) => { const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const hh = (a, b) => { const q = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return q - Math.floor(q); };
+  return (hh(ix, iy) * (1 - ux) + hh(ix + 1, iy) * ux) * (1 - uy) + (hh(ix, iy + 1) * (1 - ux) + hh(ix + 1, iy + 1) * ux) * uy; };
+function paintMap() {
+  const dw = Math.round(W * K), dh = Math.round(H * K), c = document.createElement('canvas'); c.width = dw; c.height = dh;
+  const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, dw, dh); x.globalCompositeOperation = 'lighter';
+  const layer = draw => { const l = document.createElement('canvas'); l.width = dw; l.height = dh; const y = l.getContext('2d'); y.scale(K, K); draw(y); x.drawImage(l, 0, 0); };
+  const ring = (y, r, sh = 0) => { y.beginPath(); for (let i = 0; i < r.length; i += 2) { const px = X(r[i] + sh), py = Y(r[i + 1]); i ? y.lineTo(px, py) : y.moveTo(px, py); } y.closePath(); };
+  const shifts = [0]; if (PJ.lon1 > 180) shifts.push(360); if (PJ.lon0 < -180) shifts.push(-360);
+  if (COAST) {
+    const zoom = Math.max(.75, Math.min(1.4, 45 / (PJ.lat1 - PJ.lat0)));
+    layer(y => { y.fillStyle = 'rgb(0,150,0)'; for (const sh of shifts) for (const r of COAST.land) { ring(y, r, sh); y.fill(); }
+      y.globalCompositeOperation = 'destination-out'; for (const sh of shifts) for (const r of COAST.lakes) { ring(y, r, sh); y.fill(); } });
+    layer(y => { y.strokeStyle = 'rgb(150,0,0)'; y.lineWidth = .75 * zoom; y.lineJoin = 'round';
+      for (const sh of shifts) for (const r of COAST.land) { ring(y, r, sh); y.stroke(); } y.lineWidth = .5 * zoom; for (const sh of shifts) for (const r of COAST.lakes) { ring(y, r, sh); y.stroke(); } });
+  }
+  layer(y => { const span = PJ.lat1 - PJ.lat0, gs = span > 50 ? 10 : span > 20 ? 5 : span > 10 ? 2 : 1, ls = gs * 2;
+    const lonT = v => { const w = ((v + 540) % 360) - 180; return `${Math.abs(Math.round(w))}°${w < 0 ? 'W' : w > 0 ? 'E' : ''}`; }, latT = v => `${Math.abs(Math.round(v))}°${v < 0 ? 'S' : v > 0 ? 'N' : ''}`;
+    y.strokeStyle = 'rgb(0,0,255)'; y.lineWidth = .5; y.setLineDash([2, 4]);
+    for (let lo = Math.ceil(PJ.lon0 / gs) * gs; lo < PJ.lon1; lo += gs) { y.beginPath(); y.moveTo(X(lo), 0); y.lineTo(X(lo), H); y.stroke(); }
+    for (let la = Math.ceil(PJ.lat0 / gs) * gs; la < PJ.lat1; la += gs) { y.beginPath(); y.moveTo(0, Y(la)); y.lineTo(W, Y(la)); y.stroke(); }
+    y.setLineDash([]); y.fillStyle = 'rgb(0,0,255)'; y.font = `9px ${SERIF}`;
+    for (let lo = Math.ceil(PJ.lon0 / ls) * ls; lo < PJ.lon1; lo += ls) y.fillText(lonT(lo), X(lo) + 3, 12);
+    for (let la = Math.ceil(PJ.lat0 / ls) * ls; la < PJ.lat1; la += ls) y.fillText(latT(la), 4, Y(la) - 3); });
+  layer(y => drawRelief(y));
+  layer(y => {
+    y.fillStyle = 'rgb(150,0,0)';
+    const sea = (t, lon, lat, size, rot = 0) => { y.save(); y.translate(X(lon), Y(lat)); y.rotate(rot); y.font = `italic ${size}px ${SERIF}`; y.textAlign = 'center';
+      y.letterSpacing = `${size * .35}px`; y.fillText(t, 0, 0); y.restore(); };
+    const taken = LABEL_BOXES.slice(), free = b => !taken.some(o => o[0] < b[2] && o[2] > b[0] && o[1] < b[3] && o[3] > b[1]);
+    const seas = WORLD.marine.filter(m => m[1] > PJ.lon0 + 1 && m[1] < PJ.lon1 - 1 && m[2] > PJ.lat0 + 1 && m[2] < PJ.lat1 - 1).sort((p, q) => p[3] - q[3] || q[4] - p[4]);
+    let ns = 0;
+    for (const [n, lo, la, rank] of seas) {
+      if (ns >= 5) break;
+      const size = rank <= 1 ? 13 : rank <= 3 ? 12 : 10.5; y.font = `italic ${size}px ${SERIF}`; y.letterSpacing = `${size * .35}px`;
+      const t = n.toUpperCase(), w = y.measureText(t).width, px = X(lo), py = Y(la), b = [px - w / 2 - 6, py - 14, px + w / 2 + 6, py + 6];
+      if (b[0] < 6 || b[2] > W - 6 || !free(b)) continue;
+      taken.push(b); ns++; sea(t, lo, la, size);
+    }
+    const city = (t, lon, lat, home) => { const px = X(lon), py = Y(lat); y.beginPath(); y.arc(px, py, home ? 2.6 : 1.7, 0, 7); y.fill();
+      if (home) { y.lineWidth = .8; y.strokeStyle = 'rgb(150,0,0)'; y.beginPath(); y.arc(px, py, 6, 0, 7); y.stroke(); }
+      y.font = `${home ? 12 : 10}px ${SERIF}`; y.letterSpacing = '0px'; y.textAlign = 'left'; y.fillText(t, px + (home ? 9 : 5), py + 3.5); };
+    city(HOME.name, HOME.lon, HOME.lat, true); taken.push([X(HOME.lon) - 8, Y(HOME.lat) - 12, X(HOME.lon) + 90, Y(HOME.lat) + 10]);
+    const span = PJ.lat1 - PJ.lat0, gap = 70; let nc = 0;
+    for (const [n, lo, la, rank] of WORLD.places) {           // the biggest cities in view, spaced apart
+      if (nc >= 11) break;
+      if (lo < PJ.lon0 || lo > PJ.lon1 || la < PJ.lat0 || la > PJ.lat1 || (Math.abs(lo - HOME.lon) < .01 && Math.abs(la - HOME.lat) < .01)) continue;
+      if (rank > (span > 30 ? 3 : span > 15 ? 5 : 8)) continue;
+      const px = X(lo), py = Y(la); y.font = `10px ${SERIF}`; const w = y.measureText(n).width, b = [px - gap / 2, py - 10, px + w + 8, py + 8];
+      if (px < 10 || px > W - w - 14 || py < 18 || py > H - 20 || !free(b)) continue;
+      taken.push(b); nc++; city(n, lo, la, false);
+    }
+  });
+  if (!mapT) mapT = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, mapT); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+
+/* ---------- day and night, from the real sun over the chosen country's capital ---------- */
+function sunAltitude(date, lat, lon) {
+  const d = date.getTime() / 86400000 + 2440587.5 - 2451545.0;
+  const g = (357.529 + .98560028 * d) * D2R, q = 280.459 + .98564736 * d, L = (q + 1.915 * Math.sin(g) + .020 * Math.sin(2 * g)) * D2R, e = (23.439 - .00000036 * d) * D2R;
+  const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)), dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const gmst = (18.697374558 + 24.06570982441908 * d) % 24 * 15, H = (gmst + lon) * D2R - ra;
+  return Math.asin(Math.sin(lat * D2R) * Math.sin(dec) + Math.cos(lat * D2R) * Math.cos(dec) * Math.cos(H)) / D2R;
+}
+const DAY = { bg: [.925, .905, .862], land: [.882, .858, .80], line: [.12, .17, .22], fast: [.60, .21, .11], grat: [.62, .60, .55], ink: [.26, .27, .28] };
+const NIGHT = { bg: [.03, .05, .078], land: [.1, .132, .17], line: [.7, .76, .82], fast: [.96, .74, .44], grat: [.22, .27, .33], ink: [.8, .83, .86] };   // night: land clearly above the sea, ink brighter than the wind so the chart reads first
+let PAL = null, dayF = 1;
+function palette() {
+  dayF = clamp((sunAltitude(new Date(), HOME.lat, HOME.lon) + 8) / 14, 0, 1); dayF = dayF * dayF * (3 - 2 * dayF);
+  const mix = (a, b) => a.map((v, i) => b[i] + (v - b[i]) * dayF);
+  PAL = {}; for (const k in DAY) PAL[k] = mix(DAY[k], NIGHT[k]);
+}
+const capCv = document.getElementById('cap');
+// a clock in the chosen country's local time (from the wind data's timezone), else this Mac's
+function localTime(ms, tz) { if (!tz) return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  const d = new Date(ms + tz.off * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }
+function drawCaption() {
+  if (!PAL) palette();
+  const k = K, w = 420, h = 96; capCv.width = w * k; capCv.height = h * k;
+  const x = capCv.getContext('2d'); x.scale(k, k); x.clearRect(0, 0, w, h);
+  if (DESK.n > 1 && DESK.i !== 0) return;                              // one caption for the whole desk, on the leftmost screen
+  const ink = `rgb(${PAL.ink.map(v => Math.round(v * 255)).join(',')})`, faint = `rgba(${PAL.ink.map(v => Math.round(v * 255)).join(',')},.7)`;
+  x.fillStyle = ink; x.font = `11px ${SERIF}`; x.letterSpacing = '3px'; x.fillText(`SURFACE WIND · ${(COUNTRY ? COUNTRY.name : '').toUpperCase()} · LIVE`, 28, h - 46);
+  x.letterSpacing = '0px'; x.font = `italic 11px ${SERIF}`; x.fillStyle = faint;
+  const tz = DATA && DATA.tz, t = localTime(Date.now(), tz);
+  let line = `10 m above ground · ${t}${tz && tz.abbr ? ' ' + tz.abbr : ''}`;
+  if (DATA) line += ` · Open-Meteo forecast of ${localTime(DATA.fetched, tz)}`;
+  x.fillText(line, 28, h - 30);
+  if (!DATA || dataNote.startsWith('offline')) x.fillText(dataNote, 28, h - 15);
+}
+
+/* ======================= windows: eased obstacles that push the air when they move ======================= */
+let wins = [], liveUntil = 0;
+function setTargets(list) {
+  const used = new Set();
+  for (const t of list) {
+    let best = null, bd = 1e9;
+    for (const c of wins) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, sm: t.sm, alive: true, vx: 0, vy: 0 }; wins.push(c); used.add(c); }
+  }
+  for (const c of wins) if (!used.has(c)) c.alive = false;
+  wins = wins.filter(c => c.alive);
+}
+const uR = new Float32Array(32 * 4), uRV = new Float32Array(32 * 2);
+let nR = 0;
+function stepWins(dt) {
+  const live = performance.now() < liveUntil, k = 1 - Math.exp(-dt * (live ? 40 : 9));
+  nR = 0;
+  for (const c of wins) {
+    const ox = c.x, oy = c.y;
+    const ease = (v, t) => Math.abs(t - v) > .1 ? v + (t - v) * k : t;
+    c.x = ease(c.x, c.tx); c.y = ease(c.y, c.ty); c.w = ease(c.w, c.tw); c.h = ease(c.h, c.th);
+    c.vx = c.vx * .6 + clamp((c.x - ox) / dt, -900, 900) * .4; c.vy = c.vy * .6 + clamp((c.y - oy) / dt, -900, 900) * .4;
+    const sp = Math.hypot(c.vx, c.vy), f = sp > 1 ? Math.min(sp * .14, 55) / sp : 0;    // ≤ ~6 m/s of push, however fast it's dragged
+    if (nR < 32) { uR.set([c.x, c.y, c.x + c.w, c.y + c.h], nR * 4); uRV.set([c.vx * f, c.vy * f], nR * 2); nR++; }
+  }
+}
+
+/* ======================= stations: every window reads the wind where it sits ======================= */
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+function placeName(lat, lon) {
+  let best = null, bd = 1e9;
+  if (!WORLD) return '';
+  const cl = Math.cos(lat * D2R);
+  for (const [n, lo, la] of WORLD.places) { const dx = (((lo - lon) + 540) % 360 - 180) * cl, dy = la - lat, d = Math.hypot(dx, dy) * 111; if (d < bd) { bd = d; best = [n, la, lo]; } }
+  if (bd < 40) return best[0];
+  const onLand = elevAt(lon, lat) > 0;
+  if (bd < 350 && onLand) { const b = (Math.atan2((((lon - best[2]) + 540) % 360 - 180) * cl, lat - best[1]) / D2R + 360) % 360; return `${Math.round(bd / 10) * 10} km ${COMPASS[Math.round(b / 22.5) % 16]} of ${best[0]}`; }
+  if (!onLand) {                                             // over water: the nearest named sea
+    let sm = null, sd = 1e9; for (const m of WORLD.marine) { const d = Math.hypot((((m[1] - lon) + 540) % 360 - 180) * cl, m[2] - lat); if (d < sd) { sd = d; sm = m; } }
+    if (sm && sd < 25) return 'the ' + sm[0].toLowerCase().replace(/\b\w+/g, (w, i) => i && /^(of|the|and|de|la|del)$/.test(w) ? w : w[0].toUpperCase() + w.slice(1));
+    if (bd < 350) { const b = (Math.atan2((((lon - best[2]) + 540) % 360 - 180) * cl, lat - best[1]) / D2R + 360) % 360; return `${Math.round(bd / 10) * 10} km ${COMPASS[Math.round(b / 22.5) % 16]} of ${best[0]}`; }
+    return 'open sea';
+  }
+  return elevAt(lon, lat) > 2500 ? 'the high mountains' : 'open country';
+}
+function readWind(x, y) {
+  const lat = LAT(y), lon = LON(x), out = [0, 0];
+  if (DATA) sampleWind(lon, lat, Date.now() / 1000, out);
+  const ms = Math.hypot(out[0], out[1]), from = (Math.atan2(-out[0], -out[1]) / D2R + 360) % 360;
+  return { ms, from, kmh: Math.round(ms * 3.6), dir: COMPASS[Math.round(from / 22.5) % 16], place: placeName(lat, lon), ok: !!DATA, south: lat < 0 };
+}
+// the standard station plot: a shaft pointing into the wind, feathers on the clockwise side (northern hemisphere),
+// half feather 5 kt, full 10 kt, pennant 50 kt; calm is a double circle
+function drawBarb(x, cx, cy, from, kt, ink, south = false) {
+  x.strokeStyle = ink; x.fillStyle = ink; x.lineWidth = 1.1; x.lineCap = 'round';
+  x.beginPath(); x.arc(cx, cy, 3.2, 0, 7); x.stroke();
+  if (kt < 2.5) { x.beginPath(); x.arc(cx, cy, 5.6, 0, 7); x.stroke(); return; }
+  const a = from * D2R, ux = Math.sin(a), uy = -Math.cos(a), L = 26, ex = cx + ux * L, ey = cy + uy * L, sg = south ? -1 : 1, fx = -uy * sg, fy = ux * sg;   // feathers clockwise of the shaft in the north, anticlockwise in the south
+  x.beginPath(); x.moveTo(cx + ux * 3.2, cy + uy * 3.2); x.lineTo(ex, ey); x.stroke();
+  let k = Math.round(kt / 5) * 5, pos = 0;
+  const at = t => [ex - ux * t, ey - uy * t];
+  while (k >= 50) { const [p0x, p0y] = at(pos), [p1x, p1y] = at(pos + 5); x.beginPath(); x.moveTo(p0x, p0y); x.lineTo(p0x + fx * 9 + ux * 2, p0y + fy * 9 + uy * 2); x.lineTo(p1x, p1y); x.closePath(); x.fill(); pos += 6.5; k -= 50; }
+  while (k >= 10) { const [px, py] = at(pos); x.beginPath(); x.moveTo(px, py); x.lineTo(px + fx * 9 + ux * 2.5, py + fy * 9 + uy * 2.5); x.stroke(); pos += 3.6; k -= 10; }
+  if (k >= 5) { if (pos === 0) pos = 3.6; const [px, py] = at(pos); x.beginPath(); x.moveTo(px, py); x.lineTo(px + fx * 4.8 + ux * 1.3, py + fy * 4.8 + uy * 1.3); x.stroke(); }
+}
+function makeReadout() {
+  const c = document.createElement('canvas'); c.style.cssText = 'position:fixed;left:0;top:0;width:230px;height:46px;pointer-events:none;will-change:transform,opacity;opacity:0;transition:opacity .3s ease';
+  c.width = 230 * K; c.height = 46 * K; document.body.appendChild(c); c._key = ''; return c;
+}
+function paintReadout(c, r, flip = false) {
+  const ink = `rgb(${PAL.ink.map(v => Math.round(v * 255)).join(',')})`, key = `${r.dir}|${r.kmh}|${r.place}|${ink}|${flip}`;
+  if (key === c._key) return; c._key = key;
+  const x = c.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); x.clearRect(0, 0, 230, 46);
+  x.shadowColor = `rgba(${PAL.bg.map(v => Math.round(v * 255)).join(',')},.95)`; x.shadowBlur = 5;
+  const bx = flip ? 207 : 23, tx = flip ? 178 : 52;
+  drawBarb(x, bx, 23, r.from, r.ms * 1.944, ink, r.south);
+  x.fillStyle = ink; x.font = `12px ${SERIF}`; x.letterSpacing = '.5px'; x.textBaseline = 'alphabetic'; x.textAlign = flip ? 'right' : 'left';
+  x.fillText(r.ok ? (r.ms < 1.3 ? 'calm' : `${r.dir} · ${r.kmh} km/h`) : 'wind —', tx, 21);
+  x.font = `italic 10.5px ${SERIF}`; x.letterSpacing = '0px'; x.globalAlpha = .75; x.fillText(r.place, tx, 35); x.globalAlpha = 1; x.textAlign = 'left';
+}
+/* ======================= weather cards: every window carries a news-style report for the place under it ======================= */
+const WMO = c => c === 0 ? ['Clear', 'sun'] : c === 1 ? ['Mainly clear', 'sun'] : c === 2 ? ['Partly cloudy', 'part'] : c === 3 ? ['Overcast', 'cloud']
+  : c === 45 || c === 48 ? ['Fog', 'fog'] : c >= 51 && c <= 57 ? ['Drizzle', 'rain'] : c >= 61 && c <= 67 ? ['Rain', 'rain'] : c >= 71 && c <= 77 ? ['Snow', 'snow']
+  : c >= 80 && c <= 82 ? ['Showers', 'rain'] : c === 85 || c === 86 ? ['Snow showers', 'snow'] : c >= 95 ? ['Thunderstorm', 'storm'] : ['—', 'cloud'];
+const AQI = a => a == null ? null : a <= 50 ? ['Good', '#3f9b4a'] : a <= 100 ? ['Moderate', '#c9a227'] : a <= 150 ? ['Unhealthy for some', '#e07b24']
+  : a <= 200 ? ['Unhealthy', '#d23b2f'] : a <= 300 ? ['Very unhealthy', '#8e3a8f'] : ['Hazardous', '#7a1f2b'];
+const WX = new Map();          // weather by place (0.25° cells), refreshed every 15 min
+function wxFor(lat, lon) {
+  const key = `${(Math.round(lat * 4) / 4).toFixed(2)},${(Math.round(lon * 4) / 4).toFixed(2)}`;
+  let e = WX.get(key);
+  if (!e || (Date.now() - e.t > 15 * 60e3 && !e.busy)) {
+    if (!e) { e = { t: 0, d: null, busy: false }; WX.set(key, e); }
+    e.busy = true; const [la, lo] = key.split(',');
+    const f = `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day` +
+      `&hourly=temperature_2m,precipitation_probability,weather_code,is_day&forecast_hours=7&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset&forecast_days=1&timezone=auto`;
+    const a = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${la}&longitude=${lo}&current=us_aqi,pm2_5,pm10`;
+    Promise.all([fetch(f).then(r => r.json()), fetch(a).then(r => r.json()).catch(() => null)])
+      .then(([w, q]) => {
+        if (!w || !w.current) throw new Error((w && w.reason) || 'no data');       // e.g. the API's per-minute limit: try again shortly
+        e.d = { w, q: q && q.current ? q : (e.d && e.d.q) }; e.t = Date.now(); e.busy = false; e.v = (e.v || 0) + 1; })
+      .catch(err => { e.busy = false; e.t = /daily/i.test(err.message) ? untilTomorrow() - 15 * 60e3 : Date.now() - 15 * 60e3 + 75e3; e.v = (e.v || 0) + 1; post('JSERR wx ' + err.message); });   // retry in ~75 s
+  }
+  return e;
+}
+function icon(x, kind, cx, cy, s, ink, day) {
+  x.save(); x.translate(cx, cy); x.strokeStyle = ink; x.fillStyle = ink; x.lineWidth = 1.6; x.lineCap = 'round'; x.lineJoin = 'round';
+  const sun = (r) => { if (day) { x.beginPath(); x.arc(0, 0, r, 0, 7); x.stroke(); for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; x.beginPath(); x.moveTo(Math.cos(a) * r * 1.45, Math.sin(a) * r * 1.45); x.lineTo(Math.cos(a) * r * 1.85, Math.sin(a) * r * 1.85); x.stroke(); } }
+    else { x.beginPath(); x.arc(0, 0, r * 1.1, .6, 5.7); x.arc(r * .55, -r * .2, r * .85, 5.0, 1.25, true); x.closePath(); x.stroke(); } };
+  const cloud = (ox, oy, k) => { x.beginPath(); x.moveTo(ox - 11 * k, oy + 6 * k); x.arc(ox - 7 * k, oy + 1 * k, 5.5 * k, Math.PI * .5, Math.PI * 1.45); x.arc(ox + 1 * k, oy - 3 * k, 7.5 * k, Math.PI * 1.1, Math.PI * 1.95);
+    x.arc(ox + 8 * k, oy + 2 * k, 5 * k, Math.PI * 1.5, Math.PI * .5); x.closePath(); x.stroke(); };
+  const k = s / 16;
+  if (kind === 'sun') sun(7 * k);
+  else if (kind === 'part') { x.save(); x.translate(-5 * k, -5 * k); sun(5 * k); x.restore(); x.fillStyle = 'rgba(0,0,0,0)'; cloud(2 * k, 3 * k, k); }
+  else if (kind === 'cloud') { cloud(-3 * k, -2 * k, k * .8); cloud(2 * k, 3 * k, k); }
+  else if (kind === 'fog') { cloud(0, -4 * k, k); for (let i = 0; i < 3; i++) { x.beginPath(); x.moveTo(-11 * k + i * 2 * k, (8 + i * 4) * k); x.lineTo(11 * k - i * 2 * k, (8 + i * 4) * k); x.stroke(); } }
+  else if (kind === 'rain' || kind === 'storm' || kind === 'snow') {
+    cloud(0, -4 * k, k);
+    if (kind === 'storm') { x.beginPath(); x.moveTo(1 * k, 4 * k); x.lineTo(-3 * k, 11 * k); x.lineTo(1 * k, 11 * k); x.lineTo(-2 * k, 17 * k); x.stroke(); }
+    else for (let i = -1; i <= 1; i++) { x.beginPath(); if (kind === 'snow') x.arc(i * 6 * k, 11 * k, 1.4 * k, 0, 7); else { x.moveTo(i * 6 * k + 1.5 * k, 6 * k); x.lineTo(i * 6 * k - 1.5 * k, 13 * k); } kind === 'snow' ? x.fill() : x.stroke(); }
+  }
+  x.restore();
+}
+const CW = 330, CH = 104;
+function makeCard() {
+  const c = document.createElement('canvas');
+  c.style.cssText = `position:fixed;left:0;top:0;width:${CW}px;height:${CH}px;pointer-events:none;will-change:transform,opacity;opacity:0;transition:opacity .6s ease`;
+  c.width = CW * K; c.height = CH * K; document.body.appendChild(c); c._key = ''; return c;
+}
+const rgbOf = a => `rgb(${a.map(v => Math.round(v * 255)).join(',')})`;
+// the report, inked straight onto the chart: no panel, just type in the map's own hand
+function paintCard(c, lat, lon) {
+  const e = wxFor(lat, lon), d = e.d, place = placeName(lat, lon), t = localTime(Date.now(), d && d.w ? { off: d.w.utc_offset_seconds || 0 } : (DATA && DATA.tz));
+  const key = `${place}|${t}|${e.v || 0}|${dayF.toFixed(2)}`; if (key === c._key) return; c._key = key;
+  const x = c.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); x.clearRect(0, 0, CW, CH);
+  const ink = rgbOf(PAL.ink), soft = `rgba(${PAL.ink.map(v => Math.round(v * 255)).join(',')},.68)`;
+  x.textBaseline = 'alphabetic'; x.fillStyle = ink;
+  x.shadowColor = `rgba(${PAL.bg.map(v => Math.round(v * 255)).join(',')},.95)`; x.shadowBlur = 5;      // a cartographer's halo, so map labels never fight it
+  x.font = `11px ${SERIF}`; x.letterSpacing = '2.2px'; x.fillText(`${place.toUpperCase()}  ·  ${t}`, 0, 13);
+  x.letterSpacing = '0px';
+  if (!d || !d.w || !d.w.current) { x.fillStyle = soft; x.font = `italic 11px ${SERIF}`; x.fillText(e.busy ? 'reading the weather…' : 'no report just now', 0, 34); return; }
+  const cu = d.w.current, [cond, kind] = WMO(cu.weather_code), dl = d.w.daily, hr = d.w.hourly;
+  icon(x, kind, 11, 37, 13, ink, cu.is_day === 1);
+  x.fillStyle = ink; x.font = `30px ${SERIF}`; const T = `${Math.round(cu.temperature_2m)}°`; x.fillText(T, 28, 47);
+  const tw = x.measureText(T).width;
+  x.font = `italic 13px ${SERIF}`; x.fillText(cond.toLowerCase(), 36 + tw, 36);
+  x.font = `11px ${SERIF}`; x.fillStyle = soft;
+  x.fillText(`feels ${Math.round(cu.apparent_temperature)}° · high ${Math.round(dl.temperature_2m_max[0])}° low ${Math.round(dl.temperature_2m_min[0])}°`, 36 + tw, 50);
+  const dir = COMPASS[Math.round(cu.wind_direction_10m / 22.5) % 16];
+  x.fillText(`wind ${dir} ${Math.round(cu.wind_speed_10m)} km/h, gusts ${Math.round(cu.wind_gusts_10m)} · humidity ${cu.relative_humidity_2m}% · ${Math.round(cu.pressure_msl)} hPa`, 0, 69);
+  let y2 = 85, line = '';
+  const aq = d.q && d.q.current ? d.q.current : null, cat = AQI(aq ? aq.us_aqi : null);
+  if (cat) { x.fillStyle = cat[1]; x.beginPath(); x.arc(3.5, y2 - 3.5, 3.2, 0, 7); x.fill(); x.fillStyle = soft;
+    x.fillText(`air ${Math.round(aq.us_aqi)} AQI, ${cat[0].toLowerCase()} · PM2.5 ${Math.round(aq.pm2_5)}`, 11, y2); y2 += 16; }
+  const parts = []; for (let k = 1; k <= Math.min(5, hr.time.length - 1); k++) { const pp = hr.precipitation_probability[k]; parts.push(`${hr.time[k].slice(11, 13)}h ${Math.round(hr.temperature_2m[k])}°${pp >= 30 ? ` (${pp}% rain)` : ''}`); }
+  x.fillText(parts.join('   '), 0, y2);
+}
+const cards = new Map();
+function stepCards(now) {
+  const seen = new Set();
+  for (const w of wins) {
+    if (w.w < 260 || w.h < 200) continue;                 // by size alone: Stage Manager also lists the active window as one of its own
+    seen.add(w);
+    let c = cards.get(w); if (!c) { c = makeCard(); c._still = now; cards.set(w, c); requestAnimationFrame(() => c.style.opacity = 1); }
+    const moving = Math.abs(w.x - w.tx) + Math.abs(w.y - w.ty) > .5;
+    if (moving) c._still = now;
+    // the report is for the place under the window; asked for once the window has settled
+    if (now - c._still > 500 || !c._key) { if (!c._polled || now - c._polled > 5000) { c._polled = now; c._key += '~'; } paintCard(c, LAT(w.y + w.h / 2), LON(w.x + w.w / 2)); }
+    const above = w.y > CH + 12, tx = clamp(w.x + 4, 8, W - CW - 8), ty = above ? w.y - CH - 6 : clamp(w.y + w.h + 12, 8, H - CH - 8);
+    c.style.transform = `translate3d(${tx.toFixed(1)}px,${ty.toFixed(1)}px,0)`;
+  }
+  for (const [w, c] of cards) if (!seen.has(w)) { cards.delete(w); c.style.opacity = 0; setTimeout(() => c.remove(), 700); }
+}
+
+/* ======================= cursor: a station plot that rides the pointer over the map ======================= */
+const cur = { x: -1e4, y: -1e4, vx: 0, vy: 0, on: false, t: 0 };
+let curRead = null;
+function stepCursor(now) {
+  if (!curRead) curRead = makeReadout();
+  const over = cur.on && !wins.some(w => cur.x > w.x && cur.x < w.x + w.w && cur.y > w.y && cur.y < w.y + w.h);
+  if (over) {
+    const flip = cur.x > W - 240;                                       // near the right edge the words go to the left; the barb stays on the pointer
+    const tx = flip ? cur.x - 207 : cur.x - 23, ty = clamp(cur.y - 23, -23, H - 23);
+    paintReadout(curRead, readWind(cur.x, cur.y), flip);
+    curRead.style.transform = `translate3d(${tx.toFixed(1)}px,${ty.toFixed(1)}px,0)`;
+  }
+  const want = over ? '1' : '0'; if (curRead.style.opacity !== want) curRead.style.opacity = want;
+}
+
+/* ======================= render ======================= */
+const full = () => { gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3); };
+function simUniforms(p, dt) {
+  gl.uniform2f(p.u.uGrid, GW, GH); gl.uniform1f(p.u.uCell, CELL); if (p.u.uDt) gl.uniform1f(p.u.uDt, dt); gl.uniform2f(p.u.uRes, W, H);
+  if (p.u.uR) { gl.uniform4fv(p.u.uR, uR); gl.uniform2fv(p.u.uRV, uRV); gl.uniform1i(p.u.uN, nR); }
+}
+function bindT(p, list) { list.forEach(([n, t], i) => { if (p.u[n] !== undefined) { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(p.u[n], i); } }); }
+let seed = 0;
+function render(dt) {
+  gl.disable(gl.BLEND);
+  // particles ride the real wind; nothing on your desktop bends it
+  gl.viewport(0, 0, PW, PH); gl.bindFramebuffer(gl.FRAMEBUFFER, Pfx[1 - pj]); gl.useProgram(PSTEP); simUniforms(PSTEP, dt); gl.uniform1i(PSTEP.u.uN, 0);
+  bindT(PSTEP, [['uP', Ptx[pj]], ['uT', Tt]]); gl.uniform1f(PSTEP.u.uSeed, (seed = (seed + 1) % 9973)); full();
+  // trails: fade what's there, then lay this frame's segments on top
+  gl.viewport(0, 0, trailT.w, trailT.h); gl.bindFramebuffer(gl.FRAMEBUFFER, trailF);
+  gl.enable(gl.BLEND); const f = Math.exp(-dt / .95); gl.blendColor(f, f, f, f); gl.blendFunc(gl.ZERO, gl.CONSTANT_COLOR);
+  gl.useProgram(FADE); full();
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.useProgram(SEG); bindT(SEG, [['uP0', Ptx[pj]], ['uP1', Ptx[1 - pj]]]);
+  gl.uniform2f(SEG.u.uRes, W, H); gl.uniform1f(SEG.u.uHW, .5); gl.uniform1f(SEG.u.uDt, dt);
+  gl.bindVertexArray(vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, NP);
+  pj = 1 - pj;
+  gl.disable(gl.BLEND);
+  // the chart
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height);
+  gl.useProgram(COMP); bindT(COMP, [['uTrail', trailT], ['uMap', mapT]]);
+  gl.uniform1f(COMP.u.uDayF, dayF);
+  for (const [u, key] of [['uBg', 'bg'], ['uLand', 'land'], ['uLine', 'line'], ['uFast', 'fast'], ['uGrat', 'grat'], ['uInk', 'ink']]) gl.uniform3fv(COMP.u[u], PAL[key]);
+  full();
+}
+
+/* ======================= loop ======================= */
+let running = false, lastT = 0, lastMinute = -1, lastTarget = 0;
+function wake() { if (!running && !paused && booted) { running = true; lastT = 0; requestAnimationFrame(loop); } }
+function loop(now) { try { loop0(now); } catch (e) { running = false; post('JSERR loop ' + e.message + ' ' + (e.stack || '').split('\n')[0]); setTimeout(wake, 1000); } }
+function loop0(now) {
+  if (paused) { running = false; return; }
+  if (lastT && now - lastT < 15.5) { requestAnimationFrame(loop); return; }
+  const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now;
+  fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
+  const t0 = performance.now();
+  if (now - lastTarget > 5000) { lastTarget = now; buildTarget(false); }          // the hour moves on: the wind with it
+  const minute = Math.floor(Date.now() / 60000);
+  if (minute !== lastMinute) { lastMinute = minute; palette(); drawCaption(); maybeFetch(); }
+  stepWins(dt); render(dt); stepCards(now); stepCursor(now);
+  fieldMs = fieldMs * .9 + (performance.now() - t0) * .1;
+  requestAnimationFrame(loop);
+}
+
+/* ======================= boot + host protocol ======================= */
+function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; project(); const c = loadCache(); if (c) DATA = c; buildTargets(); palette(); paintMap(); drawCaption(); }
+const handle = m => {
+  if (m.t === 'desk') { DESK = m; deskSeen(); if (booted) build(); return; }
+  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'cursor') { const x = m.x / K, y = m.y / K, t = performance.now(), dt = Math.max(8, t - cur.t) / 1000;
+    if (cur.on) { cur.vx = cur.vx * .5 + (x - cur.x) / dt * .5; cur.vy = cur.vy * .5 + (y - cur.y) / dt * .5; }
+    cur.x = x; cur.y = y; cur.t = t; cur.on = true; return; }
+  if (m.t === 'cursorOff') { cur.on = false; return; }
+  if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
+    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
+};
+let booted = false, bootAt = Date.now();
+Promise.all([fetch('wind/world.json').then(r => r.json()), fetch('wind/elev.bin').then(r => r.arrayBuffer()).then(b => new Int16Array(b)).catch(() => null)])
+  .then(([w, e]) => {
+    WORLD = w; COAST = w; ELEV = e;
+    COUNTRY = w.countries.find(c => c.id === VARIANT) || w.countries.find(c => c.id === 'IND');
+    HOME = { name: COUNTRY.cap[0], lon: COUNTRY.cap[1], lat: COUNTRY.cap[2] };
+    return deskKnown.then(() => { try { build(); } catch (err) { post('JSERR boot ' + err.message + ' ' + (err.stack || '').split('\n')[0]); }
+    booted = true; bootAt = Date.now(); maybeFetch(); wake(); });
+  }).catch(err => post('JSERR world ' + err.message));
+setInterval(() => { if (!paused && booted) maybeFetch(); }, 30e3);
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (!booted) return; build(); maybeFetch(); }, 200); });
+window.__dbg = () => `country=${COUNTRY && COUNTRY.id} GS=${GS} elev=${ELEV ? ELEV.length : 'none'} coast=${!!COAST} relief=${window.__relief || '-'} run=${running} paused=${paused} fps=${fpsEMA | 0} ms=${fieldMs.toFixed(2)} wins=${wins.length} data=${DATA ? new Date(DATA.fetched).toISOString() : 'none'} day=${dayF.toFixed(2)}`;
+const host = window.chrome && window.chrome.webview;
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
+else { handle({ t: 'windows', r: [[W * .3 * K, H * .3 * K, W * .62 * K, H * .66 * K]], n: ['A'] }); addEventListener('mousemove', e => handle({ t: 'cursor', x: e.clientX * K, y: e.clientY * K })); }
+</script>
+</body>
+</html>

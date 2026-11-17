@@ -1,0 +1,477 @@
+<!doctype html>
+<!--
+  Wind Tunnel — a Driftland theme. Your screen is the test section of a smoke tunnel: air streams in from the left,
+  past a model, and a rake of smoke injectors draws the flow as fine white lines.
+
+  The air is a real fluid simulation: a D2Q9 lattice Boltzmann solver on the GPU (with a Smagorinsky turbulence model so it
+  stays stable at high Reynolds number). Nothing about the wake is animated by hand — the boundary layers, the shear
+  layers peeling off the model, the vortices it sheds and the turbulence behind it all come out of the physics. The smoke
+  is tracer particles carried by that computed flow, released continuously from the rake, exactly as in a real tunnel.
+
+  The model is the theme's variant (themes/variants.json → "tunnel"). The cursor is a small steel ball the air flows
+  around too; your windows don't touch the air.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Wind Tunnel</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #060708; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+  #cap { position: fixed; left: 26px; bottom: 22px; font: 500 10.5px/1.4 -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    letter-spacing: .16em; text-transform: uppercase; color: rgba(225, 232, 240, .26); pointer-events: none; white-space: nowrap; }
+</style>
+</head>
+<body>
+<script type="importmap">{ "imports": { "three": "./lib/three/build/three.module.min.js" } }</script>
+<canvas id="gl"></canvas>
+<div id="cap"></div>
+<script>
+'use strict';
+window.__noMask = true;
+let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
+let FB = null; function commit() { } function refresh() { }          // hooks the host calls on every theme; this one has nothing to commit
+const P = { quality: 1 };                                            // read by the host's bench probe
+const cv = document.getElementById('gl');
+const post = s => { try { webkit.messageHandlers.host.postMessage(s); } catch (_) { console.log(s); } };
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const cur = { x: -1e4, y: -1e4, on: false, t: 0 };
+const VARIANT = new URLSearchParams(location.search).get('v') || 'x1';
+
+/* ======================= the models (the menu's "Model") ======================= */
+// Real objects, rendered in 3D with their own materials and textures: museum scans from the Smithsonian (CC0), NASA's
+// public-domain models, a Poly Haven photoscan (CC0) and the Khronos concept car (CC BY 4.0) — see THIRD_PARTY_NOTICES.
+// Each is rendered once, straight from the side or from above, into an image; the air flows around that image's exact
+// silhouette. yaw turns the model about its up axis so its nose faces into the wind (left). The airfoil and cylinder
+// are the engineering classics, computed exactly.
+const MODELS = {
+  x1:       { name: 'Bell X-1',                glb: 'x1',      view: 'side', yaw: -90, w: .36, h: .22 },
+  shuttle:  { name: 'Space Shuttle Discovery', glb: 'shuttle', view: 'side', yaw: -90, w: .38, h: .26 },
+  wright:   { name: '1903 Wright Flyer',       glb: 'wright',  view: 'top',  yaw: -90, w: .24, h: .4, exposure: .85, tint: 0xcdbb98, rough: .92 },   // the scan has shape but no colour: aged muslin and spruce
+  x57:      { name: 'NASA X-57 Maxwell',       glb: 'x57',     view: 'top',  yaw: 0,   w: .30, h: .44, paint: 0xc4c9d0, exposure: .9 },
+  car:      { name: 'Concept car',             glb: 'car',     view: 'side', yaw: -90, w: .34, h: .16 },
+  cat:      { name: 'Cat (concrete statue)',   glb: 'cat',     view: 'side', yaw: -90, w: .26, h: .27 },
+  apollo:   { name: 'Apollo 11 Command Module', glb: 'apollo', view: 'side', yaw: 0, roll: 180,   /* heat shield first, as it came home */   w: .26, h: .3 },
+  fish:     { name: 'Barramundi',              glb: 'fish',    view: 'side', yaw: -90, w: .34, h: .2 },
+  horse:    { name: 'Horse (bronze statue)',   glb: 'horse',   view: 'side', yaw: 0,   w: .3,  h: .32 },
+  shark:    { name: 'Shark (bronze statue)',   glb: 'shark',   view: 'side', yaw: -90, w: .36, h: .3, clip: .46 },   // clip: the statue's stand is cut away below this height
+  whale:    { name: 'Whale (bronze statue)',   glb: 'whale',   view: 'side', yaw: -90, w: .36, h: .3, clip: .5 },
+  ray:      { name: 'Manta ray (bronze statue)', glb: 'ray',   view: 'top',  yaw: -45,   w: .3,  h: .36 },
+  airfoil:  { name: 'NACA 2412 · α 12°', foil: { m: .02, p: .4, t: .12, aoa: 12 }, w: .3 },
+  cylinder: { name: 'Cylinder', circle: true, h: .16 },
+};
+const MODEL = MODELS[VARIANT] || MODELS.x1;
+function foilPoints(f, n = 140) {
+  // NACA 4-digit: camber line and thickness, chord 1 along +x (leading edge at 0), y up
+  const up = [], lo = [];
+  for (let i = 0; i <= n; i++) {
+    const b = Math.PI * i / n, x = (1 - Math.cos(b)) / 2;      // cosine spacing: fine at the nose and tail
+    const yt = 5 * f.t * (.2969 * Math.sqrt(x) - .126 * x - .3516 * x * x + .2843 * x ** 3 - .1036 * x ** 4);
+    const yc = x < f.p ? f.m / (f.p * f.p) * (2 * f.p * x - x * x) : f.m / ((1 - f.p) ** 2) * ((1 - 2 * f.p) + 2 * f.p * x - x * x);
+    const dy = x < f.p ? 2 * f.m / (f.p * f.p) * (f.p - x) : 2 * f.m / ((1 - f.p) ** 2) * (f.p - x), th = Math.atan(dy);
+    up.push([x - yt * Math.sin(th), yc + yt * Math.cos(th)]); lo.push([x + yt * Math.sin(th), yc - yt * Math.cos(th)]);
+  }
+  const a = -f.aoa * Math.PI / 180;                              // nose up: the trailing edge drops
+  return up.concat(lo.reverse()).map(([x, y]) => { const u = x - .25; return [u * Math.cos(a) - y * Math.sin(a), u * Math.sin(a) + y * Math.cos(a)]; });
+}
+function drawModel(ctx, cx, cy, sc) {
+  // sc: pixels per screen-height unit at this canvas's resolution
+  ctx.save(); ctx.fillStyle = '#fff';
+  if (MODEL.circle) { ctx.beginPath(); ctx.arc(cx, cy, MODEL.h * sc / 2, 0, Math.PI * 2); ctx.fill(); }
+  else if (MODEL.foil) {
+    const pts = foilPoints(MODEL.foil), ch = MODEL.w * sc;
+    ctx.beginPath(); pts.forEach(([x, y], i) => { const X = cx + x * ch, Y = cy - y * ch; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); }); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// The model, rendered once: a real 3D object with its own materials, lit like a tunnel model — a strong light sheet from
+// above and in front, a dim cool rim from behind, and a soft studio environment for its reflections. Orthographic, so
+// it is a true side or top view. Everything three.js used is released afterwards; only the picture is kept.
+async function renderModel(dw, dh, mcx, mcy, scH) {
+  const THREE = await import('three');
+  const { GLTFLoader } = await import('./lib/three/examples/jsm/loaders/GLTFLoader.js');
+  const { DRACOLoader } = await import('./lib/three/examples/jsm/loaders/DRACOLoader.js');
+  const { RoomEnvironment } = await import('./lib/three/examples/jsm/environments/RoomEnvironment.js');
+  const c = document.createElement('canvas'); c.width = dw; c.height = dh;
+  const r = new THREE.WebGLRenderer({ canvas: c, alpha: true, antialias: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
+  r.setClearColor(0x000000, 0); r.outputColorSpace = THREE.SRGBColorSpace; r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = MODEL.exposure || 1;
+  const scene = new THREE.Scene(), pm = new THREE.PMREMGenerator(r);
+  scene.environment = pm.fromScene(new RoomEnvironment(), .04).texture; scene.environmentIntensity = .5;
+  const draco = new DRACOLoader().setDecoderPath('./lib/three/examples/jsm/libs/draco/gltf/');
+  const gltf = await new GLTFLoader().setDRACOLoader(draco).loadAsync('./tunnel/models/' + MODEL.glb + '.glb');
+  const root = gltf.scene;
+  if (MODEL.paint !== undefined) root.traverse(o => { if (o.isMesh) o.material = new THREE.MeshPhysicalMaterial({ color: MODEL.paint, roughness: .5, metalness: .15, clearcoat: .5, clearcoatRoughness: .25 }); });   // bare CAD geometry: aircraft paint
+  if (MODEL.tint !== undefined) root.traverse(o => { if (o.isMesh) for (const m of [].concat(o.material)) { m.color.setHex(MODEL.tint); m.roughness = MODEL.rough ?? m.roughness; m.metalness = 0; } });
+  root.rotation.y = MODEL.yaw * Math.PI / 180;
+  const pivot = new THREE.Group(); pivot.add(root); scene.add(pivot);
+  if (MODEL.roll) pivot.rotation.z = MODEL.roll * Math.PI / 180;      // turned in the picture plane (side views)
+  pivot.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(pivot);
+  if (MODEL.clip) {                                                    // a statue: cut its stand away, and frame only what's left
+    const cut = box.min.y + (box.max.y - box.min.y) * MODEL.clip, plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -cut), v = new THREE.Vector3();
+    r.localClippingEnabled = true; box = new THREE.Box3();
+    root.traverse(o => { if (!o.isMesh) return; for (const m of [].concat(o.material)) { m.clippingPlanes = [plane]; m.side = THREE.DoubleSide; }
+      const pos = o.geometry.attributes.position; for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld); if (v.y >= cut) box.expandByPoint(v); } });
+  }
+  const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
+  const top = MODEL.view === 'top', sw = size.x, sh2 = top ? size.z : size.y;
+  const k = Math.min(MODEL.w * scH / sw, MODEL.h * scH / sh2), D = Math.max(size.x, size.y, size.z) * 4;   // pixels per metre
+  const cam = new THREE.OrthographicCamera(-dw / 2 / k, dw / 2 / k, dh / 2 / k, -dh / 2 / k, D * .01, D * 3);
+  const ox = (mcx - dw / 2) / k, oy = (mcy - dh / 2) / k;              // where on screen the model's centre goes
+  if (top) { cam.up.set(0, 0, -1); cam.position.set(ctr.x - ox, ctr.y + D, ctr.z - oy); cam.lookAt(ctr.x - ox, ctr.y, ctr.z - oy); }
+  else { cam.position.set(ctr.x - ox, ctr.y + oy, ctr.z + D); cam.lookAt(ctr.x - ox, ctr.y + oy, ctr.z); }
+  // the lights ride with the camera: the light sheet from above-front-left, a cool rim from behind
+  scene.add(cam);
+  const key = new THREE.DirectionalLight(0xffffff, top ? 2.4 : 3.2); if (top) key.position.set(-.8, .5, .28); else key.position.set(-.35, .9, .6);   // seen from above, the light skims across it: texture shows cam.add(key); cam.add(key.target); key.target.position.set(0, 0, -1);
+  const rim = new THREE.DirectionalLight(0xc4d2ff, 1.1); rim.position.set(.7, .5, -.8); cam.add(rim); cam.add(rim.target); rim.target.position.set(0, 0, -1);
+  scene.add(new THREE.HemisphereLight(0x9aa4b4, 0x101114, .35));
+  r.render(scene, cam);
+  const out = document.createElement('canvas'); out.width = dw; out.height = dh; out.getContext('2d').drawImage(c, 0, 0);
+  root.traverse(o => { if (!o.isMesh) return; o.geometry.dispose(); (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { for (const key in m) if (m[key] && m[key].isTexture) m[key].dispose(); m.dispose(); }); });
+  pm.dispose(); draco.dispose(); r.dispose(); r.forceContextLoss();
+  return out;
+}
+
+/* ======================= GL ======================= */
+const gl = cv.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: false });
+if (!gl.getExtension('EXT_color_buffer_float')) post('JSERR no float render targets');
+gl.getExtension('OES_texture_float_linear');
+function sh(t, s, name) { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x);
+  if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { const e = gl.getShaderInfoLog(x); post('JSERR shader ' + name + ': ' + e); throw new Error(e); } return x; }
+function prog(vs, fs, name) {
+  const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs, name + '.vs')); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs, name + '.fs')); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) post('JSERR link ' + name + ' ' + gl.getProgramInfoLog(p));
+  p.u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); p.u[info.name.replace(/\[0\]$/, '')] = gl.getUniformLocation(p, info.name); }
+  return p;
+}
+const FSQ = `#version 300 es
+out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUV = p; gl_Position = vec4(p * 2. - 1., 0., 1.); }`;
+const vao = gl.createVertexArray();
+
+// ---- the air: D2Q9 lattice Boltzmann, stream + collide in one pass. Distributions f0..f8 live in three float textures:
+//      A = f0 f1 f2 f3, B = f4 f5 f6 f7, C = f8 ux uy rho (the velocity and density ride along for everyone else to read)
+const LB_COMMON = `#version 300 es
+precision highp float; precision highp int;
+const ivec2 C9[9] = ivec2[9](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(-1, 0), ivec2(0, -1), ivec2(1, 1), ivec2(-1, 1), ivec2(-1, -1), ivec2(1, -1));
+const float W9[9] = float[9](4. / 9., 1. / 9., 1. / 9., 1. / 9., 1. / 9., 1. / 36., 1. / 36., 1. / 36., 1. / 36.);
+float feq(int i, float rho, vec2 u) { float cu = dot(vec2(C9[i]), u); return W9[i] * rho * (1. + 3. * cu + 4.5 * cu * cu - 1.5 * dot(u, u)); }
+layout(location = 0) out vec4 oA; layout(location = 1) out vec4 oB; layout(location = 2) out vec4 oC;
+void put(float f[9], vec2 u, float rho) { oA = vec4(f[0], f[1], f[2], f[3]); oB = vec4(f[4], f[5], f[6], f[7]); oC = vec4(f[8], u, rho); }
+`;
+const LB_INIT = prog(FSQ, LB_COMMON + `
+uniform vec2 uIn;
+void main() { float f[9]; for (int i = 0; i < 9; i++) f[i] = feq(i, 1., uIn); put(f, uIn, 1.); }`, 'lbinit');
+const LB_STEP = prog(FSQ, LB_COMMON + `
+uniform highp sampler2D uA, uB, uC, uMask; uniform ivec2 uN; uniform vec2 uIn; uniform float uTau, uCs, uSponge; uniform vec4 uBall;   // the cursor's ball: centre and radius in cells
+uniform vec2 uBallV;                                                  // and its velocity
+const int OPP[9] = int[9](0, 3, 4, 1, 2, 7, 8, 5, 6);
+const int MIRY[9] = int[9](0, 1, 4, 3, 2, 8, 7, 6, 5);                 // the same direction with its vertical part reversed
+float fget(ivec2 p, int i) { if (i < 4) return texelFetch(uA, p, 0)[i]; if (i < 8) return texelFetch(uB, p, 0)[i - 4]; return texelFetch(uC, p, 0).x; }
+bool inBall(ivec2 p) { vec2 d = vec2(p) + .5 - uBall.xy; return dot(d, d) < uBall.z * uBall.z; }
+bool solid(ivec2 p) { return texelFetch(uMask, p, 0).a > .5; }
+void main() {
+  ivec2 x = ivec2(gl_FragCoord.xy); float f[9];
+  if (solid(x)) { for (int i = 0; i < 9; i++) f[i] = feq(i, 1., vec2(0.)); put(f, vec2(0.), 1.); return; }
+  if (inBall(x)) { for (int i = 0; i < 9; i++) f[i] = feq(i, 1., uBallV); put(f, uBallV, 1.); return; }   // inside the ball the air moves with it, so it is exactly right when the ball moves on
+  for (int i = 0; i < 9; i++) {
+    ivec2 s = x - C9[i]; int ii = i;
+    if (s.x < 0) { f[i] = feq(i, 1., uIn); continue; }                 // the inlet: steady air from the left
+    if (s.x >= uN.x) s.x = uN.x - 1;                                    // the outlet: whatever leaves, leaves
+    if (s.y < 0 || s.y >= uN.y) { ii = MIRY[i]; s.y = x.y; }            // the tunnel's walls: air slides along them
+    if (solid(s)) { f[i] = fget(x, OPP[i]); continue; }                 // the model: air bounces straight back off it (no slip)
+    if (inBall(s)) { f[i] = fget(x, OPP[i]) + 6. * W9[i] * dot(vec2(C9[i]), uBallV); continue; }   // the ball: bounce-back off a moving wall, so it pushes the air as it moves
+    f[i] = fget(s, ii);
+  }
+  float rho = 0.; vec2 u = vec2(0.);
+  for (int i = 0; i < 9; i++) { rho += f[i]; u += f[i] * vec2(C9[i]); }
+  if (!(rho > .4 && rho < 2.5)) { rho = 1.; u = uIn; for (int i = 0; i < 9; i++) f[i] = feq(i, 1., uIn); }
+  u /= rho; float ul = length(u); if (ul > .3) u *= .3 / ul;
+  // turbulence the grid can't resolve: Smagorinsky raises the viscosity where the strain is high
+  float pxx = 0., pyy = 0., pxy = 0., fe[9];
+  for (int i = 0; i < 9; i++) { fe[i] = feq(i, rho, u); float d = f[i] - fe[i]; vec2 c = vec2(C9[i]); pxx += c.x * c.x * d; pyy += c.y * c.y * d; pxy += c.x * c.y * d; }
+  float Q = sqrt(pxx * pxx + pyy * pyy + 2. * pxy * pxy);
+  float tau = .5 * (uTau + sqrt(uTau * uTau + 18. * 1.41421 * uCs * uCs * Q / rho));
+  for (int i = 0; i < 9; i++) f[i] -= (f[i] - fe[i]) / tau;
+  // past the screen's edge the air is gently calmed back to the free stream, so eddies and pressure waves leave the
+  // tunnel instead of reflecting off its end and back over the model
+  float sg = max(.12 * smoothstep(uSponge, float(uN.x), float(x.x)), .06 * (1. - smoothstep(0., 22., float(x.x))));   // and at the inlet, so pressure pulses running upstream are absorbed too
+  if (sg > 0.) { for (int i = 0; i < 9; i++) f[i] = mix(f[i], feq(i, 1., uIn), sg); }
+  put(f, u, rho);
+}`, 'lbstep');
+
+// ---- the smoke: tracer particles. One row of the state texture per smoke line (and a few for the wand); the particles
+//      in a row are released one after another, so each row is a continuous streakline from its injector.
+const P_W = 2048;
+const PT_STEP = prog(FSQ, `#version 300 es
+precision highp float; precision highp int;
+uniform highp sampler2D uS, uV, uMask; uniform vec2 uGrid; uniform float uT0, uT1, uSteps, uLife, uWandLife, uLineGap, uFlow; uniform int uLines; uniform vec3 uWand;
+out vec4 o;
+float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+// the smoke feels the air averaged over about a cell, as real smoke does: it follows every eddy the grid resolves, but
+// not the solver's grid-scale ripple, which would otherwise saw neighbouring filaments apart
+vec2 vel(vec2 p) { vec2 g = 1. / uGrid; p *= g; return .25 * (texture(uV, p + vec2(.5, .5) * g).yz + texture(uV, p + vec2(-.5, .5) * g).yz + texture(uV, p + vec2(.5, -.5) * g).yz + texture(uV, p + vec2(-.5, -.5) * g).yz); }
+void main() {
+  ivec2 id = ivec2(gl_FragCoord.xy); vec4 s = texelFetch(uS, id, 0);
+  bool wand = id.y >= uLines; float life = wand ? uWandLife : uLife, ph = (float(id.x) + .5) / ${P_W}. + fract(sin(float(id.y) * 91.7) * 4375.85);   // each line keeps its own timing
+  float a0 = fract(uT0 / life + ph), a1 = fract(uT1 / life + ph);
+  if (a1 < a0) {                                                      // its turn to be released again
+    float j = hash(vec2(id) + uT1);
+    if (wand) { s = uWand.z > .5 ? vec4(uWand.xy + (vec2(j, hash(vec2(id) * 1.7 + uT1)) - .5) * .08, 1., j) : vec4(-50., -50., 0., j); }
+    else s = vec4(.6 + a1 * life * uFlow, (float(id.y) + .5) * uLineGap, 1., j);   // released at its own moment within the frame: an even line, not clumps
+    o = s; return;
+  }
+  if (s.z <= 0.) { o = s; return; }
+  // midpoint steps, four per frame: neighbouring smoke stays on its true path even through a tight vortex
+  float h = uSteps * .25;
+  for (int q = 0; q < 4; q++) { vec2 v1 = vel(s.xy), v2 = vel(s.xy + v1 * h * .5); s.xy += v2 * h; }
+  if (s.x > uGrid.x + 2. || s.x < -2. || s.y < -2. || s.y > uGrid.y + 2.) s.z = 0.;
+  o = s;
+}`, 'ptstep');
+// Each smoke line is drawn as what it physically is: a streakline, the curve through every bit of smoke released from
+// one injector. Consecutive particles are joined by a hairline segment (an antialiased quad); where the flow stretches the
+// smoke thin, the same smoke covers more length and the line dims — which is what turns torn filaments into a cloud.
+const PT_DRAW = prog(`#version 300 es
+precision highp float; precision highp int;
+uniform highp sampler2D uS; uniform vec2 uRes; uniform float uCell, uK, uT, uLife, uWandLife, uRef, uW; uniform int uLines;
+out float vA, vD;
+float ageOf(int j, int row, float life) { return fract(uT / life + (float(j) + .5) / ${P_W}. + fract(sin(float(row) * 91.7) * 4375.85)) * life; }
+float h1(float x) { return fract(sin(x * 127.1) * 43758.5453); }
+void main() {
+  int seg = gl_InstanceID, c = gl_VertexID, row = seg / ${P_W}, k = seg - row * ${P_W}, k1 = (k + 1) % ${P_W};   // a ring: the last one's neighbour is the first
+  vec4 a = texelFetch(uS, ivec2(k, row), 0), b = texelFetch(uS, ivec2(k1, row), 0);
+  bool wand = row >= uLines; float life = wand ? uWandLife : uLife, ageA = ageOf(k, row, life), ageB = ageOf(k1, row, life);
+  vec2 pa = a.xy * uCell * uK, pb = b.xy * uCell * uK, dv = pb - pa; float len = length(dv);
+  bool ok = a.z > 0. && b.z > 0. && ageB > ageA && len < 10. * uK;   // smoke torn this far apart is too thin to see: never a straight chord across a swirl
+  float fade = smoothstep(0., wand ? .15 : .35, ageA) * (1. - smoothstep(life * .75, life, ageB));
+  float rf = (float(row) + .5) / float(uLines), band = wand ? 1. : mix(.025, 1., exp(-pow((rf - .5) / .17, 2.)));   // bright smoke around the model, faint toward the edges: no screen full of stripes
+  vA = ok ? band * fade * pow(min(1., uRef * uK / max(len, 1e-3)), 2.) * (wand ? .9 : .8 + .35 * h1(float(row) + 3.)) : 0.;   // the light sheet lights some lines a little more
+  vec2 d = len > 1e-4 ? dv / len : vec2(1., 0.), n = vec2(-d.y, d.x);
+  int e = (c == 1 || c == 4 || c == 5) ? 1 : 0; float side = (c == 2 || c == 3 || c == 5) ? 1. : -1., hw = uW * .5 + 1.;
+  vec2 p = (e == 1 ? pb : pa) + n * side * hw; vD = side * hw;
+  vec2 R = uRes * uK;
+  gl_Position = ok ? vec4(p.x / R.x * 2. - 1., 1. - p.y / R.y * 2., 0., 1.) : vec4(9., 9., 9., 1.);
+}`, `#version 300 es
+precision highp float; in float vA, vD; out vec4 o; uniform float uW;
+void main() { float a = vA * clamp(uW * .5 + .5 - abs(vD), 0., 1.); o = vec4(a); }`, 'ptdraw');
+
+// ---- the picture: the dark test section, the smoke lit by a light sheet, the model in silhouette
+const COMP = prog(FSQ, `#version 300 es
+precision highp float; in vec2 vUV; out vec4 o;
+uniform sampler2D uSmoke, uModel; uniform vec2 uRes, uMTex; uniform float uReal; uniform vec3 uBallPx; 
+float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+void main() {
+  vec2 uv = vUV, px = vec2(uv.x, 1. - uv.y) * uRes, q = (px - uRes * vec2(.42, .5)) / uRes.y;
+  // the test section: a black backdrop, the light sheet a little brighter across the middle
+  vec3 bg = mix(vec3(.068, .076, .09), vec3(.03, .034, .042), smoothstep(.15, 1.1, length(q * vec2(.7, 1.))));   // deep slate, not black: less glare from the lines
+  bg += vec3(.004, .005, .007) * (1. - abs(uv.y - .5) * 2.);
+  // the smoke: its density, tone-mapped, with a soft halo where the light sheet scatters off it
+  vec2 st = vec2(uv.x, uv.y);
+  float d = texture(uSmoke, st).r, halo = textureLod(uSmoke, st, 3.).r;
+  float s = 1. - exp(-d * 2.6), g = 1. - exp(-halo * 2.5);
+  vec3 smoke = vec3(.74, .77, .82) * s + vec3(.55, .6, .68) * g * .22;   // soft grey-white smoke, never full white
+  vec3 col = bg + smoke;
+  // the model: a dark matte silhouette, its upper edge catching the light sheet
+  vec2 mt = vec2(uv.x, 1. - uv.y);
+  float m = texture(uModel, mt).a, mb = textureLod(uModel, mt, 3.).a;
+  float gy = textureLod(uModel, mt + vec2(0., uMTex.y * 3.), 1.).a - textureLod(uModel, mt - vec2(0., uMTex.y * 3.), 1.).a;
+  float rim = pow(clamp(gy * 1.8, 0., 1.), 1.6) * (1. - smoothstep(.5, .9, textureLod(uModel, mt, 1.).a));
+  float lightY = clamp(1. - (px.y - uRes.y * .3) / (uRes.y * .4), 0., 1.);   // the light sheet falls from above
+  vec3 model = vec3(.105, .108, .118) + vec3(.07, .072, .08) * lightY + vec3(.55, .57, .6) * rim - vec3(.04) * smoothstep(.6, 1., mb);   // a lit dark-grey model with a sheen along its top
+  if (uReal > .5) model = texture(uModel, mt).rgb;                     // a real model: its own colours, lit as rendered
+  col = mix(col, model, m);
+  col += (hash(px * 1.7) - .5) / 255. * 2.;                            // dither against banding in the dark gradients
+  // the cursor's ball: polished steel, lit by the same light sheet as the model
+  if (uBallPx.z > .5) {
+    vec2 q = (px - uBallPx.xy) / uBallPx.z; float rr = dot(q, q);
+    if (rr < 1.08) {
+      vec3 n = vec3(q.x, -q.y, sqrt(max(0., 1. - rr)));
+      vec3 L = normalize(vec3(-.45, .75, .5)), R = reflect(vec3(0., 0., -1.), n);
+      float env = smoothstep(-.15, .6, R.y);                              // the bright tunnel ceiling above, the dark floor below
+      vec3 steel = mix(vec3(.05, .055, .065), vec3(.62, .65, .7), env) * .8;
+      steel += vec3(1.) * pow(max(dot(R, L), 0.), 60.) * 1.4 + vec3(.75, .8, .9) * pow(max(dot(R, normalize(vec3(.7, .3, -.4))), 0.), 12.) * .25;
+      steel *= .35 + .65 * max(dot(n, L), 0.) + .3 * (1. - n.z);
+      float a = 1. - smoothstep(1. - 2.2 / uBallPx.z, 1., sqrt(rr));   // antialiased rim
+      col = mix(col, steel, a);
+    }
+  }
+  o = vec4(col, 1.);
+}`, 'comp');
+
+/* ---------- targets ---------- */
+const U0 = .12, RE = 12000, CS_SMAG = .17, STEPS_PER_SEC = 210, LIFE = 40,   /* a calm, slow stream: easy to live with, and 40% less simulation work */ WAND_LIFE = 9;
+let NX = 1, NXV = 1, NY = 1, CELL = 3, LINES = 40, P_H = 44, tau0 = .52, modelL = 1;
+let lb = null, pt = null, maskGrid = null, maskDisp = null, smokeT = null, smokeF = null, lbCur = 0, ptCur = 0, simT = 0, warm = 0;
+function tex(w, h, fmt, filt) {
+  const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texStorage2D(gl.TEXTURE_2D, 1, fmt, w, h);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filt); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t;
+}
+function fbo(ts) {
+  const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+  ts.forEach((t, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t, 0));
+  gl.drawBuffers(ts.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) post('JSERR fbo incomplete');
+  return f;
+}
+function maskTex(canvas, mip) {
+  const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mip ? gl.LINEAR_MIPMAP_LINEAR : gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, mip ? gl.LINEAR : gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  if (mip) gl.generateMipmap(gl.TEXTURE_2D);
+  return t;
+}
+function freeAll() {
+  const del = o => { if (!o) return; if (o instanceof WebGLTexture) gl.deleteTexture(o); else if (o instanceof WebGLFramebuffer) gl.deleteFramebuffer(o); };
+  for (const g of [lb, pt]) if (g) for (const s of g) { s.t.forEach(del); del(s.f); }
+  [maskGrid, maskDisp, smokeT, smokeF].forEach(del);
+}
+let ready = false;
+async function build() {
+  ready = false;
+  W = innerWidth; H = innerHeight; K = devicePixelRatio; freeAll();
+  cv.width = Math.round(W * K); cv.height = Math.round(H * K);
+  // the grid: about 460 cells across — fine enough for a real wake, cheap enough to run several steps every frame
+  CELL = Math.max(1.8, W / 640); NXV = Math.ceil(W / CELL); NX = Math.ceil(NXV * 1.3); NY = Math.ceil(H / CELL);   // the air runs on past the screen's right edge
+  LINES = Math.max(30, Math.round(H / 11)); P_H = LINES;    // a line every 11 points: fine stripes any closer together shimmer and tire the eyes
+  // the model, centred a third of the way in
+  const mcx = W * .3, mcy = H * .5;
+  const dw = cv.width, dh = cv.height;
+  const art = MODEL.glb ? await renderModel(dw, dh, mcx * K, mcy * K, H * K) : null;   // a real model: rendered once, its picture is its shape
+  const g = document.createElement('canvas'); g.width = NX; g.height = NY; const gx = g.getContext('2d');
+  if (art) { gx.imageSmoothingEnabled = true; gx.drawImage(art, 0, 0, dw, dh, 0, 0, W / CELL, H / CELL); } else drawModel(gx, mcx / CELL, mcy / CELL, H / CELL);
+  // threshold to a hard mask so the physics sees a clean wall
+  { const im = gx.getImageData(0, 0, NX, NY), d = im.data; let minY = NY, maxY = 0, minX = NX, maxX = 0;
+    for (let i = 0; i < NX * NY; i++) { const s = d[i * 4 + 3] > 127; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = 255; d[i * 4 + 3] = s ? 255 : 0;
+      if (s) { const y = (i / NX) | 0, x = i % NX; if (y < minY) minY = y; if (y > maxY) maxY = y; if (x < minX) minX = x; if (x > maxX) maxX = x; } }
+    gx.putImageData(im, 0, 0); modelL = Math.max(8, maxY - minY + 1, (maxX - minX + 1) * .5); }   // the size the air sees: its height, or half its length for slender shapes
+  maskGrid = maskTex(g, false);
+  if (art) maskDisp = maskTex(art, true);
+  else { const dc = document.createElement('canvas'); dc.width = dw; dc.height = dh; drawModel(dc.getContext('2d'), mcx * K, mcy * K, H * K); maskDisp = maskTex(dc, true); }
+  // the air's viscosity is set by the Reynolds number we want around a model this size
+  tau0 = Math.max(.5004, 3 * U0 * modelL / RE + .5);
+  const mk = () => { const t = [tex(NX, NY, gl.RGBA32F, gl.NEAREST), tex(NX, NY, gl.RGBA32F, gl.NEAREST), tex(NX, NY, gl.RGBA32F, gl.LINEAR)]; return { t, f: fbo(t) }; };
+  lb = [mk(), mk()]; lbCur = 0;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, lb[0].f); gl.viewport(0, 0, NX, NY); gl.useProgram(LB_INIT); gl.uniform2f(LB_INIT.u.uIn, U0, 0); gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const mp = () => { const t = [tex(P_W, P_H, gl.RGBA32F, gl.NEAREST)]; return { t, f: fbo(t) }; };
+  pt = [mp(), mp()]; ptCur = 0;
+  for (const s of pt) { gl.bindFramebuffer(gl.FRAMEBUFFER, s.f); gl.clearColor(-50, -50, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
+  gl.clearColor(0, 0, 0, 0);
+  smokeT = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, smokeT); gl.texStorage2D(gl.TEXTURE_2D, 5, gl.RGBA16F, dw, dh);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  smokeF = fbo([smokeT]);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  simT = 0; warm = 0; ready = true;
+  document.getElementById('cap').textContent = `Wind tunnel  ·  ${MODEL.name}  ·  Re ≈ ${(Math.round(RE / 100) * 100).toLocaleString('en-US')}`;
+}
+// The cursor's ball (grid units). The air can only be pushed so fast (well under the lattice's speed of sound), so the
+// ball glides after your pointer at a capped speed rather than jumping to it; it grows in when the pointer arrives and
+// shrinks away when it leaves, never popping in or out of the air.
+const BALL_R = 20, BALL_VMAX = .14;
+const ball = { x: -100, y: -100, r: 0, vx: 0, vy: 0 };
+function stepBall() {
+  const on = cur.on && cur.x > 0 && cur.x < W && cur.y > 0 && cur.y < H, R = BALL_R / CELL;
+  if (ball.r <= 0 && on) { ball.x = cur.x / CELL; ball.y = cur.y / CELL; }   // appears where the pointer is
+  ball.r = Math.max(0, ball.r + clamp((on ? R : 0) - ball.r, -.02, .02));
+  const dx = cur.x / CELL - ball.x, dy = cur.y / CELL - ball.y, d = Math.hypot(dx, dy);
+  let tvx = 0, tvy = 0; if (on && d > .05) { const sp = Math.min(BALL_VMAX, d * .02); tvx = dx / d * sp; tvy = dy / d * sp; }
+  ball.vx += (tvx - ball.vx) * .02; ball.vy += (tvy - ball.vy) * .02;   // eases into and out of motion
+  ball.x += ball.vx; ball.y += ball.vy;
+}
+function lbSteps(n) {
+  gl.useProgram(LB_STEP); gl.viewport(0, 0, NX, NY); gl.bindVertexArray(vao);
+  gl.uniform2i(LB_STEP.u.uN, NX, NY); gl.uniform1f(LB_STEP.u.uSponge, NXV + 6); gl.uniform1f(LB_STEP.u.uTau, tau0); gl.uniform1f(LB_STEP.u.uCs, CS_SMAG);
+  // a whisper of crosswind at the inlet, so the wake picks its own side and starts to shed as a real one does
+  gl.uniform2f(LB_STEP.u.uIn, U0, U0 * .004 * Math.sin(simT * .37));
+  gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, maskGrid); gl.uniform1i(LB_STEP.u.uMask, 3);
+  for (let k = 0; k < n; k++) {
+    const src = lb[lbCur], dst = lb[1 - lbCur];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.f);
+    for (let i = 0; i < 3; i++) { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, src.t[i]); }
+    gl.uniform1i(LB_STEP.u.uA, 0); gl.uniform1i(LB_STEP.u.uB, 1); gl.uniform1i(LB_STEP.u.uC, 2);
+    stepBall(); gl.uniform4f(LB_STEP.u.uBall, ball.x, ball.y, ball.r, 0); gl.uniform2f(LB_STEP.u.uBallV, ball.vx, ball.vy);
+    gl.drawArrays(gl.TRIANGLES, 0, 3); lbCur = 1 - lbCur;
+  }
+}
+function ptStep(t0, t1, steps) {
+  const src = pt[ptCur], dst = pt[1 - ptCur];
+  gl.bindFramebuffer(gl.FRAMEBUFFER, dst.f); gl.viewport(0, 0, P_W, P_H); gl.useProgram(PT_STEP); gl.bindVertexArray(vao);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src.t[0]); gl.uniform1i(PT_STEP.u.uS, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, lb[lbCur].t[2]); gl.uniform1i(PT_STEP.u.uV, 1);
+  gl.uniform2f(PT_STEP.u.uGrid, NX, NY); gl.uniform1f(PT_STEP.u.uT0, t0); gl.uniform1f(PT_STEP.u.uT1, t1); gl.uniform1f(PT_STEP.u.uSteps, steps);
+  gl.uniform1f(PT_STEP.u.uFlow, U0 * STEPS_PER_SEC); gl.uniform1f(PT_STEP.u.uLife, LIFE); gl.uniform1f(PT_STEP.u.uWandLife, WAND_LIFE); gl.uniform1f(PT_STEP.u.uLineGap, NY / LINES); gl.uniform1i(PT_STEP.u.uLines, LINES);
+  gl.uniform3f(PT_STEP.u.uWand, 0, 0, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3); ptCur = 1 - ptCur;
+}
+function render() {
+  // the smoke, as light
+  gl.bindFramebuffer(gl.FRAMEBUFFER, smokeF); gl.viewport(0, 0, cv.width, cv.height); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.useProgram(PT_DRAW); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, pt[ptCur].t[0]); gl.uniform1i(PT_DRAW.u.uS, 0);
+  gl.uniform2f(PT_DRAW.u.uRes, W, H); gl.uniform1f(PT_DRAW.u.uCell, CELL); gl.uniform1f(PT_DRAW.u.uK, K); gl.uniform1f(PT_DRAW.u.uW, 2.);
+  gl.uniform1f(PT_DRAW.u.uRef, U0 * STEPS_PER_SEC * CELL * LIFE / P_W);   // how far apart smoke released one after another sits in undisturbed air
+  gl.uniform1f(PT_DRAW.u.uT, simT); gl.uniform1f(PT_DRAW.u.uLife, LIFE); gl.uniform1f(PT_DRAW.u.uWandLife, WAND_LIFE); gl.uniform1i(PT_DRAW.u.uLines, LINES);
+  gl.bindVertexArray(vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, P_W * P_H);
+  gl.disable(gl.BLEND);
+  gl.bindTexture(gl.TEXTURE_2D, smokeT); gl.generateMipmap(gl.TEXTURE_2D);
+  // the picture
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height); gl.useProgram(COMP);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, smokeT); gl.uniform1i(COMP.u.uSmoke, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, maskDisp); gl.uniform1i(COMP.u.uModel, 1);
+  gl.uniform2f(COMP.u.uRes, W, H); gl.uniform2f(COMP.u.uMTex, 1 / cv.width, 1 / cv.height); gl.uniform1f(COMP.u.uReal, MODEL.glb ? 1 : 0); gl.uniform3f(COMP.u.uBallPx, ball.x * CELL, ball.y * CELL, ball.r * CELL);
+  gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ======================= loop ======================= */
+// The air advances a fixed number of lattice steps per second of real time; the smoke rides along with it. A newly
+// built tunnel runs a little over half a minute of flow first, unseen, so you never watch it start from still air.
+const WARM_SECS = 36;
+let running = false, lastT = 0, stepAcc = 0;
+function advance(dt) {
+  stepAcc += dt * STEPS_PER_SEC; const n = Math.min(14, Math.floor(stepAcc)); stepAcc -= n; if (stepAcc > 4) stepAcc = 0;
+  if (!n) return;
+  lbSteps(n); const t0 = simT; simT += n / STEPS_PER_SEC; ptStep(t0, simT, n);
+}
+function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
+function loop(now) { try { loop0(now); } catch (e) { running = false; post('JSERR loop ' + e.message + ' ' + (e.stack || '').split('\n')[0]); setTimeout(wake, 1000); } }
+function loop0(now) {
+  if (paused) { running = false; return; }
+  if (!ready) { requestAnimationFrame(loop); return; }                 // the model is still loading
+  if (lastT && now - lastT < 15.5) { requestAnimationFrame(loop); return; }
+  const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 60; lastT = now;
+  fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
+  const t0 = performance.now();
+  if (warm < WARM_SECS) { for (let i = 0; i < 40 && warm < WARM_SECS; i++) { advance(1 / 30); warm += 1 / 30; } }   // spin the tunnel up, hidden
+  else advance(dt);
+  fieldMs = fieldMs * .9 + (performance.now() - t0) * .1;
+  if (warm >= WARM_SECS) render(); else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height); gl.clearColor(.024, .027, .032, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.clearColor(0, 0, 0, 0); }
+  requestAnimationFrame(loop);
+}
+
+/* ======================= boot + host protocol ======================= */
+const handle = m => {
+  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'cursor') { cur.x = m.x / K; cur.y = m.y / K; cur.on = true; return; }
+  if (m.t === 'cursorOff') { cur.on = false; return; }
+};
+function setTargets() { }                                             // windows don't touch the air
+build().catch(e => post('JSERR boot ' + e.message + ' ' + (e.stack || '').split('\n')[0]));
+wake();
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => build().catch(e => post('JSERR build ' + e.message)), 250); });
+let gpuNote = '';
+function gpuTime() {                                                   // a one-off timing of the GPU work, for the bench
+  const px = new Float32Array(4), sync = () => { gl.bindFramebuffer(gl.FRAMEBUFFER, lb[lbCur].f); gl.readBuffer(gl.COLOR_ATTACHMENT2); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, px); };
+  sync(); let t = performance.now(); lbSteps(300); sync(); const st = (performance.now() - t) / 300;
+  t = performance.now(); for (let i = 0; i < 20; i++) { ptStep(simT, simT, 0); render(); } sync(); const rd = (performance.now() - t) / 20;
+  gpuNote = `step=${st.toFixed(3)}ms render=${rd.toFixed(2)}ms perSec(${STEPS_PER_SEC} steps+60 frames)=${(st * STEPS_PER_SEC + rd * 60).toFixed(0)}ms`;
+}
+window.__dbg = () => { if (!gpuNote && warm >= WARM_SECS) gpuTime(); return `run=${running} fps=${fpsEMA | 0} ms=${fieldMs.toFixed(2)} grid=${NX}x${NY} tau=${tau0.toFixed(4)} L=${modelL} ${gpuNote}`; };
+const host = window.chrome && window.chrome.webview;
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
+</script>
+</body>
+</html>

@@ -1,0 +1,460 @@
+<!doctype html>
+<!--
+  Celestial Atlas — a Driftland theme. An antique star chart in gold on deep navy, and every window is a
+  black hole: the sky is gravitationally lensed around it (stars smeared into arcs along an Einstein ring,
+  light from behind wrapped into view), with a dark horizon, a thin photon ring and a lopsided accretion glow.
+  Your cursor is a tiny black hole too, exactly where the pointer is.
+  Perf: the sky is painted once into a texture; the lensing pass runs only while a window or the cursor moves.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Celestial Atlas</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1730; }
+  canvas.layer { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+  .shoot { position: fixed; left: 0; top: 0; height: 1.4px; pointer-events: none; transform-origin: 0 50%; opacity: 0;
+           background: linear-gradient(90deg, rgba(255,240,200,0), rgba(255,244,215,.95)); border-radius: 2px; }
+</style>
+</head>
+<body>
+<canvas id="gl" class="layer"></canvas>
+<script>
+'use strict';
+window.__opaque = true; window.__noMask = true;
+const GOLD = 'rgba(216,180,106,', SERIF = '"Iowan Old Style", "Hoefler Text", Baskerville, serif';
+let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
+const P = { quality: 2 };
+const $ = id => document.getElementById(id), cv = $('gl');
+function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const hash = s => { let h = 2166136261; for (const c of String(s)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
+const h2 = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
+function vnoise(x, y) { const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = h2(ix, iy), b = h2(ix + 1, iy), c = h2(ix, iy + 1), d = h2(ix + 1, iy + 1); return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy; }
+const fbm = (x, y) => { let v = 0, a = .5; for (let i = 0; i < 5; i++) { v += a * vnoise(x, y); x = x * 2.03 + 7; y = y * 2.03 + 3; a *= .5; } return v; };
+let seed = 1;
+
+/* ---------- the real sky over India, right now ---------- */
+// Star, constellation and Milky Way data: d3-celestial by Olaf Frohn (BSD-3-Clause), see sky/LICENSE-d3-celestial.
+const SITE = { name: 'New Delhi', lat: 28.6139, lon: 77.2090 };
+const D2R = Math.PI / 180;
+let SKY = null;
+async function loadSky() {
+  const get = f => fetch(`sky/${f}`).then(r => r.json());
+  const [stars, lines, consts, names, mw] = await Promise.all(['stars.6.json', 'constellations.lines.json', 'constellations.json', 'names.json', 'mw.json'].map(get));
+  SKY = { stars, lines, consts, names, mw };
+}
+// local sidereal time (degrees) for the site at a given moment
+function lst(date) {
+  const jd = date.getTime() / 86400000 + 2440587.5;
+  return ((280.46061837 + 360.98564736629 * (jd - 2451545.0) + SITE.lon) % 360 + 360) % 360;
+}
+// equatorial (RA°, Dec°) → screen, looking straight up: zenith in the middle, north up, east on the left
+// With several displays the sky is ONE dome spread across all of them (zenith at the middle of the whole desk); each
+// screen draws its own part. DESK: this screen's offset within the desk, and the desk's size (points).
+let DESK = { x: 0, y: 0, uw: 0, uh: 0, i: 0, n: 1 };
+function projector(date) {
+  const L = lst(date), phi = SITE.lat * D2R, sp = Math.sin(phi), cp = Math.cos(phi);
+  const UW = DESK.uw || W, UH = DESK.uh || H, multi = DESK.n > 1;
+  const S = Math.hypot(UW, UH) / 2 / (2 * Math.tan((multi ? 50 : 37.5) * D2R)), cx = UW / 2 - DESK.x, cy = UH / 2 - DESK.y;   // across many screens: a wider sweep of the sky
+  return (raDeg, decDeg) => {
+    const ra = (raDeg < 0 ? raDeg + 360 : raDeg), Hh = (L - ra) * D2R, d = decDeg * D2R, sd = Math.sin(d), cd = Math.cos(d), ch = Math.cos(Hh);
+    const e = -cd * Math.sin(Hh), n = cp * sd - sp * cd * ch, u = sp * sd + cp * cd * ch;
+    const alt = Math.asin(Math.max(-1, Math.min(1, u))), az = Math.atan2(e, n), r = 2 * Math.tan((Math.PI / 2 - alt) / 2) * S;
+    return [cx - r * Math.sin(az), cy - r * Math.cos(az), alt / D2R];
+  };
+}
+/* ---------- Sun, Moon and planets (low-precision but well under a degree) ---------- */
+// JPL "approximate positions of the planets" Keplerian elements, J2000 + rates per century (valid 1800–2050)
+const ELEM = {
+  Mercury: [0.38709927, 0.20563593, 7.00497902, 252.25032350, 77.45779628, 48.33076593, 0.00000037, 0.00001906, -0.00594749, 149472.67411175, 0.16047689, -0.12534081],
+  Venus: [0.72333566, 0.00677672, 3.39467605, 181.97909950, 131.60246718, 76.67984255, 0.00000390, -0.00004107, -0.00078890, 58517.81538729, 0.00268329, -0.27769418],
+  Earth: [1.00000261, 0.01671123, -0.00001531, 100.46457166, 102.93768193, 0, 0.00000562, -0.00004392, -0.01294668, 35999.37244981, 0.32327364, 0],
+  Mars: [1.52371034, 0.09339410, 1.84969142, -4.55343205, -23.94362959, 49.55953891, 0.00001847, 0.00007882, -0.00813131, 19140.30268499, 0.44441088, -0.29257343],
+  Jupiter: [5.20288700, 0.04838624, 1.30439695, 34.39644051, 14.72847983, 100.47390909, -0.00011607, -0.00013253, -0.00183714, 3034.74612775, 0.21252668, 0.20469106],
+  Saturn: [9.53667594, 0.05386179, 2.48599187, 49.95424423, 92.59887831, 113.66242448, -0.00125060, -0.00050991, 0.00193609, 1222.49362201, -0.41897216, -0.28867794],
+};
+function helio(el, T) {
+  const [a0, e0, i0, L0, w0, O0, da, de, di, dL, dw, dO] = el;
+  const a = a0 + da * T, e = e0 + de * T, I = (i0 + di * T) * D2R, L = L0 + dL * T, wb = w0 + dw * T, O = (O0 + dO * T) * D2R;
+  const w = wb * D2R - O, M = (((L - wb) % 360) + 540) % 360 - 180;
+  let E = M * D2R + e * Math.sin(M * D2R); for (let k = 0; k < 8; k++) E -= (E - e * Math.sin(E) - M * D2R) / (1 - e * Math.cos(E));
+  const xp = a * (Math.cos(E) - e), yp = a * Math.sqrt(1 - e * e) * Math.sin(E);
+  const cw = Math.cos(w), sw = Math.sin(w), cO = Math.cos(O), sO = Math.sin(O), cI = Math.cos(I), sI = Math.sin(I);
+  return [(cw * cO - sw * sO * cI) * xp + (-sw * cO - cw * sO * cI) * yp, (cw * sO + sw * cO * cI) * xp + (-sw * sO + cw * cO * cI) * yp, sw * sI * xp + cw * sI * yp];
+}
+const OBL = 23.4393 * D2R;
+function eclToEq(x, y, z) { const ye = y * Math.cos(OBL) - z * Math.sin(OBL), ze = y * Math.sin(OBL) + z * Math.cos(OBL), r = Math.hypot(x, ye, ze); return [Math.atan2(ye, x) / D2R, Math.asin(ze / r) / D2R, r]; }
+function solarSystem(date) {
+  const jd = date.getTime() / 86400000 + 2440587.5, d = jd - 2451545.0, T = d / 36525;
+  const earth = helio(ELEM.Earth, T), out = [];
+  // the Sun (for the Moon's phase)
+  const [sra, sdec] = eclToEq(-earth[0], -earth[1], -earth[2]);
+  const look = { Mercury: ['200,195,185', 1.6], Venus: ['255,250,225', 3.0], Mars: ['255,140,95', 2.2], Jupiter: ['255,236,200', 2.8], Saturn: ['240,215,160', 2.3] };
+  for (const [name, [rgb, size]] of Object.entries(look)) { const p = helio(ELEM[name], T), [ra, dec] = eclToEq(p[0] - earth[0], p[1] - earth[1], p[2] - earth[2]); out.push({ name, ra, dec, rgb, size }); }
+  // the Moon (Meeus, main periodic terms)
+  const r = v => v * D2R, Lp = 218.316 + 13.176396 * d, Mp = 134.963 + 13.064993 * d, F = 93.272 + 13.229350 * d, D = 297.850 + 12.190749 * d, Ms = 357.529 + 0.98560028 * d;
+  const lam = Lp + 6.289 * Math.sin(r(Mp)) - 1.274 * Math.sin(r(2 * D - Mp)) + 0.658 * Math.sin(r(2 * D)) - 0.214 * Math.sin(r(2 * Mp)) - 0.186 * Math.sin(r(Ms)) - 0.114 * Math.sin(r(2 * F));
+  const bet = 5.128 * Math.sin(r(F)) + 0.281 * Math.sin(r(Mp + F)) + 0.278 * Math.sin(r(Mp - F)) + 0.173 * Math.sin(r(2 * D - F));
+  const [mra, mdec] = eclToEq(Math.cos(r(bet)) * Math.cos(r(lam)), Math.cos(r(bet)) * Math.sin(r(lam)), Math.sin(r(bet)));
+  out.push({ name: 'Moon', ra: mra, dec: mdec, sun: [sra, sdec] });
+  return out;
+}
+function drawMoon(x, px, py, moon, P) {
+  const unit = (ra, de) => [Math.cos(de * D2R) * Math.cos(ra * D2R), Math.cos(de * D2R) * Math.sin(ra * D2R), Math.sin(de * D2R)];
+  const m = unit(moon.ra, moon.dec), s = unit(...moon.sun), cosE = m[0] * s[0] + m[1] * s[1] + m[2] * s[2];
+  const k = (1 - cosE) / 2;                                     // illuminated fraction
+  // direction toward the Sun on screen: step a little along the great circle from the Moon toward the Sun
+  const t = .03, v = m.map((c, i) => c * (1 - t) + s[i] * t), vl = Math.hypot(...v), [qx, qy] = P(Math.atan2(v[1], v[0]) / D2R, Math.asin(v[2] / vl) / D2R);
+  const ang = Math.atan2(qy - py, qx - px), R = 13;
+  const g = x.createRadialGradient(px, py, 0, px, py, R * 6); g.addColorStop(0, `rgba(235,230,210,${.18 + .35 * k})`); g.addColorStop(1, 'rgba(235,230,210,0)');
+  x.fillStyle = g; x.fillRect(px - R * 6, py - R * 6, R * 12, R * 12);
+  x.save(); x.translate(px, py); x.rotate(ang);
+  x.fillStyle = 'rgba(40,46,70,.9)'; x.beginPath(); x.arc(0, 0, R, 0, 7); x.fill();                       // earthshine side
+  // lit part: the half facing the Sun, plus or minus the terminator ellipse
+  x.fillStyle = 'rgb(236,232,214)'; x.beginPath(); x.arc(0, 0, R, -Math.PI / 2, Math.PI / 2);
+  const tx = R * (1 - 2 * k); x.ellipse(0, 0, Math.abs(tx), R, 0, Math.PI / 2, -Math.PI / 2, tx > 0); x.fill();
+  x.globalCompositeOperation = 'multiply'; const R4 = rng(5);                                              // a few maria
+  for (let i = 0; i < 7; i++) { x.fillStyle = 'rgba(170,165,150,.55)'; x.beginPath(); x.arc((R4() - .5) * R * 1.1, (R4() - .5) * R * 1.1, 2 + R4() * 3.5, 0, 7); x.fill(); }
+  x.restore();
+  x.font = `italic 11px ${SERIF}`; x.fillStyle = 'rgba(236,232,214,.85)'; x.textAlign = 'left'; x.textBaseline = 'middle'; x.fillText(`Moon · ${Math.round(k * 100)}%`, px + R + 8, py + R + 4);
+}
+function bvColor(bv) {
+  const t = [[-0.4, [155, 176, 255]], [0, [202, 216, 255]], [0.4, [248, 247, 255]], [0.8, [255, 236, 210]], [1.2, [255, 214, 165]], [1.8, [255, 186, 120]]];
+  bv = Math.max(-0.4, Math.min(1.8, isNaN(bv) ? 0.6 : bv));
+  for (let i = 1; i < t.length; i++) if (bv <= t[i][0]) { const [a0, c0] = t[i - 1], [a1, c1] = t[i], u = (bv - a0) / (a1 - a0); return c0.map((v, k) => Math.round(v + (c1[k] - v) * u)).join(','); }
+  return t[t.length - 1][1].join(',');
+}
+let paperCache = null;
+function paintSky(date = new Date()) {
+  const c = document.createElement('canvas'); c.width = Math.round(W * K); c.height = Math.round(H * K);
+  const x = c.getContext('2d'); x.scale(K, K);
+  const P = projector(date), on = (px, py, m = 40) => px > -m && py > -m && px < W + m && py < H + m;
+  // night paper, mottled, darker towards the edges
+  const sw = Math.ceil(W / 4), sh = Math.ceil(H / 4);
+  if (!paperCache || paperCache.width !== sw || paperCache.height !== sh) {
+  const sm = paperCache = document.createElement('canvas'); sm.width = sw; sm.height = sh;
+  const sx = sm.getContext('2d'), img = sx.createImageData(sw, sh);
+  for (let j = 0; j < sh; j++) for (let i = 0; i < sw; i++) {
+    const n = fbm(i * .016, j * .016), m = fbm(i * .07 + 30, j * .07), o = (j * sw + i) * 4, e = Math.min(i, j, sw - i, sh - j) / Math.min(sw, sh), v = Math.min(1, e / .25);
+    img.data[o] = (8 + 9 * n + 4 * m) * (.55 + .45 * v); img.data[o + 1] = (17 + 15 * n + 5 * m) * (.55 + .45 * v); img.data[o + 2] = (37 + 27 * n + 6 * m) * (.6 + .4 * v); img.data[o + 3] = 255;
+  }
+  sx.putImageData(img, 0, 0); }
+  x.imageSmoothingQuality = 'high'; x.drawImage(paperCache, 0, 0, W, H);
+  if (!SKY) return c;
+  // the real Milky Way, used as a density map: soft glow, mottled dust, a dark rift, and a grain of faint stars
+  { const q = 3, mw = document.createElement('canvas'); mw.width = Math.ceil(W / q); mw.height = Math.ceil(H / q);
+    const m = mw.getContext('2d'); m.scale(1 / q, 1 / q);
+    const [gx, gy] = P(192.86, 27.13);
+    SKY.mw.features.forEach((f, lvl) => { m.fillStyle = `rgba(255,255,255,${.2})`;
+      for (const poly of f.geometry.coordinates) { m.beginPath();
+        for (const ring of poly) { ring.forEach(([ra, de], i) => { const [px, py] = P(ra, de); i ? m.lineTo(px, py) : m.moveTo(px, py); }); m.closePath(); }
+        if (m.isPointInPath(gx / q, gy / q, 'evenodd')) m.rect(-1e6, -1e6, 2e6, 2e6);
+        m.fill('evenodd'); } });
+    const soft = document.createElement('canvas'); soft.width = mw.width; soft.height = mw.height;
+    const so = soft.getContext('2d'), raw = m.getImageData(0, 0, mw.width, mw.height).data, sw2 = mw.width, sh2 = mw.height;
+    // our own blur (3 box passes ≈ gaussian, ~36 px): the contour polygons dissolve into a smooth density
+    let A = new Float32Array(sw2 * sh2), B = new Float32Array(sw2 * sh2);
+    for (let i = 0; i < A.length; i++) A[i] = raw[i * 4 + 3] / 255;
+    const box = (src, dst, rad, horiz) => {
+      const n = horiz ? sw2 : sh2, lines = horiz ? sh2 : sw2;
+      for (let l = 0; l < lines; l++) { let acc = 0; const at = i => horiz ? l * sw2 + i : i * sw2 + l;
+        for (let i = -rad; i <= rad; i++) acc += src[at(Math.min(n - 1, Math.max(0, i)))];
+        for (let i = 0; i < n; i++) { dst[at(i)] = acc / (2 * rad + 1); acc += src[at(Math.min(n - 1, i + rad + 1))] - src[at(Math.max(0, i - rad))]; } } };
+    for (let pass = 0; pass < 3; pass++) { box(A, B, 4, true); box(B, A, 4, false); }
+    const dens = { length: A.length }, out = so.createImageData(soft.width, soft.height), o = out.data;
+    const dAt = k => A[k >> 2];
+    // warm toward the galactic core (Sagittarius), cool elsewhere
+    const [gcx, gcy, gca] = P(266.4, -28.9);
+    for (let j = 0; j < soft.height; j++) for (let i = 0; i < soft.width; i++) {
+      const k = (j * soft.width + i) * 4, d = Math.min(1, dAt(k) * 1.35); if (d < .01) continue;
+      const X = i * q, Y = j * q, mott = fbm(X * .012, Y * .012), fine = fbm(X * .05 + 9, Y * .05);
+      const rift = Math.pow(Math.max(0, 1 - Math.abs(fbm(X * .005 + 40, Y * .005) - .5) * 5), 2.2) * Math.min(1, d * 1.4);   // soft dark dust lanes
+      let v = Math.pow(d, 1.3) * (.4 + 1.0 * mott) * (.75 + .5 * fine) * (1 - .8 * rift);   // star clouds and dust
+      const warm = gca > -40 ? Math.max(0, 1 - Math.hypot(X - gcx, Y - gcy) / 700) : 0;
+      o[k] = 170 + 70 * warm; o[k + 1] = 180 + 40 * warm; o[k + 2] = 230 - 30 * warm; o[k + 3] = Math.min(255, v * 235);
+    }
+    so.putImageData(out, 0, 0);
+    x.save(); x.globalCompositeOperation = 'screen'; x.filter = 'blur(2.5px)'; x.drawImage(soft, 0, 0, W, H); x.restore();
+    // the grain: countless faint stars where the band is dense
+    const R2 = rng(77);
+    for (let n = 0; n < W * H / 70; n++) { const X = R2() * W, Y = R2() * H, k = ((Y / q | 0) * soft.width + (X / q | 0)) * 4, d = Math.min(1, dAt(k) * 1.15);
+      if (R2() > d * 1.4) continue; x.fillStyle = `rgba(225,230,255,${.12 + R2() * .35 * d})`; x.fillRect(X, Y, .8, .8); } }
+  // real nebulae, clusters and galaxies at their true positions — painted larger and bolder than life
+  { const DSO = [
+      ['Orion Nebula', 83.82, -5.39, 46, ['235,120,150', '150,110,220']], ['Rosette', 98.0, 4.9, 34, ['220,90,110']], ['Lagoon', 270.9, -24.38, 34, ['235,110,140', '130,140,230']],
+      ['Eagle', 274.7, -13.8, 26, ['200,110,150']], ['North America', 314.7, 44.3, 44, ['220,90,100']], ['Veil', 312.7, 30.7, 34, ['110,170,230', '220,110,130']],
+      ['Heart', 38.2, 61.4, 32, ['215,90,110']], ['California', 60.1, 36.4, 30, ['210,95,110']], ['Pleiades', 56.75, 24.12, 34, ['120,160,255']],
+      ['Andromeda Galaxy', 10.68, 41.27, 40, ['230,215,190'], 2.6], ['Triangulum Galaxy', 23.46, 30.66, 22, ['200,200,230'], 1.4],
+      ['Carina', 161.3, -59.9, 44, ['230,120,140']], ['Crab', 83.63, 22.01, 12, ['220,160,140']], ['Trifid', 270.6, -23.0, 20, ['200,120,190']]];
+    x.save(); x.globalCompositeOperation = 'screen';
+    for (const [name, ra, de, size, cols, elong = 1] of DSO) {
+      const [px, py, alt] = P(ra, de); if (alt < 3 || !on(px, py, 120)) continue;
+      const R3 = rng(hash(name)), ang = R3() * Math.PI;
+      for (let i = 0; i < 26; i++) {
+        const t = Math.pow(R3(), .8), a2 = R3() * 6.283, dist = t * size * .9, ox = Math.cos(a2) * dist * elong, oy = Math.sin(a2) * dist;
+        const rx = px + ox * Math.cos(ang) - oy * Math.sin(ang), ry = py + ox * Math.sin(ang) + oy * Math.cos(ang), r = size * (.25 + R3() * .5);
+        const g = x.createRadialGradient(rx, ry, 0, rx, ry, r); g.addColorStop(0, `rgba(${cols[i % cols.length]},${.09 + R3() * .07})`); g.addColorStop(1, `rgba(${cols[i % cols.length]},0)`);
+        x.fillStyle = g; x.fillRect(rx - r, ry - r, r * 2, r * 2);
+      }
+      if (elong > 1) { const g = x.createRadialGradient(px, py, 0, px, py, size * .35); g.addColorStop(0, 'rgba(255,240,215,.5)'); g.addColorStop(1, 'rgba(255,240,215,0)'); x.fillStyle = g; x.beginPath(); x.ellipse(px, py, size * .35 * elong, size * .35, ang, 0, 7); x.fill(); }
+    }
+    x.restore(); }
+  // equatorial grid and the true ecliptic
+  const polyline = (pts, style, width, dash) => { x.strokeStyle = style; x.lineWidth = width; x.setLineDash(dash || []); x.beginPath(); let pen = false;
+    for (const [ra, de] of pts) { const [px, py, alt] = P(ra, de); if (alt < -3) { pen = false; continue; } pen ? x.lineTo(px, py) : x.moveTo(px, py); pen = true; } x.stroke(); x.setLineDash([]); };
+  for (let de = -60; de <= 60; de += 30) { const pts = []; for (let ra = 0; ra <= 360; ra += 2) pts.push([ra, de]); polyline(pts, GOLD + (de ? '.16)' : '.28)'), de ? .7 : .9); }
+  for (let ra = 0; ra < 360; ra += 30) { const pts = []; for (let de = -80; de <= 88; de += 2) pts.push([ra, de]); polyline(pts, GOLD + '.14)', .65); }
+  const eps = 23.4393 * D2R, ecl = lam => { const l = lam * D2R; return [Math.atan2(Math.sin(l) * Math.cos(eps), Math.cos(l)) / D2R, Math.asin(Math.sin(l) * Math.sin(eps)) / D2R]; };
+  { const pts = []; for (let l = 0; l <= 360; l += 1) pts.push(ecl(l)); polyline(pts, GOLD + '.38)', .9, [6, 5]);
+    const Z = ['♈︎', '♉︎', '♊︎', '♋︎', '♌︎', '♍︎', '♎︎', '♏︎', '♐︎', '♑︎', '♒︎', '♓︎'];
+    Z.forEach((z, i) => { const [ra, de] = ecl(15 + i * 30), [px, py, alt] = P(ra, de); if (alt < 2 || !on(px, py)) return;
+      x.fillStyle = GOLD + '.6)'; x.font = `14px ${SERIF}`; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(z, px, py - 12); }); }
+  // constellation figures (IAU)
+  x.strokeStyle = GOLD + '.5)'; x.lineWidth = .85;
+  for (const f of SKY.lines.features) for (const line of f.geometry.coordinates) {
+    x.beginPath(); let pen = false;
+    for (const [ra, de] of line) { const [px, py, alt] = P(ra, de); if (alt < -2) { pen = false; continue; } pen ? x.lineTo(px, py) : x.moveTo(px, py); pen = true; }
+    x.stroke();
+  }
+  // stars: real magnitudes and colours; crisp cores, small halos, thin spikes on the brightest
+  const pos = new Map();
+  const list = SKY.stars.features.slice().sort((a, b) => b.properties.mag - a.properties.mag);
+  for (const f of list) {
+    const [ra, de] = f.geometry.coordinates, [px, py, alt] = P(ra, de);
+    if (alt < -1 || !on(px, py, 10)) continue;
+    const mag = f.properties.mag, rgb = bvColor(parseFloat(f.properties.bv)), ext = alt < 12 ? .45 + alt / 22 : 1;   // a little dimmer near the horizon
+    pos.set(f.id, [px, py, mag]);
+    const r = Math.max(.7, (6.9 - mag) * .52), a = Math.min(1, Math.max(.5, (8 - mag) / 5)) * ext;
+    if (mag < 4.6) { const hr = r * (mag < 2 ? 6 : 4.2); const g = x.createRadialGradient(px, py, 0, px, py, hr); g.addColorStop(0, `rgba(${rgb},${.3 * a})`); g.addColorStop(.35, `rgba(${rgb},${.1 * a})`); g.addColorStop(1, `rgba(${rgb},0)`); x.fillStyle = g; x.fillRect(px - hr, py - hr, hr * 2, hr * 2); }
+    x.fillStyle = `rgba(${rgb},${a})`; x.beginPath(); x.arc(px, py, r, 0, 7); x.fill();
+    if (mag < 1.2) { x.fillStyle = `rgba(255,255,255,${.85 * a})`; x.beginPath(); x.arc(px, py, r * .45, 0, 7); x.fill(); }
+    if (mag < 3.2) { const Ls = 5 + (3.2 - mag) * 6.5, dirs = mag < .8 ? [[1, 0], [0, 1], [.707, .707], [.707, -.707]] : [[1, 0], [0, 1]];
+      dirs.forEach(([dx, dy], k) => { const L2 = k > 1 ? Ls * .5 : Ls; x.lineWidth = k > 1 ? .45 : .6;
+        const g = x.createLinearGradient(px - dx * L2, py - dy * L2, px + dx * L2, py + dy * L2);
+        g.addColorStop(0, `rgba(${rgb},0)`); g.addColorStop(.5, `rgba(${rgb},${(k > 1 ? .5 : .9) * a})`); g.addColorStop(1, `rgba(${rgb},0)`); x.strokeStyle = g;
+        x.beginPath(); x.moveTo(px - dx * L2, py - dy * L2); x.lineTo(px + dx * L2, py + dy * L2); x.stroke(); }); }
+  }
+  // the Moon (real phase, lit toward the Sun) and the naked-eye planets
+  const bodies = solarSystem(date), boxes = [[W - 330, H - 116, W - 20, H - 20], [16, 16, 150, 150]];
+  for (const b of bodies) {
+    const [px, py, alt] = P(b.ra, b.dec); if (alt < -1 || !on(px, py, 30)) continue;
+    if (b.name === 'Moon') { drawMoon(x, px, py, b, P); boxes.push([px - 30, py - 30, px + 30, py + 30]); }
+    else {
+      const r = b.size, g = x.createRadialGradient(px, py, 0, px, py, r * 5); g.addColorStop(0, `rgba(${b.rgb},.55)`); g.addColorStop(1, `rgba(${b.rgb},0)`);
+      x.fillStyle = g; x.fillRect(px - r * 5, py - r * 5, r * 10, r * 10);
+      x.fillStyle = `rgb(${b.rgb})`; x.beginPath(); x.arc(px, py, r, 0, 7); x.fill();
+      if (b.name === 'Saturn') { x.strokeStyle = `rgba(${b.rgb},.85)`; x.lineWidth = .8; x.beginPath(); x.ellipse(px, py, r * 2.3, r * .75, -.35, 0, 7); x.stroke(); }
+      x.font = `italic 11px ${SERIF}`; x.fillStyle = `rgba(${b.rgb},.9)`; x.textAlign = 'left'; x.textBaseline = 'middle'; x.fillText(b.name, px + r + 7, py - 1);
+      boxes.push([px - r - 4, py - 9, px + r + 12 + x.measureText(b.name).width, py + 9]);
+    }
+  }
+  // names: constellations (Latin, spaced capitals) and the bright named stars
+  const free = b => b[0] > 6 && b[1] > 6 && b[2] < W - 6 && b[3] < H - 6 && !boxes.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
+  for (const f of SKY.consts.features) {
+    const rank = +f.properties.rank; if (rank > 2) continue;
+    const [ra, de] = f.geometry.coordinates, [px, py, alt] = P(ra, de); if (alt < 4) continue;
+    const label = f.properties.la.toUpperCase(), size = rank === 1 ? 11 : 9.5;
+    x.font = `italic ${size}px ${SERIF}`; let w = -2.2; for (const ch of label) w += x.measureText(ch).width + 2.2;
+    const b = [px - w / 2 - 4, py - size, px + w / 2 + 4, py + size]; if (!free(b)) continue; boxes.push(b);
+    x.fillStyle = GOLD + (rank === 1 ? '.66)' : '.5)'); x.textAlign = 'left'; x.textBaseline = 'middle';
+    let cxp = px - w / 2; for (const ch of label) { x.fillText(ch, cxp, py); cxp += x.measureText(ch).width + 2.2; }
+  }
+  for (const [id, name] of Object.entries(SKY.names)) {
+    const p = pos.get(+id); if (!p) continue; const [px, py] = p;
+    x.font = `italic 10px ${SERIF}`; const w = x.measureText(name).width, b = [px + 6, py + 2, px + 10 + w, py + 15]; if (!free(b)) continue; boxes.push(b);
+    x.fillStyle = 'rgba(232,222,196,.6)'; x.textAlign = 'left'; x.textBaseline = 'middle'; x.fillText(name, px + 8, py + 9);
+  }
+  // zenith mark and a small orientation rose (north up, east left — as when you lie on your back and look up)
+  x.strokeStyle = GOLD + '.4)'; x.lineWidth = .7; x.beginPath(); const zx = (DESK.uw || W) / 2 - DESK.x, zy = (DESK.uh || H) / 2 - DESK.y; x.moveTo(zx - 6, zy); x.lineTo(zx + 6, zy); x.moveTo(zx, zy - 6); x.lineTo(zx, zy + 6); x.stroke();
+  if (DESK.i === 0) { const rx = 82, ry = 82;   /* the rose once, on the leftmost screen */ x.strokeStyle = GOLD + '.5)'; x.lineWidth = .8; x.beginPath(); x.arc(rx, ry, 30, 0, 7); x.stroke();
+    x.fillStyle = GOLD + '.7)'; x.font = `600 11px ${SERIF}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+    [['N', 0, -1], ['S', 0, 1], ['E', -1, 0], ['W', 1, 0]].forEach(([t, dx, dy]) => { x.fillText(t, rx + dx * 44, ry + dy * 44); x.beginPath(); x.moveTo(rx + dx * 30, ry + dy * 30); x.lineTo(rx + dx * 36, ry + dy * 36); x.stroke(); }); }
+  if (DESK.i === DESK.n - 1) {                                        // the cartouche once, on the rightmost screen
+  // the cartouche: where and when
+  const [tx, ty] = cartAt = cartoucheSpot();
+  x.fillStyle = 'rgba(10,20,42,.85)'; x.fillRect(tx - 150, ty - 40, 300, 80);
+  x.strokeStyle = GOLD + '.55)'; x.lineWidth = .9; x.strokeRect(tx - 150, ty - 40, 300, 80); x.strokeRect(tx - 145, ty - 35, 290, 70);
+  x.fillStyle = GOLD + '.85)'; x.font = `600 15px ${SERIF}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  const title = 'CAELUM SUPRA INDIAM'; let tw = -2.5; for (const ch of title) tw += x.measureText(ch).width + 2.5; let px2 = tx - tw / 2;
+  for (const ch of title) { const w2 = x.measureText(ch).width; x.fillText(ch, px2 + w2 / 2, ty - 13); px2 += w2 + 2.5; }
+  const when = date.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  x.font = `italic 11px ${SERIF}`; x.fillStyle = GOLD + '.65)';
+  x.fillText(`${SITE.name} · ${SITE.lat.toFixed(1)}°N ${SITE.lon.toFixed(1)}°E`, tx, ty + 6); x.fillText(`${when} IST`, tx, ty + 22);
+  }
+  return c;
+}
+
+// the cartouche hangs in whichever corner no black hole is near (it would be lensed to pieces)
+function cartoucheSpot(list = cur.filter(c => c.alive)) {
+  const spots = [[W - 175, H - 68], [175, H - 68], [W - 175, 92]];   // the top spot clears the menu bar
+  const near = ([tx, ty]) => list.some(c => tx + 150 + 150 > c.tx && tx - 150 - 150 < c.tx + c.tw && ty + 40 + 150 > c.ty && ty - 40 - 150 < c.ty + c.th);
+  return spots.find(sp => !near(sp)) || spots[0];
+}
+let cartAt = null, cartT = null;
+/* ---------- windows → black holes (eased like everything else) ---------- */
+let cur = [], liveUntil = 0;
+function setTargets(list) {
+  const used = new Set();
+  for (const t of list) {
+    let best = null, bd = 1e9;
+    for (const c of cur) { if (used.has(c) || c.owner !== t.owner) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, alive: true }); }
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, life: 0, alive: true }; cur.push(c); used.add(c); }
+  }
+  for (const c of cur) if (!used.has(c)) c.alive = false;
+  // the cartouche moves only once the layout has settled (Show Desktop, Mission Control and the like shuffle windows for a moment)
+  clearTimeout(cartT); cartT = setTimeout(() => { const sp = cartoucheSpot(); if (SKY && cartAt && (sp[0] !== cartAt[0] || sp[1] !== cartAt[1])) uploadSky(paintSky(), true); }, 3000);
+  wake();
+}
+function stepWins(dt) {
+  const live = performance.now() < liveUntil, k = 1 - Math.exp(-dt * (live ? 40 : 7)), kl = 1 - Math.exp(-dt * 2.5);
+  let moving = false;
+  for (const c of cur) {
+    for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = c[b] - c[a]; if (Math.abs(d) > .2) { c[a] += d * k; moving = true; } else c[a] = c[b]; }
+    const lt = c.alive ? 1 : 0, dl = lt - c.life; if (Math.abs(dl) > .003) { c.life += dl * kl; moving = true; } else c.life = lt;
+  }
+  cur = cur.filter(c => c.alive || c.life > .003);
+  return moving;
+}
+// the cursor's own little black hole: exactly at the pointer, fading in and out with it
+let curs = { x: -999, y: -999, a: 0, target: 0, lastMove: 0 };
+
+/* ---------- the lensing pass ---------- */
+const gl = cv.getContext('webgl2', { antialias: false });
+function program(vs, fs) { const sh = (t, s) => { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+  const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); return p; }
+const LENS = program(`#version 300 es
+void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, `#version 300 es
+precision highp float;
+uniform sampler2D uSky, uSkyB; uniform float uSkyMix; uniform vec4 uWin[16]; uniform float uLife[16]; uniform int uN; uniform vec2 uRes; uniform float uK;
+uniform vec3 uCur;                                   // x, y, strength (0..1)
+out vec4 o;
+float h12(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+float vn(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f); return mix(mix(h12(i), h12(i + vec2(1, 0)), u.x), mix(h12(i + vec2(0, 1)), h12(i + vec2(1, 1)), u.x), u.y); }
+// one lens: d = distance from the hole's edge, n = outward direction, E = Einstein radius
+void lens(vec2 p, float d, vec2 n, float E, float L, float horizon, float glowScale, bool rim, inout vec2 src, inout float shade, inout vec3 glow) {
+  // point-lens mapping on the distance from the edge: θ → θ − θE²/θ. Around θ ≈ θE the sky folds into a
+  // ring (stars smeared into tangential arcs); inside it, light from behind wraps round into view.
+  // smooth and uncapped (β = θ − θE²/(θ + c) never plateaus, so nothing smears into streaks);
+  // local: full strength near the hole, fading out beyond ~3 Einstein radii
+  float r = max(d, 0.) + .35 * E + horizon * .2;
+  float reach = exp(-max(d - 3. * E, 0.) / (1.2 * E + 1.));
+  src -= n * (E * E / r) * reach;
+  if (!rim) return;                                                   // windows: pure lensing, no border
+  shade *= mix(1., smoothstep(0., horizon, d), L);                    // the dark horizon
+  // just a faint, thin photon ring — no accretion disk
+  float ring = exp(-abs(d - horizon * .22) / (horizon * .05 + .5));
+  glow += L * glowScale * vec3(1., .9, .72) * ring * .22;
+}
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uK - gl_FragCoord.y) / uK;
+  vec2 src = p; float shade = 1.; vec3 glow = vec3(0.);
+  for (int i = 0; i < 16; i++) {
+    if (i >= uN) break;
+    float L = uLife[i]; if (L <= 0.) continue;
+    vec4 w = uWin[i]; vec2 hs = w.zw * .5 + 2., dp = p - (w.xy + hs - 2.);
+    float rr = .45 * min(hs.x, hs.y);                                   // a rounded lens, like the widget it's under: no spikes off square corners
+    vec2 q = abs(dp) - (hs - rr), qo = max(q, 0.); float outer = length(qo), d = outer + min(max(q.x, q.y), 0.) - rr;
+    vec2 ne = outer > 0. ? sign(dp) * qo / outer : (q.x > q.y ? vec2(sign(dp.x), 0.) : vec2(0., sign(dp.y)));
+    // bend toward the centre as well as away from the edge: light converges, stars smear into curved arcs
+    vec2 n = normalize(mix(ne, dp / max(length(dp), 1.), .55));
+    lens(p, d, n, min(.14 * min(hs.x, hs.y) + 28., 110.) * L, L, 16., 1., false, src, shade, glow);
+  }
+  if (uCur.z > 0.) {                                 // the cursor: a round mini black hole
+    vec2 dp = p - uCur.xy; float dist = length(dp);
+    if (dist < 140.) { float d = dist - 5.; vec2 n = dp / max(dist, 1e-3);
+      lens(p, d, n, 22. * uCur.z, uCur.z, 7., .9, true, src, shade, glow); }
+  }
+  vec2 uv = src / uRes; uv = 1. - abs(1. - abs(mod(uv, 2.)));         // mirror at the edges so nothing smears
+  vec3 sky = mix(texture(uSky, uv).rgb, texture(uSkyB, uv).rgb, uSkyMix);
+  o = vec4(sky * shade + glow, 1.);
+}`);
+gl.useProgram(LENS);
+const U = {}; for (const k of ['uSky', 'uSkyB', 'uSkyMix', 'uWin', 'uLife', 'uN', 'uRes', 'uK', 'uCur']) U[k] = gl.getUniformLocation(LENS, k);
+gl.bindVertexArray(gl.createVertexArray());
+let skyTex = gl.createTexture(), skyTexB = gl.createTexture(), skyMix = 0, skyFadeT0 = -1e9;
+const SKY_FADE_MS = 2500;
+// a new sky (the minute moved on): upload it as B and cross-fade A → B, then B becomes A
+function uploadSky(canvas, fade) {
+  if (fade) { if (skyMix > 0) [skyTex, skyTexB] = [skyTexB, skyTex]; [skyTex, skyTexB] = [skyTex, skyTexB]; }
+  const t = fade ? skyTexB : skyTex;
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  if (fade) { skyFadeT0 = performance.now(); skyMix = 0; wake(); } else { gl.bindTexture(gl.TEXTURE_2D, skyTexB); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); skyMix = 0; skyFadeT0 = -1e9; }
+}
+const wf = new Float32Array(64), lf = new Float32Array(16);
+function render() {
+  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+  const ord = cur.length > 16 ? cur.filter(c => c.alive).concat(cur.filter(c => !c.alive)) : cur;
+  const n = Math.min(ord.length, 16); wf.fill(0); lf.fill(0);
+  for (let i = 0; i < n; i++) { const c = ord[i]; wf.set([c.x, c.y, c.w, c.h], i * 4); lf[i] = c.life; }
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, skyTex); gl.uniform1i(U.uSky, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, skyTexB); gl.uniform1i(U.uSkyB, 1); gl.uniform1f(U.uSkyMix, skyMix);
+  gl.uniform4fv(U.uWin, wf); gl.uniform1fv(U.uLife, lf); gl.uniform1i(U.uN, n); gl.uniform2f(U.uRes, W, H); gl.uniform1f(U.uK, K);
+  gl.uniform3f(U.uCur, curs.x, curs.y, curs.a);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ---------- shooting stars, now and then, where the sky is clear ---------- */
+function shootingStar() {
+  setTimeout(shootingStar, 25000 + Math.random() * 45000);
+  if (paused) return;
+  for (let tries = 0; tries < 20; tries++) {
+    const x = Math.random() * W * .8 + W * .1, y = Math.random() * H * .5 + 30, a = .35 + Math.random() * .5, len = 160 + Math.random() * 160;
+    if (cur.some(w => x > w.x - 200 && x < w.x + w.w + 200 && y > w.y - 200 && y < w.y + w.h + 200)) continue;
+    const el = document.createElement('div'); el.className = 'shoot'; el.style.width = `${len}px`; document.body.appendChild(el);
+    const anim = el.animate([{ transform: `translate(${x}px,${y}px) rotate(${a}rad) scaleX(.2)`, opacity: 0 }, { opacity: 1, offset: .25 },
+      { transform: `translate(${x + Math.cos(a) * 260}px,${y + Math.sin(a) * 260}px) rotate(${a}rad) scaleX(1)`, opacity: 0 }], { duration: 1100, easing: 'cubic-bezier(.3,0,.4,1)' });
+    anim.onfinish = () => el.remove(); return;
+  }
+}
+
+/* ---------- loop: only while a black hole is moving, growing or fading ---------- */
+let running = false, lastT = 0, dirty = false;
+function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
+function loop(now) { try { loop0(now); } catch (e) { running = false; try { webkit.messageHandlers.host.postMessage('JSERR loop ' + e.message); } catch (_) {} setTimeout(wake, 1000); } }
+function loop0(now) {
+  if (paused) { running = false; return; }
+  const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now;
+  const moving = stepWins(dt);
+  // the cursor hole fades in while the pointer is over the sky and out a few seconds after it stops
+  curs.target = curs.here ? 1 : 0;                   // stays while the pointer is on this screen, even when still
+  const da = curs.target - curs.a, fading = Math.abs(da) > .002;
+  if (fading) curs.a += da * (1 - Math.exp(-dt * (curs.target ? 6 : 1.5))); else curs.a = curs.target;
+  const skyFading = now - skyFadeT0 < SKY_FADE_MS;
+  if (skyFading) { const u = (now - skyFadeT0) / SKY_FADE_MS; skyMix = u * u * (3 - 2 * u); }
+  else if (skyMix > 0) { [skyTex, skyTexB] = [skyTexB, skyTex]; skyMix = 0; dirty = true; }
+  if (moving || fading || dirty || skyFading) render();
+  dirty = false;
+  if (moving || fading || skyFading) requestAnimationFrame(loop); else running = false;
+}
+
+/* ---------- boot + host protocol ---------- */
+function build() { W = innerWidth; H = innerHeight; cv.width = Math.round(W * K); cv.height = Math.round(H * K); uploadSky(paintSky(), false); render(); }
+loadSky().then(() => { const t0 = performance.now(); const c = paintSky(); fieldMs = Math.round(performance.now() - t0); uploadSky(c, true); }).catch(e => { try { webkit.messageHandlers.host.postMessage('JSERR sky data ' + e); } catch (_) {} });
+// the sky turns: repaint for the new minute and cross-fade (≈0.25° of rotation per minute)
+setTimeout(function tickMinute() { if (!paused && SKY) uploadSky(paintSky(), true); setTimeout(tickMinute, 60000 - Date.now() % 60000 + 50); }, 60000 - Date.now() % 60000 + 50);
+let FB = null; function commit() { } function refresh() { }
+const handle = m => {
+  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'me') return;
+  if (m.t === 'desk') { DESK = m; if (SKY) uploadSky(paintSky(), false); return; }
+  if (m.t === 'cursor') { curs.x = m.x / K; curs.y = m.y / K; curs.here = true; curs.lastMove = performance.now(); dirty = true; wake(); return; }
+  if (m.t === 'cursorOff') { curs.here = false; wake(); return; }        // the pointer went to another screen
+  // black holes only for the small things: Stage Manager thumbnails and desktop widgets (and the cursor); not your main windows
+  if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
+    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i], sm: !!(m.sm && m.sm[i]) }))
+      .filter(w => w.sm || w.owner === 'Notification Centre')); }
+};
+build(); setTimeout(shootingStar, 8000);
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 200); });
+const host = window.chrome && window.chrome.webview;
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
+else { handle({ t: 'windows', r: [[W * .35 * K, H * .3 * K, W * .7 * K, H * .66 * K]], n: ['Slack'] }); addEventListener('mousemove', e => handle({ t: 'cursor', x: e.clientX * K, y: e.clientY * K })); }
+</script>
+</body>
+</html>

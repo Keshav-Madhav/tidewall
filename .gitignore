@@ -1,0 +1,6 @@
+# build output (build from source: see README)
+/driftland
+/tools/mover
+/tools/minprobe
+.DS_Store
+*.log

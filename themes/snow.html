@@ -1,0 +1,281 @@
+<!doctype html>
+<!--
+  Snowfall — a Driftland theme. A winter dusk; snow falls behind your windows and settles on their top
+  edges, slumping into soft drifts. Move a window fast (or resize it) and the snow shakes off in clumps;
+  close it and its drift is left behind to melt. Your cursor is warm: flakes swerve and melt near it, and it
+  melts grooves into drifts. Backdrop drawn once; flakes, clumps and drifts in one small WebGL pass.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Snowfall</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #2b3a5c; }
+  canvas.layer { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="bg" class="layer"></canvas>
+<canvas id="gl" class="layer"></canvas>
+<script>
+'use strict';
+window.__opaque = false; window.__noMask = true;
+let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
+const P = { quality: 2 };
+const $ = id => document.getElementById(id), cv = $('bg');
+function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const h2 = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
+function vnoise(x, y) { const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const a = h2(ix, iy), b = h2(ix + 1, iy), c = h2(ix, iy + 1), d = h2(ix + 1, iy + 1); return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy; }
+const fbm = (x, y) => { let v = 0, a = .5; for (let i = 0; i < 5; i++) { v += a * vnoise(x, y); x = x * 2.03 + 7; y = y * 2.03 + 3; a *= .5; } return v; };
+
+/* ---------- 1. the winter dusk (drawn once) ---------- */
+// the painted valley (generated for this theme): drawn to cover the screen, anchored to the bottom so the snowdrift
+// along the foreground always meets the ground drift; the procedural scene below shows while it loads
+// One painting per display, left to right: a triptych (lake | moonlit valley | frozen stream) whose seams fall behind
+// the monitors' bezels. A single screen shows the centre panel.
+const PAINT = new Image(); PAINT.decoding = 'async';
+function panelFor(i, n) { const P = ['backdrop_l', 'backdrop', 'backdrop_r']; return n <= 1 ? P[1] : n === 2 ? P[1 + i] : P[(i + (n === 3 ? 0 : 1)) % 3]; }
+const showPanel = (i, n) => { const src = `snow/${panelFor(i, n)}.jpg`; if (!PAINT.src.endsWith(src)) PAINT.src = src; };
+setTimeout(() => { if (!PAINT.src) showPanel(0, 1); }, 600);              // no word from the host about other screens
+PAINT.onload = () => drawBackdrop();
+function drawBackdrop() {
+  if (PAINT.complete && PAINT.naturalWidth) {
+    cv.width = Math.round(W * K); cv.height = Math.round(H * K);
+    const x = cv.getContext('2d'), iw = PAINT.naturalWidth, ih = PAINT.naturalHeight, s = Math.max(cv.width / iw, cv.height / ih);
+    x.imageSmoothingQuality = 'high'; x.drawImage(PAINT, (cv.width - iw * s) / 2, cv.height - ih * s, iw * s, ih * s); return;
+  }
+  cv.width = Math.round(W * K); cv.height = Math.round(H * K);
+  const x = cv.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); const R = rng(4);
+  const sky = x.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#16223f'); sky.addColorStop(.45, '#2f4170'); sky.addColorStop(.78, '#6d74a3'); sky.addColorStop(1, '#a99bbb');
+  x.fillStyle = sky; x.fillRect(0, 0, W, H);
+  for (let i = 0; i < W * H / 2600; i++) { const sy = R() * H * .45; x.fillStyle = `rgba(235,240,255,${(.15 + R() * .5) * (1 - sy / (H * .45))})`; x.fillRect(R() * W, sy, .9, .9); }
+  // a faint moon with a halo
+  const mx = W * .78, my = H * .17, g = x.createRadialGradient(mx, my, 0, mx, my, 140);
+  g.addColorStop(0, 'rgba(255,248,230,.35)'); g.addColorStop(.18, 'rgba(255,248,230,.12)'); g.addColorStop(1, 'rgba(255,248,230,0)');
+  x.fillStyle = g; x.fillRect(mx - 140, my - 140, 280, 280); x.fillStyle = 'rgba(250,246,232,.92)'; x.beginPath(); x.arc(mx, my, 17, 0, 7); x.fill();
+  // soft winter haze
+  for (let i = 0; i < 6; i++) { const hy = H * (.55 + i * .07), hg = x.createLinearGradient(0, hy - 60, 0, hy + 60);
+    hg.addColorStop(0, 'rgba(200,205,235,0)'); hg.addColorStop(.5, `rgba(200,205,235,${.05 + i * .01})`); hg.addColorStop(1, 'rgba(200,205,235,0)'); x.fillStyle = hg; x.fillRect(0, hy - 60, W, 120); }
+  // layered snowy hills, each a little nearer, darker and bluer
+  const layers = [[.62, '#9aa3c6', '#d3d8ee', .0016, '#7c86ad', 9], [.71, '#8892bb', '#cbd1ea', .0022, '#5f6a96', 15], [.8, '#9aa3c9', '#d8ddf0', .003, '#404c7a', 24]];
+  const ridge = (li, f, base, px) => H * base - fbm(px * f + li * 13, li) * H * .16;
+  const smallPine = (px, py, h, col) => { x.fillStyle = col; x.beginPath(); x.moveTo(px, py - h); x.lineTo(px + h * .32, py); x.lineTo(px - h * .32, py); x.closePath(); x.fill();
+    x.fillStyle = 'rgba(232,238,252,.55)'; x.beginPath(); x.moveTo(px, py - h); x.lineTo(px + h * .1, py - h * .62); x.lineTo(px - h * .1, py - h * .62); x.closePath(); x.fill(); };
+  layers.forEach(([base, body, cap, f, pineCol, ph], li) => {
+    x.beginPath(); x.moveTo(0, H);
+    for (let px = 0; px <= W; px += 6) x.lineTo(px, ridge(li, f, base, px));
+    x.lineTo(W, H); x.closePath(); const hg = x.createLinearGradient(0, H * (base - .16), 0, H);
+    hg.addColorStop(0, cap); hg.addColorStop(.3, body); hg.addColorStop(1, li === 2 ? '#e3e8f6' : body); x.fillStyle = hg; x.fill();
+    // stands of pines along the ridge, thicker where the noise says forest
+    for (let px = 0; px < W; px += ph * .45 + R() * ph * .6) {
+      if (fbm(px * .004 + li * 5, 9) < .48) continue;
+      const ry = ridge(li, f, base, px) + R() * ph * 1.4; smallPine(px, ry + ph * .3, ph * (.7 + R() * .6), pineCol);
+    }
+  });
+  // pines along the bottom, dusted with snow
+  const pine = (px, py, h) => { x.fillStyle = '#26325a'; x.beginPath(); x.moveTo(px, py - h);
+    for (let t = 1; t <= 4; t++) { const yy = py - h + h * t / 4.4, ww = h * .13 * t; x.lineTo(px + ww, yy); x.lineTo(px + ww * .45, yy); } x.lineTo(px + 2, py); x.lineTo(px - 2, py);
+    for (let t = 4; t >= 1; t--) { const yy = py - h + h * t / 4.4, ww = h * .13 * t; x.lineTo(px - ww * .45, yy); x.lineTo(px - ww, yy); } x.closePath(); x.fill();
+    x.fillStyle = 'rgba(232,238,252,.85)'; for (let t = 1; t <= 4; t++) { const yy = py - h + h * t / 4.4, ww = h * .13 * t; x.beginPath(); x.ellipse(px - ww * .25, yy - 1.5, ww * .55, 1.6, -.1, 0, 7); x.fill(); } };
+  for (let px = -10; px < W + 20; px += 10 + R() * 26) pine(px, H - 4 + R() * 10, 34 + R() * 60);
+  x.fillStyle = '#e9eef9'; x.fillRect(0, H - 6, W, 6);
+}
+
+/* ---------- 2. windows: eased slots, each carrying its own drift ---------- */
+const COL = 4;                                 // a depth sample every 4 px along the top edge
+let cur = [], liveUntil = 0, orphans = [], settled = false;
+function makeCols(w, from) { const n = Math.max(2, Math.ceil(w / COL) + 1), c = new Float32Array(n);
+  if (from) for (let i = 0; i < n; i++) c[i] = from[Math.min(from.length - 1, Math.round(i * (from.length - 1) / (n - 1)))];   // resample on resize
+  return c; }
+function setTargets(list) {
+  const used = new Set(), now = performance.now();
+  for (const t of list) {
+    let best = null, bd = 1e9;
+    for (const c of cur) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, alive: true, cols: makeCols(t.w), vx: 0, vy: 0, px: t.x, py: t.y };
+      if (!settled) for (let i = 0; i < c.cols.length; i++) c.cols[i] = 11 + 10 * vnoise(i * .06 + t.x, 2) + 5 * vnoise(i * .25 + t.y, 5);   // it's been snowing a while
+      cur.push(c); used.add(c); }
+  }
+  settled = true;
+  for (const c of cur) if (!used.has(c) && c.alive) {           // closed: its drift stays behind and melts
+    c.alive = false; orphans.push({ x: c.x, y: c.y, w: c.w, cols: c.cols, melt: 0 });
+  }
+  cur = cur.filter(c => c.alive);
+}
+function stepWins(dt) {
+  const live = performance.now() < liveUntil, k = 1 - Math.exp(-dt * (live ? 40 : 8));
+  for (const c of cur) {
+    const ox = c.x, oy = c.y, ow = c.w;
+    for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = c[b] - c[a]; if (Math.abs(d) > .2) c[a] += d * k; else c[a] = c[b]; }
+    const vx = (c.x - ox) / dt, vy = (c.y - oy) / dt; c.vx = c.vx * .6 + vx * .4; c.vy = c.vy * .6 + vy * .4;
+    if (Math.abs(c.w - ow) > .5) { shed(c, .55, 0, 0); c.cols = makeCols(c.w, c.cols); }   // a resize shrugs most of it off
+    else if (c.cols.length !== Math.max(2, Math.ceil(c.w / COL) + 1)) c.cols = makeCols(c.w, c.cols);
+    const sp = Math.hypot(c.vx, c.vy);
+    if (sp > 380) shed(c, Math.min(.9, (sp - 380) / 900) * Math.min(1, dt * 7), c.vx, c.vy);   // a fast move shakes it off, a little each frame
+  }
+}
+
+/* ---------- 3. snow: flakes, clumps, drifts ---------- */
+const flakes = [], clumps = [];
+let ground = new Float32Array(1), wind = 0, windT = 0;
+function makeFlakes() {
+  flakes.length = 0; const R = rng(9), n = Math.round(W * H / 1500);
+  for (let i = 0; i < n; i++) { const layer = R() < .45 ? 0 : R() < .65 ? 1 : 2;
+    flakes.push({ x: R() * W, y: R() * H, layer, size: [1.2, 2.1, 3.4][layer] * (.7 + R() * .7), v: [22, 38, 60][layer] * (.75 + R() * .5), ph: R() * 6.28, sw: .6 + R() * 1.4, a: [.45, .7, .9][layer] }); }
+  ground = new Float32Array(Math.ceil(W / COL) + 1); for (let i = 0; i < ground.length; i++) ground[i] = 10 + 14 * vnoise(i * .03, 7);
+}
+function respawn(f) { f.y = -10 - Math.random() * 40; f.x = Math.random() * (W + 200) - 100; }
+// lay snow onto a profile around column i (a little spread, so it builds rounded)
+function deposit(cols, i, amt) { for (let k = -2; k <= 2; k++) { const j = i + k; if (j >= 0 && j < cols.length) cols[j] += amt * [.12, .22, .32, .22, .12][k + 2]; } }
+function shed(c, frac, vx, vy) {
+  if (!c.acc || c.acc.length !== c.cols.length) c.acc = new Float32Array(c.cols.length);
+  for (let i = 0; i < c.cols.length; i++) {
+    const d = c.cols[i] * frac; c.cols[i] -= d; c.acc[i] += d;      // always comes off; clumps form as it adds up
+    if (c.acc[i] < 3.5) continue; const lump = c.acc[i]; c.acc[i] = 0;
+    if (clumps.length > 420) continue;                     // enough tumbling snow; the rest just vanishes into the fall
+    for (let n = 0; n < Math.ceil(lump / 6); n++) clumps.push({ x: c.x + i * COL + (Math.random() - .5) * 3, y: c.y - c.cols[i] - Math.random() * lump, vx: vx * .55 + (Math.random() - .5) * 60, vy: vy * .3 - 30 - Math.random() * 60, s: 2.2 + Math.random() * 3.2, life: 1 });
+  }
+}
+// the snow slumps to its angle of repose; ends round off; a depth cap
+function relax(cols, cap) {
+  const n = cols.length;
+  for (let pass = 0; pass < 2; pass++) for (let i = 0; i < n - 1; i++) { const d = cols[i] - cols[i + 1], m = 1.1;
+    if (d > m) { const t = (d - m) * .3; cols[i] -= t; cols[i + 1] += t; } else if (-d > m) { const t = (-d - m) * .3; cols[i + 1] -= t; cols[i] += t; } }
+  for (let i = 0; i < n; i++) { const edge = Math.min(i, n - 1 - i) * COL; cols[i] = Math.min(cols[i], cap, 3 + edge * 1.1); }
+}
+let cursor = null, cursorT = 0;
+function stepSnow(dt, now) {
+  windT += dt; wind = (vnoise(windT * .07, 3) - .5) * 70 + Math.sin(windT * .21) * 12;
+  const warm = cursor && now - cursorT < 6000;
+  for (const f of flakes) {
+    f.ph += dt * f.sw;
+    let vx = wind * (.4 + f.layer * .3) + Math.sin(f.ph) * 14 * (.5 + f.layer * .4), vy = f.v;
+    if (warm) {                                      // warm air round the cursor: flakes swerve, the closest melt
+      const dx = f.x - cursor.x, dy = f.y - cursor.y, d = Math.hypot(dx, dy);
+      if (d < 70) { const p = (70 - d) / 70; vx += dx / (d + 1) * 160 * p; vy -= 40 * p; if (d < 14 && f.layer) { respawn(f); continue; } }
+    }
+    const ny = f.y + vy * dt, nx = f.x + vx * dt;
+    if (f.layer > 0) {                               // near flakes settle on whatever is below them
+      let landed = false;
+      for (const c of cur) { if (nx < c.x || nx > c.x + c.w) continue; const i = Math.round((nx - c.x) / COL), top = c.y - c.cols[i];
+        if (f.y <= top && ny >= top) { deposit(c.cols, i, f.size * .16); landed = true; break; } }
+      if (!landed) { const gi = Math.round(nx / COL); if (gi >= 0 && gi < ground.length && ny >= H - 6 - ground[gi]) { deposit(ground, gi, f.size * .05); landed = true; } }
+      if (landed) { respawn(f); continue; }
+    }
+    f.x = nx; f.y = ny; if (f.y > H + 10 || f.x < -120 || f.x > W + 120) respawn(f);
+  }
+  // clumps from shaken drifts: tumble, and land on drifts below
+  for (const c of clumps) {
+    c.vy += 520 * dt; c.vx *= .99; const ny = c.y + c.vy * dt, nx = c.x + c.vx * dt;
+    for (const w of cur) { if (nx < w.x || nx > w.x + w.w || c.y > w.y) continue; const i = Math.round((nx - w.x) / COL), top = w.y - w.cols[i];
+      if (c.y <= top && ny >= top && c.vy > 0) { deposit(w.cols, i, c.s * 1.2); c.life = 0; break; } }
+    const gi = Math.round(nx / COL); if (c.life > 0 && gi >= 0 && gi < ground.length && ny >= H - 6 - ground[gi]) { deposit(ground, gi, c.s * .6); c.life = 0; }
+    c.x = nx; c.y = ny; if (c.y > H + 20) c.life = 0;
+  }
+  for (let i = clumps.length - 1; i >= 0; i--) if (clumps[i].life <= 0) clumps.splice(i, 1);
+  // drifts settle; warmth melts grooves; orphans melt away
+  const settle = Math.exp(-dt / 600);
+  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, 42); if (warm) melt(c.cols, c.x, c.y, dt); }
+  for (let i = 0; i < ground.length; i++) ground[i] *= Math.exp(-dt / 1500);
+  relax(ground, 70); if (warm) melt(ground, 0, H - 6, dt);
+  for (const o of orphans) { o.melt += dt; for (let i = 0; i < o.cols.length; i++) o.cols[i] *= Math.exp(-dt / 14); relax(o.cols, 34); }
+  orphans = orphans.filter(o => o.cols.some(v => v > .3));
+}
+function melt(cols, x0, y0, dt) {
+  for (let i = 0; i < cols.length; i++) { const px = x0 + i * COL, py = y0 - cols[i], d = Math.hypot(px - cursor.x, py - cursor.y);
+    if (d < 45) cols[i] = Math.max(0, cols[i] - (45 - d) / 45 * 26 * dt); }
+}
+
+/* ---------- 4. WebGL: one pass for drifts, flakes and clumps ---------- */
+const gl = $('gl').getContext('webgl2', { premultipliedAlpha: true, antialias: false });   // no MSAA: flakes are soft dots, drifts feather their own crest
+function program(vs, fs) { const sh = (t, s) => { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+  const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); return p; }
+const DRIFT = program(`#version 300 es
+in vec3 aP; uniform vec2 uRes; out float vT; out vec2 vS;
+void main() { vT = aP.z; vS = aP.xy; gl_Position = vec4(aP.x / uRes.x * 2. - 1., 1. - aP.y / uRes.y * 2., 0., 1.); }`, `#version 300 es
+precision mediump float; in float vT; in vec2 vS; out vec4 o;
+float h(vec2 p) { return fract(sin(dot(floor(p), vec2(12.9898, 78.233))) * 43758.5453); }
+float n(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f); return mix(mix(h(i), h(i + vec2(1, 0)), f.x), mix(h(i + vec2(0, 1)), h(i + 1.), f.x), f.y); }
+void main() {
+  // moonlit snow, in the painting's palette: cool lavender shade under the drift, pale silver-blue where the moon catches the top
+  float t = clamp(vT, 0., 1.), soft = n(vS * .08) * .5 + n(vS * .25) * .3;
+  vec3 shade = vec3(.47, .5, .68), body = vec3(.74, .77, .9), lit = vec3(.9, .92, .98);
+  vec3 c = mix(shade, body, smoothstep(0., .55, t + (soft - .4) * .25));
+  c = mix(c, lit, smoothstep(.62, .97, t) * (.75 + soft * .4));
+  c *= .97 + soft * .06;                                                    // a powdery, uneven surface
+  c += step(.9985, h(vS * 1.3)) * .18 * t;                                  // a few frost glints near the top
+  float a = 1. - smoothstep(1. - fwidth(vT) * 1.6, 1.0, vT);               // the crest is soft, not a cut edge
+  o = vec4(c * a, a);
+}`);
+const FLAKE = program(`#version 300 es
+in vec4 aF; uniform vec2 uRes; uniform float uK; out float vA;
+void main() { vA = aF.w; gl_PointSize = aF.z * uK * 2.2; gl_Position = vec4(aF.x / uRes.x * 2. - 1., 1. - aF.y / uRes.y * 2., 0., 1.); }`, `#version 300 es
+precision mediump float; in float vA; out vec4 o;
+void main() { float r = length(gl_PointCoord - .5) * 2.; float a = smoothstep(1., .25, r) * vA; o = vec4(vec3(.97, .98, 1.) * a, a); }`);
+const U = (p, n) => (p.__u || (p.__u = {}))[n] || (p.__u[n] = gl.getUniformLocation(p, n));
+const dBuf = gl.createBuffer(), fBuf = gl.createBuffer(), dVao = gl.createVertexArray(), fVao = gl.createVertexArray();
+gl.bindVertexArray(dVao); gl.bindBuffer(gl.ARRAY_BUFFER, dBuf); { const l = gl.getAttribLocation(DRIFT, 'aP'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 3, gl.FLOAT, false, 0, 0); }
+gl.bindVertexArray(fVao); gl.bindBuffer(gl.ARRAY_BUFFER, fBuf); { const l = gl.getAttribLocation(FLAKE, 'aF'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 4, gl.FLOAT, false, 0, 0); }
+gl.bindVertexArray(null);
+gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+let dArr = new Float32Array(1 << 16), fArr = new Float32Array(1 << 14);
+function render() {
+  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  // far flakes first (behind the drifts), then drifts, then near flakes and clumps
+  const pts = (far) => { let n = 0; for (let i = 0; i < flakes.length; i++) { const f = flakes[i]; if ((f.layer === 0) !== far) continue;
+      if (n * 4 + 4 > fArr.length) { const g = new Float32Array(fArr.length * 2); g.set(fArr); fArr = g; } const o = n * 4; fArr[o] = f.x; fArr[o + 1] = f.y; fArr[o + 2] = f.size; fArr[o + 3] = f.a; n++; } return n; };
+  const drawPts = n => { if (!n) return; gl.useProgram(FLAKE); gl.uniform2f(U(FLAKE, 'uRes'), W, H); gl.uniform1f(U(FLAKE, 'uK'), K);
+    gl.bindVertexArray(fVao); gl.bindBuffer(gl.ARRAY_BUFFER, fBuf); gl.bufferData(gl.ARRAY_BUFFER, fArr.subarray(0, n * 4), gl.DYNAMIC_DRAW); gl.drawArrays(gl.POINTS, 0, n); };
+  drawPts(pts(true));
+  // drifts: a triangle strip per profile (base at the edge, crest at the surface)
+  let m = 0; const strips = [];
+  const add = (cols, x0, y0) => { const start = m;
+    for (let i = 0; i < cols.length; i++) { const px = x0 + i * COL, d = cols[i]; if (m * 3 + 6 > dArr.length) { const g = new Float32Array(dArr.length * 2); g.set(dArr); dArr = g; }
+      const o = m * 3; dArr[o] = px; dArr[o + 1] = y0 + .5; dArr[o + 2] = 0; dArr[o + 3] = px; dArr[o + 4] = y0 - d - 1.2; dArr[o + 5] = d > .3 ? 1 : 0; m += 2; }   /* 1 at the crest: the shader feathers it */
+    strips.push([start, m - start]); };
+  for (const c of cur) if (c.cols.some(v => v > .2)) add(c.cols, c.x, c.y);
+  for (const o of orphans) add(o.cols, o.x, o.y);
+  add(ground, 0, H - 6);
+  if (m) { gl.useProgram(DRIFT); gl.uniform2f(U(DRIFT, 'uRes'), W, H); gl.bindVertexArray(dVao); gl.bindBuffer(gl.ARRAY_BUFFER, dBuf); gl.bufferData(gl.ARRAY_BUFFER, dArr.subarray(0, m * 3), gl.DYNAMIC_DRAW);
+    for (const [s, n] of strips) gl.drawArrays(gl.TRIANGLE_STRIP, s, n); }
+  let n = pts(false);
+  for (const c of clumps) { if (n * 4 + 4 > fArr.length) break; const o = n * 4; fArr[o] = c.x; fArr[o + 1] = c.y; fArr[o + 2] = c.s; fArr[o + 3] = .95; n++; }
+  drawPts(n);
+}
+
+/* ---------- loop ---------- */
+let running = false, lastT = 0;
+function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
+function loop(now) { try { loop0(now); } catch (e) { try { webkit.messageHandlers.host.postMessage('JSERR loop ' + e.message + ' ' + (e.stack || '').split('\n')[0]); } catch (_) {} running = false; setTimeout(wake, 1000); } }
+function loop0(now) {
+  if (paused) { running = false; return; }
+  if (lastT && now - lastT < 15.5) { requestAnimationFrame(loop); return; }      // 60 fps is plenty for falling snow
+  const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now;
+  if (lastT) fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
+  stepWins(dt); stepSnow(dt, now); render();
+  requestAnimationFrame(loop);
+}
+
+/* ---------- boot + host protocol ---------- */
+function build() { W = innerWidth; H = innerHeight; $('gl').width = Math.round(W * K); $('gl').height = Math.round(H * K); drawBackdrop(); makeFlakes(); }
+let FB = null; function commit() { } function refresh() { }
+const handle = m => {
+  if (m.t === 'desk') { showPanel(m.i, m.n); return; }
+  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'cursor') { cursor = { x: m.x / K, y: m.y / K }; cursorT = performance.now(); return; }
+  if (m.t === 'cursorOff') { cursor = null; return; }
+  // Stage Manager draws its thumbnails tilted in 3D but reports flat rectangles: snow can't sit on them believably, so it falls behind
+  if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })).filter((_, i) => !(m.sm && m.sm[i]))); }
+};
+build(); wake();
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 200); });
+window.__dbg = () => `vis=${document.visibilityState} run=${running} paused=${paused} lastT=${lastT | 0} fps=${fpsEMA | 0} flakes=${flakes.length} clumps=${clumps.length} drifts=${cur.map(c => Math.max(...c.cols).toFixed(1)).join(',')} ground=${Math.max(...ground).toFixed(1)}`;
+const host = window.chrome && window.chrome.webview;
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
+else { handle({ t: 'windows', r: [[W * .3 * K, H * .3 * K, W * .7 * K, H * .66 * K]], n: ['Slack'] }); addEventListener('mousemove', e => handle({ t: 'cursor', x: e.clientX * K, y: e.clientY * K })); }
+</script>
+</body>
+</html>

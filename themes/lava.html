@@ -1,0 +1,502 @@
+<!doctype html>
+<!--
+  Lava Lamp — a Driftland theme. Your screen is the inside of a lava lamp: neon-red oil, black wax.
+
+  The wax is a set of soft bodies driven by the physics of a real lamp (see PHYSICS below): buoyancy from temperature,
+  Stokes drag, heat that crosses only a blob's surface, a bulb under a tapered glass base and a cold cap, budding
+  (the pinch-off a flat simulation can't produce by itself), coalescence with volume and momentum conserved, and
+  shapes that stretch, flatten and wobble. Air bubbles rise through the oil at their own Stokes speed and steer
+  around the wax; fine specks hang in it. The lamp sits behind your windows; the cursor warms the wax near it.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lava Lamp</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #3a0306; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<script>
+'use strict';
+window.__noMask = true;
+let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
+const P = { quality: 2 };
+const cv = document.getElementById('gl');
+let FB = null; function commit() { } function refresh() { }
+const post = s => { try { webkit.messageHandlers.host.postMessage(s); } catch (_) { console.log(s); } };
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const h1 = x => { const s = Math.sin(x * 127.1) * 43758.5453; return s - Math.floor(s); };
+const n1 = x => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return h1(i) * (1 - u) + h1(i + 1) * u; };
+const cur = { x: -1e4, y: -1e4, vx: 0, vy: 0, on: false, t: 0 };
+
+/* ======================= PHYSICS BEGIN ======================= */
+// The wax is a set of soft bodies. Each one carries a volume (conserved exactly through every merge and split), a
+// temperature, a velocity and a shape. What drives them is the physics of a real lamp:
+//  · buoyancy ∝ (T − T_neutral): warm wax is lighter than the oil, cool wax heavier;
+//  · Stokes drag in the viscous oil, so terminal speed grows with size (∝ r²): big blobs travel, small ones dawdle;
+//  · heat crosses only the surface (rate ∝ surface/volume ∝ 1/r): big blobs keep their heat, small ones lose it fast;
+//    the bulb heats the pool through the glass from below, the cap is the coldest place in the lamp;
+//  · budding: a hot pool grows a bulge that rises on a neck and breaks free — the 3D pinch-off (Rayleigh–Plateau)
+//    that a flat simulation can't produce by itself, modelled explicitly;
+//  · coalescence: wax that touches flows together, volume and momentum conserved, and wobbles as it settles;
+//  · shape: blobs stretch along their motion, flatten on the floor and under the cap, and ring down slowly.
+const T_NEUTRAL = .5, G_BUOY = 200, K_DRAG = 1.2, R_REF = 80, VMAX = 46;
+const OIL_TOP = .13, OIL_BOT = .38, OIL_K = .006, OIL_T = .2, BULB_K = .14, BULB_R = 420, CAP_D = 160, CAP_K = .25;   // the oil is stratified: warmed from below by the bulb, cooled by the cap
+const BUD_MIN = .011, BUD_SPAN = .07, BUD_POW = 1.8, MAX_BUDS = 3, POOL_MIN = .35;
+const BUD_T = .56, BUD_RATE = 1.8, MAX_BLOBS = 40, POOL_V = .22, WAX_FRAC = .15, SPLIT_V = .06, SPLIT_RATE = .25;
+let blobs = [], simT = 0, WAX_V = 1;
+const rOf = b => Math.sqrt(b.V / Math.PI);
+// the lamp's glass base tapers like a real lamp's: wax always gathers in a basin over the bulb
+const BOWL = () => H * .3, BOWL_P = 3.4;          // flat across the middle, rising near the sides
+function floorAt(x) { const u = Math.abs(x - W / 2) / (W / 2); return H - BOWL() * Math.pow(u, BOWL_P); }
+function floorSlope(x) { const d = x - W / 2, u = Math.abs(d) / (W / 2); return -BOWL() * BOWL_P * Math.pow(u, BOWL_P - 1) * Math.sign(d) / (W / 2); }
+const n2 = x => n1(x) * 2 - 1 + .5;
+const coilX = () => W * (.5 + (n1(simT * .011) - .5) * .24);   // the hot spot of a long heater wanders slowly along the base
+// depth: the lamp is as deep as it is wide. Wax sits at one of four depths; blobs at different depths pass in front of
+// and behind one another, and only wax that meets at the same depth can touch and flow together
+const LAYERS = 4;
+function newBlob(x, y, V, T, z = Math.random()) {
+  const L = Math.min(LAYERS - 1, Math.floor(z * LAYERS)); z = (L + .5) / LAYERS;
+  return { L, z, x, y, vx: 0, vy: 0, V, T, ang: 0, st: 1, A: [0, 0, 0, 0, 0, 0], Av: [0, 0, 0, 0, 0, 0], ph: [0, 0, 0, 0, 0, 0].map(() => Math.random() * 6.28), tail: 0, parent: null, budTarget: 0, into: null, rest: false, id: Math.random() };
+}
+function makeWax() {
+  WAX_V = W * H * WAX_FRAC; blobs = []; simT = 0;
+  { const p = newBlob(W / 2, 0, WAX_V * .8, .32); p.st = 1.55; p.rest = true; p.y = floorAt(W / 2) + Math.min(halfY(p) * .62, 120) - halfY(p); blobs.push(p); }
+  blobs.push(newBlob(W * .42, H * .35, WAX_V * .1, .45));
+  blobs.push(newBlob(W * .6, H * .55, WAX_V * .1, .62));
+}
+// the ellipse a blob currently is: semi-axes a (along ang) and b, area-preserving
+function axes(b) { const r = rOf(b); return [r * b.st, r / b.st]; }
+function halfY(b) { const [a, c] = axes(b), s = Math.sin(b.ang), co = Math.cos(b.ang); return Math.sqrt(a * a * s * s + c * c * co * co); }
+function halfX(b) { const [a, c] = axes(b), s = Math.sin(b.ang), co = Math.cos(b.ang); return Math.sqrt(a * a * co * co + c * c * s * s); }
+function kick(b, amt) { b.K = b.K || [0, 0, 0, 0, 0, 0]; for (let n = 2; n <= 5; n++) b.K[n] += (Math.random() - .5) * amt * .8 / (n - 1); }   // a bump that eases in and out, never a jump
+function step(dt) {
+  simT += dt;
+  const pool = blobs.reduce((m, b) => b.rest && (!m || b.V > m.V) ? b : m, null);
+  // ---- budding: the hot pool lets go of a bulge now and then ----
+  const buds = blobs.filter(b => b.parent && b.parent.rest).length;
+  if (pool && pool.T > BUD_T && buds < MAX_BUDS && blobs.length < MAX_BLOBS && pool.V > WAX_V * POOL_MIN && Math.random() < dt * BUD_RATE * (pool.T - BUD_T) * 6) {
+    // anywhere along the pool's warm top, a little more often over the bulb
+    const hy = halfY(pool), hx = halfX(pool), cx = clamp(pool.x + (Math.random() - .5) * hx * 1.7, pool.x - hx * .85, pool.x + hx * .85);
+    const c = newBlob(cx, pool.y - hy * .45, WAX_V * .004, Math.min(1.1, pool.T + .12), Math.random()); c.ox = cx - pool.x;   /* the pool spans the whole depth: buds rise from any of it */
+    pool.V -= c.V;                                                     // a bud is the pool's own wax
+    c.parent = pool; c.budTarget = WAX_V * (BUD_MIN + Math.pow(Math.random(), BUD_POW) * BUD_SPAN);   /* mostly small, now and then a big one */ c.vy = -5; blobs.push(c);
+  }
+  // ---- breakup: a big blob moving through the thick oil drags out its trailing end, which necks and pinches off
+  // (Rayleigh–Plateau). The piece is the blob's own wax and leaves with the blob's own velocity: nothing is created.
+  for (const b of blobs) {
+    if (b.rest || b.parent || b.into || b.splitting || b.V < WAX_V * SPLIT_V || blobs.length >= MAX_BLOBS) continue;
+    const sp = Math.hypot(b.svx || 0, b.svy || 0); if (Math.random() > dt * SPLIT_RATE * (b.V / (WAX_V * SPLIT_V) - .8)) continue;
+    // moving: its trailing end draws out; hanging nearly still: its cooler underside sags into a drip
+    const ux = sp > 10 ? -b.svx / sp : 0, uy = sp > 10 ? -b.svy / sp : 1, c = newBlob(b.x + ux * rOf(b) * .5, b.y + uy * rOf(b) * .5, WAX_V * .004, b.T, b.z);
+    b.V -= c.V; c.parent = b; c.trail = true; c.ux = ux; c.uy = uy; c.vx = b.vx; c.vy = b.vy; c.budTarget = b.V * (.28 + Math.random() * .17); b.splitting = c; blobs.push(c);
+  }
+  for (const b of blobs) {
+    const r = rOf(b);
+    // a bud is fed from its parent while it swells, and held by the neck until it's big and buoyant enough to go
+    if (b.parent) {
+      const p = b.parent;
+      if (!blobs.includes(p) || p.into) { b.parent = null; p.splitting = null; if (b.trail) { b.from = p; b.freeUntil = simT + 3; } }
+      else {
+        const feed = Math.min(b.budTarget * .2 * dt, p.V - WAX_V * .05, b.budTarget - b.V);
+        if (feed > 0) {
+          // the bud is fed from the hottest wax, right over the bulb; taking that wax leaves the rest of the pool a little cooler — energy is conserved
+          const Th = b.trail ? p.T : Math.min(1.1, p.T + .12);
+          b.T = (b.T * b.V + Th * feed) / (b.V + feed); b.V += feed;
+          p.T = (p.T * p.V - Th * feed) / (p.V - feed); p.V -= feed;
+        }
+        // it swells up out of the pool's surface over the bulb; the merged field draws the neck between them
+        const e = Math.min(1, b.V / b.budTarget), rb = rOf(b);
+        let tx, ty;
+        if (b.trail) {                                                     // the trailing lump of a blob in flight, swinging round as its path bends
+          const sp = Math.hypot(p.svx || 0, p.svy || 0); if (sp > 10) { b.ux += (-p.svx / sp - b.ux) * Math.min(1, dt * .8); b.uy += (-p.svy / sp - b.uy) * Math.min(1, dt * .8); const l = Math.hypot(b.ux, b.uy) || 1; b.ux /= l; b.uy /= l; }
+          const [ea, ec] = axes(p), co = Math.cos(p.ang), sn = Math.sin(p.ang), lx = b.ux * co + b.uy * sn, ly = -b.ux * sn + b.uy * co, rho = 1 / Math.hypot(lx / ea, ly / ec);
+          const dd = rho + rb * (-.55 + 1.3 * e); tx = p.x + b.ux * dd; ty = p.y + b.uy * dd;
+        } else { const top = p.y - halfY(p) * Math.sqrt(Math.max(0, 1 - (b.ox / Math.max(halfX(p), 1)) ** 2)); tx = p.x + b.ox; ty = top - rb * (-.3 + 1.15 * e); }
+        const bvx = b.trail ? p.vx : 0, bvy = b.trail ? p.vy : 0;
+        let rx = (tx - b.x) * 3, ry = (ty - b.y) * 3; const bs = Math.hypot(rx, ry); if (bs > 40) { rx *= 40 / bs; ry *= 40 / bs; }   // swells steadily, never jumps
+        b.vx = bvx + rx; b.vy = bvy + ry; b.x += b.vx * dt; b.y += b.vy * dt;
+        if (e >= .999) {                                                   // full: the neck pinches and it goes its own way
+          b.parent = null; b.from = p; b.freeUntil = simT + (b.trail ? 3 : 4); kick(b, .12); kick(p, .06);
+          if (b.trail) { b.vx = p.vx; b.vy = p.vy; p.splitting = null; } else b.vy = -18;
+        }
+        continue;
+      }
+    }
+    // ---- heat: through the surface (∝ 1/r), from the bulb below, to the cold cap above ----
+    const sv = R_REF / Math.max(r, 12);
+    const oilT = OIL_TOP + (OIL_BOT - OIL_TOP) * clamp(b.y / H, 0, 1);
+    b.T += (oilT - b.T) * dt * OIL_K * sv;                              // Newton cooling through the surface: dT/dt ∝ (A/V)(T_oil − T), A/V ∝ 1/r
+    // the bulb heats only wax that's down on the glass above it
+    const gap = Math.max(0, floorAt(b.x) - (b.y + halfY(b))), lat = (b.x - coilX()) / BULB_R;
+    // heat in ∝ the width of wax touching the glass over the bulb; temperature rise = heat / volume
+    const contact = halfX(b) * .8 * WAX_V / (Math.max(b.V, 1) * .209 * W);
+    if (b.rest && gap < 120) b.T +=   /* only wax resting on the warm glass picks up the bulb's heat */ (1.15 - b.T) * dt * BULB_K * Math.exp(-lat * lat) * Math.exp(-((gap / 45) ** 2)) * Math.min(5, 1.6 * contact);
+    const top = b.y - halfY(b); if (top < CAP_D) b.T += (.05 - b.T) * dt * CAP_K * (1 - Math.max(0, top) / CAP_D) * sv;
+    if (cur.on && performance.now() - cur.t < 8000) { const d = Math.hypot(b.x - cur.x, b.y - cur.y); if (d < r + 90) b.T += (1 - b.T) * dt * .25 * (1 - d / (r + 90)); }
+    b.T = clamp(b.T, 0, 1.2);
+    // ---- motion: buoyancy against Stokes drag; terminal speed ∝ r² (capped: the oil is thick) ----
+    const drag = K_DRAG * clamp((R_REF / Math.max(r, 10)) ** 2, .5, 5);
+    // a big pool resting on the glass can't lift as a whole: it's only hot at the bottom and it wets the glass — its heat leaves as buds
+    const lift = b.T - T_NEUTRAL;
+    if (b.rest && b !== pool) b.vx += dt * (clamp(((pool ? pool.x : coilX()) - b.x) * .03, -6, 6) + floorSlope(b.x) * G_BUOY * Math.max(0, -lift) * .6);   /* wax on the glass slides down the sloping base under its own weight, towards the pool */
+    const held = b.rest && b === pool && lift > 0;
+    b.vy -= dt * G_BUOY * (held ? 0 : lift);
+    if (held && b.vy < 0) b.vy = 0;
+    b.vx *= Math.exp(-dt * drag); b.vy *= Math.exp(-dt * drag);
+    if (!b.rest && !b.parent) {                                          // slow convection currents in the oil carry blobs sideways
+      // a convection cell: oil rises over the heater, spreads outward under the cap, sinks along the sides and
+      // returns inward along the bottom (stream function ψ ∝ sin(πx'/W)·sin(πy/H)), slowly wandering
+      const cx0 = W / 2, xs = (b.x - cx0) / W, ys = b.y / H;
+      const cy = Math.cos(Math.PI * ys), cu = 32 * Math.sin(Math.PI * clamp(xs * 1.6, -1, 1)) * (cy > 0 ? cy : cy * .35) + 7 * (n1(b.y * .004 + simT * .02 + 7) * 2 - 1);
+      b.vx += (cu - b.vx) * Math.min(1, dt * drag * .35);
+    }
+    const sp = Math.hypot(b.vx, b.vy); if (sp > VMAX) { b.vx *= VMAX / sp; b.vy *= VMAX / sp; }
+    if (!b.into) { b.x += b.vx * dt; b.y += b.vy * dt; }
+  }
+  // ---- coalescence: wax that touches flows together ----
+  // Wax wets wax: the moment two blobs touch, a neck forms and they are one viscous body. From then on they move together
+  // with the momentum of both (volume-weighted), the neck widens at the slow pace thick wax allows, and the wax that
+  // crosses it moves the merged blob's centre of mass — the small one isn't pulled into a big one that stands still.
+  for (let i = 0; i < blobs.length; i++) for (let j = i + 1; j < blobs.length; j++) {
+    const a = blobs[i], c = blobs[j]; if (a.into || c.into || a.parent || c.parent) continue;   // a bud still forming belongs to its parent
+    if (a.L !== c.L && !a.rest && !c.rest) continue;                   // at different depths they pass by; wax on the glass spans it all
+    const [big, small] = a.V >= c.V ? [a, c] : [c, a];
+    // how far the small one's surface is from the big one's, measured in the big ellipse's own frame
+    const [ea, ec] = axes(big), co = Math.cos(big.ang), sn = Math.sin(big.ang), dx = small.x - big.x, dy = small.y - big.y;
+    const lx = dx * co + dy * sn, ly = -dx * sn + dy * co, dn = Math.hypot(lx / ea, ly / ec) || 1e-6, d = Math.hypot(dx, dy), gap = d - d / dn - rOf(small);
+    // a piece that just pinched off is still drawing clear of the wax it came from: it can only rejoin it after they've parted
+    const kin = a.from === c ? a : c.from === a ? c : null;
+    if (kin) { if (kin.freeUntil > simT || gap < 12) continue; kin.from = null; }
+    if (gap > .5) continue;
+    small.into = big; small.cx = dx; small.cy = dy;
+    const tot = a.V + c.V, vx = (a.V * a.vx + c.V * c.vx) / tot, vy = (a.V * a.vy + c.V * c.vy) / tot;
+    a.vx = c.vx = vx; a.vy = c.vy = vy;                                   // perfectly inelastic: one body, total momentum kept
+  }
+  for (const s of blobs) {
+    if (!s.into) continue;
+    let t = s.into; if (!blobs.includes(t)) { s.into = null; continue; }
+    const tot = s.V + t.V;
+    // one body, one velocity: each part felt its own buoyancy and drag this step; the joined body moves with their mean
+    const vx = (s.V * s.vx + t.V * t.vx) / tot, vy = (s.V * s.vy + t.V * t.vy) / tot; s.vx = t.vx = vx; s.vy = t.vy = vy;
+    // wax flows across the neck over a few seconds, carrying its heat
+    const k = 1 - Math.exp(-dt * .5), dv = Math.min(s.V, s.V * k + WAX_V * .000002), f = dv / (t.V + dv);
+    t.T += (s.T - t.T) * f;
+    t.V += dv; s.V -= dv;
+    // the wax that crossed came from s's side, so t's centre of mass moves towards s by exactly that much (s stays put)
+    { const sh = f; if (!t.rest) { t.x += s.cx * sh; t.y += s.cy * sh; } else t.x += s.cx * sh; s.cx = s.x - t.x; s.cy = s.y - t.y; }
+    // the neck widens: the two close in on their common centre at wax's slow viscous pace — both move, the lighter one more
+    { const [ea, ec] = axes(t), co = Math.cos(t.ang), sn = Math.sin(t.ang), L = Math.hypot(s.cx, s.cy) || 1e-6, ux = s.cx / L, uy = s.cy / L;
+      const lx = ux * co + uy * sn, ly = -ux * sn + uy * co, rho = 1 / Math.hypot(lx / ea, ly / ec), want = Math.max(0, rho + rOf(s) * .3);
+      const close = clamp((L - want) * dt * 1.2, 0, 9 * dt), wt = t.rest ? 0 : s.V / (s.V + t.V);
+      t.x += ux * close * wt; t.y += uy * close * wt; s.cx = ux * (L - close); s.cy = uy * (L - close); s.x = t.x + s.cx; s.y = t.y + s.cy; }
+    if (s.V < WAX_V * .0003) { t.V += s.V; s.V = 0; kick(t, .08);
+      for (const o of blobs) if (o.into === s) { o.into = t; o.cx = o.x - t.x; o.cy = o.y - t.y; } }   // anything still flowing into s now flows into t
+  }
+  blobs = blobs.filter(b => b.V > 0);
+  for (const b of blobs) if (b.parent && !blobs.includes(b.parent)) b.parent = null;
+  // ---- the glass: walls, cap and the tapered floor ----
+  for (const b of blobs) {
+    if (b.into) continue;                                                 // wax draining into another moves with it
+    const hx = halfX(b), hy = halfY(b);
+    if (b.x - hx < 2) { b.x = 2 + hx; b.vx = Math.abs(b.vx) * .1; } if (b.x + hx > W - 2) { b.x = W - 2 - hx; b.vx = -Math.abs(b.vx) * .1; }
+    if (b.y - hy < 2) { b.y = 2 + hy; b.vy = Math.max(0, b.vy); }
+    const fl = floorAt(b.x) + (b === pool ? Math.min(hy * .85, 150) : Math.min(hy * .42, 90));   // the pool sits deep in the base: only its dome shows
+    const wasRest = b.rest;
+    if (b.y + hy > fl) { const pen = b.y + hy - fl, gx = -floorSlope(b.x), g2 = gx * gx + 1;
+      b.x -= pen * gx / g2; b.y -= pen / g2;
+      const vn = (b.vx * gx + b.vy) / Math.sqrt(g2); if (vn > 0) { b.vx -= vn * gx / Math.sqrt(g2); b.vy -= vn / Math.sqrt(g2); }
+      b.rest = true; if (!wasRest) kick(b, .08);
+    } else if (b.rest && b.V > WAX_V * POOL_V && b.T > T_NEUTRAL) { b.y = fl - hy; if (b.vy < 0) b.vy = 0; }   // the pool wets the glass: as buds draw it down it stays on the floor
+    else if (b.y + hy < fl - 28) b.rest = false;                         // contact has some give: a blob that flattens doesn't count as lifting off
+  }
+  for (const s of blobs) if (s.into && blobs.includes(s.into)) { s.x = s.into.x + s.cx; s.y = s.into.y + s.cy; }   // draining wax stays exactly where it joined, even when the other one moved this step
+  const poolNow = blobs.reduce((m, b) => b.rest && (!m || b.V > m.V) ? b : m, null);
+  // ---- shape: stretch along motion, flatten when resting, slow damped wobble ----
+  for (const b of blobs) {
+    const r = rOf(b), sp = Math.hypot(b.vx, b.vy);
+    let tAng = b.ang, tSt;
+    if (b.rest) { tAng = 0; tSt = b === poolNow ? 1 + 1.15 * Math.min(1, r / 180) :   /* the pool spreads across the whole base */ 1 + .55 * Math.min(1, r / 140); }
+    else if (b.parent) { const p = b.parent; tAng = Math.atan2(b.y - p.y, b.x - p.x); tSt = 1.12; }
+    else { const sv = Math.hypot(b.svx || 0, b.svy || 0); if (sv > 3) tAng = Math.atan2(b.svy, b.svx); tSt = 1 + Math.min(.22, sv / 200); const top = b.y - halfY(b); if (top < 40) { tAng = 0; tSt = 1.25; } }
+    let da = tAng - b.ang; da = Math.atan2(Math.sin(2 * da), Math.cos(2 * da)) / 2;   // an ellipse is symmetric: turn the short way
+    // wax doesn't spin: a stretched blob first rounds out, and only a nearly round one turns to its new direction
+    const roundness = clamp(1 - (b.st - 1) / .12, 0, 1);
+    if (Math.abs(da) > .3) tSt = Math.min(tSt, 1);
+    b.ang += da * Math.min(1, dt * 1.5) * roundness; b.st += (tSt - b.st) * Math.min(1, dt * .9);
+    // surface modes of a very viscous drop: no ringing (overdamped) — each lump relaxes over seconds (τ ∝ μr/σ, shorter
+    // for finer modes) while the oil's slow currents keep nudging it. Big blobs are soft and lumpy; small drops stay round.
+    const soft = b === poolNow ? .45 : clamp(r / 70, .4, 1.8), rr = Math.max(r, 20) / R_REF;   // the wide pool only sways gently
+    for (let n = 2; n <= 5; n++) {
+      const tau = (3.5 + 5 * rr) / (n - 1), sd = .1 * soft * [0, 0, 1, .55, .22, .1][n];   // broad bulges, never rocky corners
+      // the shape it's drifting towards changes smoothly over seconds (slow noise, not a new random push every step)
+      const seed = b.id * 97 + n * 13, slow = simT / (tau * 2.2);
+      const target = sd * 1.7 * (n1(slow + seed) * 2 - 1 + .6 * (n1(slow * 2.3 + seed + 40) * 2 - 1)) * (1 + sp / 80);
+      if (b.K) { b.K[n] *= Math.exp(-dt / 2.5); }
+      b.A[n] += ((target + (b.K ? b.K[n] : 0)) - b.A[n]) * Math.min(1, dt / tau * 2.2);
+      b.A[n] = clamp(b.A[n], -sd * 2.6, sd * 2.6);
+      b.ph[n] += dt * (n2(simT * .03 + b.id * 31 + n) - .5) * .12;         // the lumps wander slowly round the blob
+    }
+    // moving through the thick oil: a rounded leading face and a trailing tail, following the blob's smoothed motion
+    // (so the tail swings round gently when a blob turns from rising to sinking, never flips)
+    const ks = Math.min(1, dt / 1.6); b.svx = (b.svx || 0) + (b.vx - (b.svx || 0)) * ks; b.svy = (b.svy || 0) + (b.vy - (b.svy || 0)) * ks;
+    const ssp = Math.hypot(b.svx, b.svy), tt = b.rest || b.parent ? 0 : clamp((ssp - 6) / 40, 0, 1) * Math.min(1, r / 50);
+    b.tail += (tt - b.tail) * Math.min(1, dt * .8);
+    if (ssp > 1) { let dm = Math.atan2(b.svy, b.svx) - (b.mAng ?? Math.atan2(b.svy, b.svx)); dm = Math.atan2(Math.sin(dm), Math.cos(dm)); b.mAng = (b.mAng ?? 0) + dm * Math.min(1, dt * 1.2); }
+  }
+}
+// the same smooth field the screen shows (for bubbles to steer around)
+function fieldAt(x, y) {
+  let f = 0, pv = 0, pool = null; for (const b of blobs) if (b.rest && b.V > pv && b.V > WAX_V * POOL_V) { pv = b.V; pool = b; }
+  for (const b of blobs) { const [a, c] = axes(b), R = 1 / .783, co = Math.cos(b.ang), s = Math.sin(b.ang), dy = (y - b.y) * (b === pool && y > b.y ? .35 : 1), dx = x - b.x;
+    const qx = (dx * co + dy * s) / (a * R), qy = (-dx * s + dy * co) / (c * R), d2 = qx * qx + qy * qy; if (d2 < 1) f += (1 - d2) ** 2; }
+  return f;
+}
+/* ======================= PHYSICS END ======================= */
+
+
+/* ======================= air bubbles and suspended specks ======================= */
+// A bubble rises at its Stokes speed (∝ r²) wobbling as it goes; wax in its way pushes it aside, so bubbles slide
+// around blobs or ride under them. At the cap they swell a touch and pop.
+let bubbles = [], specks = [], nextBubble = 0;
+function makeSpecks() { specks = []; for (let i = 0; i < Math.round(W * H / 9000); i++) specks.push({ x: Math.random() * W, y: Math.random() * H, r: .7 + Math.random() * 1.1, a: .25 + Math.random() * .5, p: Math.random() * 100 }); }
+function stepBubbles(dt) {
+  nextBubble -= dt;
+  if (nextBubble < 0 && bubbles.length < 40) {
+    nextBubble = .6 + Math.random() * 1.8;
+    const r = 2 + Math.pow(Math.random(), 2.2) * 8;
+    for (let k = 0; k < 8; k++) {                                       // from any part of the warm glass floor that's clear of wax
+      const x = W / 2 + (Math.random() - .5) * W * .7, y = floorAt(x) - r - 4;
+      if (fieldAt(x, y) < .02) { bubbles.push({ x, y, r, a: 0, ph: Math.random() * 6.28, vx: 0, vy: 0, pop: 0 }); break; }
+    }
+  }
+  for (const b of bubbles) {
+    const rise = Math.min(9 + 1.5 * b.r * b.r, 85);
+    b.ph += dt * (1.5 + b.r * .25);
+    let tvx = Math.sin(b.ph) * b.r * 1.6, tvy = -rise;
+    const e = 3, f0 = fieldAt(b.x, b.y), gx = fieldAt(b.x + e, b.y) - fieldAt(b.x - e, b.y), gy = fieldAt(b.x, b.y + e) - fieldAt(b.x, b.y - e);
+    if (f0 > .004) { const l = Math.hypot(gx, gy) || 1, push = Math.min(1.5, f0 * 25) * 110; tvx -= gx / l * push; tvy -= gy / l * push; }
+    b.vx += (tvx - b.vx) * Math.min(1, dt * 4); b.vy += (tvy - b.vy) * Math.min(1, dt * 4);
+    b.x = clamp(b.x + b.vx * dt, b.r, W - b.r); b.y += b.vy * dt;
+    const hidden = f0 > .15;                                            // a bubble the wax closes over is out of sight
+    b.a = clamp(b.a + dt * (hidden ? -6 : 2), 0, 1);
+    if (b.y < b.r + 14 || b.pop) { b.pop += dt; b.a = Math.min(b.a, Math.max(0, 1 - b.pop / .35)); b.r *= 1 + dt * .6; }
+  }
+  bubbles = bubbles.filter(b => !(b.pop > .35));
+  for (const s of specks) {
+    s.p += dt * .05; s.x += (n1(s.p + s.r * 31) - .5) * dt * 6; s.y += ((n1(s.p * .7 + s.r * 17) - .5) * 6 - 1.2) * dt;
+    if (s.y < -4) s.y = H + 2; if (s.x < -4) s.x = W + 2; if (s.x > W + 4) s.x = -2;
+  }
+}
+
+/* ======================= your windows: the lamp is behind them (they never touch the wax) ======================= */
+let wins = [], liveUntil = 0;
+function setTargets(list) { wins = list; }
+
+/* ======================= GL ======================= */
+const gl = cv.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: false });
+gl.getExtension('EXT_color_buffer_float'); gl.getExtension('OES_texture_float_linear');
+function sh(t, s, name) { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x);
+  if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { const e = gl.getShaderInfoLog(x); post('JSERR shader ' + name + ': ' + e); throw new Error(e); } return x; }
+function prog(vs, fs, name) {
+  const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs, name + '.vs')); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs, name + '.fs')); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) post('JSERR link ' + name + ' ' + gl.getProgramInfoLog(p));
+  p.u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); p.u[info.name.replace(/\[0\]$/, '')] = gl.getUniformLocation(p, info.name); }
+  return p;
+}
+const vao = gl.createVertexArray();
+// the wax field: every blob is a soft ellipse with a little wobble; where they meet, the field joins them into necks
+const FIELD = prog(`#version 300 es
+out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUV = p; gl_Position = vec4(p * 2. - 1., 0., 1.); }`, `#version 300 es
+precision highp float; in vec2 vUV; out vec4 o;
+uniform vec2 uRes; uniform vec4 uB0[${MAX_BLOBS}]; uniform vec4 uB1[${MAX_BLOBS}]; uniform vec4 uB2[${MAX_BLOBS}]; uniform vec4 uB3[${MAX_BLOBS}]; uniform int uN, uP;
+void main() {
+  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes; vec4 F = vec4(0.);
+  for (int i = 0; i < ${MAX_BLOBS}; i++) { if (i >= uN) break;
+    vec4 a = uB0[i], b = uB1[i], c = uB2[i], e = uB3[i];       // x,y,semi-axes | angle,A2,A3,A4 | A5,ph2,ph3,ph4 | ph5,tail,motion angle,-
+    vec2 d = p - a.xy; float co = cos(b.x), sn = sin(b.x);
+    if (i == uP && d.y > 0.) d.y *= .35;                       // the pool runs straight down into the base: no underside, no foot
+    vec2 q = vec2(d.x * co + d.y * sn, -d.x * sn + d.y * co) / (a.zw / .783);
+    float r2 = dot(q, q); if (r2 >= 2.4) continue;
+    float th = atan(q.y, q.x);
+    float R = 1. + b.y * cos(2. * th + c.y) + b.z * cos(3. * th + c.z) + b.w * cos(4. * th + c.w) + c.x * cos(5. * th + e.x);
+    float cm = cos(atan(d.y, d.x) - e.z);                    // 1 facing the way it moves, −1 behind
+    R += e.y * (.42 * pow(max(-cm, 0.), 5.) - .07 * max(cm, 0.) * max(cm, 0.));
+    R = max(R, .35);
+    float d2 = r2 / (R * R); if (d2 < 1.) { float k = 1. - d2; k *= k; F += k * (i == uP ? vec4(1., 0., 0., 0.) : vec4(equal(vec4(e.w), vec4(0., 1., 2., 3.)))); }   /* the pool sits at the front: deeper wax rises from behind it */
+  }
+  o = F;                                                     // one depth per channel, nearest first
+}`, 'field');
+const COMP = prog(`#version 300 es
+out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUV = p; gl_Position = vec4(p * 2. - 1., 0., 1.); }`, `#version 300 es
+precision highp float; in vec2 vUV; out vec4 o;
+uniform sampler2D uF; uniform vec2 uRes, uTex; uniform float uTh, uBowl, uCoil, uT;
+uniform vec3 uOilHi, uOilLo, uOilDeep, uBulb, uWax, uRim;
+float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
+void main() {
+  vec2 px = vec2(vUV.x, 1. - vUV.y) * uRes, uv = vUV;
+  vec4 F = texture(uF, uv);
+  // the oil: brightest where the bulb shines up through it, falling off into a deep vignette
+  vec2 q = (px - vec2(uRes.x * .5, uRes.y * .55)) / uRes.y;
+  float r = length(q * vec2(.78, 1.));
+  vec3 liq = mix(uOilHi, uOilLo, smoothstep(.05, .75, r));
+  liq = mix(liq, uOilDeep, smoothstep(.55, 1.25, r));
+  float bulb = exp(-length((px - vec2(uCoil, uRes.y)) / vec2(uRes.x * .22, uRes.y * .3)));
+  liq += uBulb * .3 * bulb;
+  // a faint shaft of light rising from the bulb, gently wavering with the warm oil
+  float shaft = exp(-pow((px.x - uCoil + 18. * sin(px.y * .006 + uT * .25)) / (uRes.x * .09 + (uRes.y - px.y) * .12), 2.)) * smoothstep(0., uRes.y, px.y);
+  liq += uBulb * .06 * shaft;
+  vec4 Fl = textureLod(uF, uv, 4.); liq *= 1. - .3 * smoothstep(.15, 1.8, max(max(Fl.r, Fl.g), max(Fl.b, Fl.a)));     // wax shades the oil around it a little
+  // the wax, one depth at a time from the back: nearer wax passes in front of farther wax
+  vec2 e = uTex * 1.5;
+  vec4 Gx = texture(uF, uv + vec2(e.x, 0.)) - texture(uF, uv - vec2(e.x, 0.)), Gy = texture(uF, uv + vec2(0., e.y)) - texture(uF, uv - vec2(0., e.y));
+  float height = 1. - px.y / uRes.y, lit = .55 + .45 * exp(-height * 2.2);   // nearer the bulb, brighter
+  vec3 col = liq; vec4 AA = fwidth(F);                                  // derivatives taken once, outside the per-depth branches
+  for (int l = 3; l >= 0; l--) {
+    float f = F[l], z = (float(l) + .5) / 4.;
+    if (f < uTh * .25) continue;
+    float aa = AA[l] * (1. + z * 2.5) + 1e-4, inside = smoothstep(uTh - aa, uTh + aa, f);   // further back: a little softer
+    float edge = 1. - smoothstep(uTh, uTh * 1.9, f);                     // thin wax near the outline
+    vec2 g = vec2(Gx[l], Gy[l]);
+    vec3 n = normalize(vec3(-g * 1.4 / uTh, 1.));
+    float glint = pow(max(dot(reflect(-normalize(vec3(-.4, .6, .7)), n), vec3(0., 0., 1.)), 0.), 40.);
+    // light from the bulb shines through the thin underside of each blob: a warm rim along its bottom edge
+    vec2 gn = g / (length(g) + 1e-5);
+    float under = smoothstep(.0, .9, gn.y) * edge * edge;
+    vec3 wax = uWax * (.75 + .5 * (1. - edge)) + liq * .22 * edge * edge + uRim * under * .55 * lit + vec3(1., .85, .8) * glint * .07;
+    wax = mix(wax, liq * .62 + uWax * .3, z * .38);                      // wax further back sits behind more oil
+    col = mix(col, wax, inside);
+  }
+  // the glass in front: a faint long reflection, the cylinder darker at its sides
+  col += vec3(1.) * .025 * exp(-pow((px.x / uRes.x - .14) / .012, 2.)) + vec3(1.) * .012 * exp(-pow((px.x / uRes.x - .2) / .04, 2.));
+  // the base fades into the dark: no hard edge
+  float u = abs(px.x - uRes.x * .5) / (uRes.x * .5), floorY = uRes.y - uBowl * pow(u, 3.4), below = px.y - floorY;
+  col = mix(col, uOilDeep * .35, smoothstep(-70., 90., below) * .92);
+  col += (hash(px * 1.7) - .5) / 255. * 2.;                              // dither against banding in the gradients
+  o = vec4(col, 1.);
+}`, 'comp');
+// air bubbles in the oil, and fine suspended specks
+const DOTS = prog(`#version 300 es
+in vec4 aB; uniform vec2 uRes; out vec2 vQ; flat out float vA, vKind;
+void main() {
+  vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2. - 1.;
+  vQ = c; vA = aB.w; vKind = aB.z < 0. ? 1. : 0.;
+  float r = abs(aB.z) + 1.;
+  vec2 p = aB.xy + c * r;
+  gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.);
+}`, `#version 300 es
+precision highp float; in vec2 vQ; flat in float vA, vKind; out vec4 o; uniform vec3 uTint;
+void main() {
+  float d = length(vQ); if (d > 1.) discard;
+  if (vKind > .5) { float a = (1. - smoothstep(.2, 1., d)) * vA * .5; o = vec4(uTint * a, a); return; }   // a speck
+  // an air bubble: a bright refracting rim, a clear centre that's a touch lighter than the oil, a pin of light
+  float rim = smoothstep(.62, .9, d) * (1. - smoothstep(.9, 1., d));
+  float body = (1. - smoothstep(.0, .9, d)) * .1;
+  float spec = 1. - smoothstep(.08, .2, length(vQ - vec2(-.38, -.4)));
+  vec3 c = mix(uTint, vec3(1.), .35);
+  float a = clamp(rim * .55 + body + spec * .8, 0., 1.) * vA;
+  o = vec4(c * a, a);
+}`, 'dots');
+
+
+/* ---------- targets ---------- */
+let fT = null, fF = null, fw = 1, fh = 1;
+function buildTargets() {
+  const dw = Math.round(W * K), dh = Math.round(H * K); cv.width = dw; cv.height = dh;
+  if (fT) gl.deleteTexture(fT); if (fF) gl.deleteFramebuffer(fF);
+  fw = Math.ceil(dw / 2); fh = Math.ceil(dh / 2);
+  fT = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, fT);
+  gl.texStorage2D(gl.TEXTURE_2D, 7, gl.RGBA16F, fw, fh);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  fF = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fF); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fT, 0);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) post('JSERR field fbo incomplete');
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+let dArr = new Float32Array(4);
+const dBuf = gl.createBuffer(), dVao = gl.createVertexArray();
+gl.bindVertexArray(dVao); gl.bindBuffer(gl.ARRAY_BUFFER, dBuf);
+{ const l = gl.getAttribLocation(DOTS, 'aB'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 4, gl.FLOAT, false, 16, 0); gl.vertexAttribDivisor(l, 1); }
+gl.bindVertexArray(null);
+const B0 = new Float32Array(MAX_BLOBS * 4), B1 = new Float32Array(MAX_BLOBS * 4), B2 = new Float32Array(MAX_BLOBS * 4), B3 = new Float32Array(MAX_BLOBS * 4);
+const TH = .15;          // the outline sits at 78% of each kernel's reach: wax just about to touch draws a short soft neck, nothing further
+function render() {
+  // the wax field
+  let n = 0;
+  let pi = -1, pv = 0; for (let i = 0; i < blobs.length && i < MAX_BLOBS; i++) { const b = blobs[i]; if (b.rest && b.V > pv && b.V > WAX_V * POOL_V) { pv = b.V; pi = i; } }
+  for (const b of blobs) { if (n >= MAX_BLOBS) break; const [a, c] = axes(b); B0.set([b.x, b.y, a, c], n * 4); B1.set([b.ang, b.A[2], b.A[3], b.A[4]], n * 4); B2.set([b.A[5], b.ph[2], b.ph[3], b.ph[4]], n * 4); B3.set([b.ph[5], b.tail, b.mAng || 0, b.L], n * 4); n++; }
+  gl.disable(gl.BLEND);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fF); gl.viewport(0, 0, fw, fh);
+  gl.useProgram(FIELD); gl.uniform2f(FIELD.u.uRes, W, H); gl.uniform4fv(FIELD.u.uB0, B0); gl.uniform4fv(FIELD.u.uB1, B1); gl.uniform4fv(FIELD.u.uB2, B2); gl.uniform4fv(FIELD.u.uB3, B3); gl.uniform1i(FIELD.u.uN, n); gl.uniform1i(FIELD.u.uP, pi);
+  gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindTexture(gl.TEXTURE_2D, fT); gl.generateMipmap(gl.TEXTURE_2D);
+  // the lamp
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height);
+  gl.useProgram(COMP); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, fT); gl.uniform1i(COMP.u.uF, 0);
+  gl.uniform2f(COMP.u.uRes, W, H); gl.uniform2f(COMP.u.uTex, 1 / fw, 1 / fh); gl.uniform1f(COMP.u.uTh, TH); gl.uniform1f(COMP.u.uBowl, BOWL()); gl.uniform1f(COMP.u.uCoil, coilX()); gl.uniform1f(COMP.u.uT, (performance.now() / 1000) % 1000);
+  for (const k of ['OilHi', 'OilLo', 'OilDeep', 'Bulb', 'Wax', 'Rim']) gl.uniform3fv(COMP.u['u' + k], PAL[k]);
+  gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  // bubbles and specks
+  let m = 0; const need = (bubbles.length + specks.length) * 4; if (dArr.length < need) dArr = new Float32Array(need * 2);
+  for (const b of specks) { dArr[m++] = b.x; dArr[m++] = b.y; dArr[m++] = -b.r; dArr[m++] = b.a; }
+  for (const b of bubbles) { if (b.a <= 0) continue; dArr[m++] = b.x; dArr[m++] = b.y; dArr[m++] = b.r; dArr[m++] = b.a; }
+  if (m) { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(DOTS); gl.uniform2f(DOTS.u.uRes, W, H); gl.uniform3fv(DOTS.u.uTint, PAL.Bulb.map(v => .55 + .45 * v)); gl.bindVertexArray(dVao); gl.bindBuffer(gl.ARRAY_BUFFER, dBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, dArr.subarray(0, m), gl.DYNAMIC_DRAW); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, m / 4); gl.disable(gl.BLEND); }
+}
+
+/* ======================= loop: fixed small physics steps ======================= */
+// colour combinations (the menu's "Colours"): oil centre, oil edge, the dark beyond, bulb light, wax, light through the wax's rim
+const PALETTES = {
+  red:     { OilHi: [1, .16, .1],   OilLo: [.46, .02, .04], OilDeep: [.08, 0, .01],   Bulb: [1, .42, .2],  Wax: [.018, .008, .01], Rim: [1, .3, .15] },
+  magenta: { OilHi: [1, .12, .55],  OilLo: [.42, .02, .26], OilDeep: [.07, 0, .05],   Bulb: [1, .4, .7],   Wax: [.016, .006, .014], Rim: [1, .3, .6] },
+  blue:    { OilHi: [.12, .45, 1],  OilLo: [.03, .1, .42],  OilDeep: [.0, .01, .07],  Bulb: [.4, .7, 1],   Wax: [.008, .01, .02], Rim: [.35, .6, 1] },
+  purple:  { OilHi: [.62, .2, 1],   OilLo: [.2, .03, .45],  OilDeep: [.03, 0, .08],   Bulb: [.75, .45, 1], Wax: [.012, .006, .02], Rim: [.7, .4, 1] },
+  amber:   { OilHi: [1, .58, .08],  OilLo: [.48, .2, .02],  OilDeep: [.08, .03, 0],   Bulb: [1, .75, .35], Wax: [.02, .012, .006], Rim: [1, .65, .25] },
+  green:   { OilHi: [.45, 1, .1],   OilLo: [.1, .4, .03],   OilDeep: [.01, .07, .0],  Bulb: [.7, 1, .4],   Wax: [.008, .016, .006], Rim: [.6, 1, .3] },
+  classic: { OilHi: [.5, .2, .85],  OilLo: [.2, .06, .4],   OilDeep: [.04, .01, .08], Bulb: [1, .6, .35],  Wax: [1, .38, .06], Rim: [1, .8, .35] },
+  mint:    { OilHi: [.05, .45, .5], OilLo: [.01, .17, .22], OilDeep: [0, .03, .05],   Bulb: [.5, .9, .85], Wax: [.45, 1, .75], Rim: [.85, 1, .9] },
+  mono:    { OilHi: [.97, .95, .9], OilLo: [.62, .6, .57],  OilDeep: [.16, .15, .14], Bulb: [1, .97, .9],  Wax: [.02, .02, .022], Rim: [.9, .85, .75] },
+};
+const PAL = PALETTES[new URLSearchParams(location.search).get('v') || 'red'] || PALETTES.red;
+document.body.style.background = `rgb(${PAL.OilLo.map(v => Math.round(v * 255)).join(',')})`;
+const STEP = 1 / 120;
+let running = false, lastT = 0, acc = 0;
+function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
+function loop(now) { try { loop0(now); } catch (e) { running = false; post('JSERR loop ' + e.message + ' ' + (e.stack || '').split('\n')[0]); setTimeout(wake, 1000); } }
+function loop0(now) {
+  if (paused) { running = false; return; }
+  if (lastT && now - lastT < 15.5) { requestAnimationFrame(loop); return; }
+  const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 60; lastT = now;
+  fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
+  const t0 = performance.now();
+  acc += dt; let n = 0; while (acc >= STEP && n < 16) { step(STEP); acc -= STEP; n++; } if (n === 16) acc = 0;
+  stepBubbles(dt);
+  fieldMs = fieldMs * .9 + (performance.now() - t0) * .1;
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* ======================= boot + host protocol ======================= */
+function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; buildTargets(); makeWax(); for (let t = 0; t < 70; t += STEP) step(STEP); makeSpecks(); bubbles = []; }
+const handle = m => {
+  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'cursor') { const x = m.x / K, y = m.y / K; if (Math.hypot(x - cur.x, y - cur.y) > 1) cur.t = performance.now(); cur.x = x; cur.y = y; cur.on = true; return; }
+  if (m.t === 'cursorOff') { cur.on = false; return; }
+  if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250; }
+};
+try { build(); } catch (e) { post('JSERR boot ' + e.message + ' ' + (e.stack || '').split('\n')[0]); }
+wake();
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 250); });
+window.__dbg = () => { const tot = blobs.reduce((s, b) => s + b.V, 0) / WAX_V, aloft = blobs.filter(b => !b.rest).length;
+  return `run=${running} fps=${fpsEMA | 0} ms=${fieldMs.toFixed(2)} blobs=${blobs.length} aloft=${aloft} volume=${tot.toFixed(4)} bubbles=${bubbles.length}`; };
+const host = window.chrome && window.chrome.webview;
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
+else addEventListener('mousemove', e => handle({ t: 'cursor', x: e.clientX * K, y: e.clientY * K }));
+</script>
+</body>
+</html>

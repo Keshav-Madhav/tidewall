@@ -1,0 +1,470 @@
+<!doctype html>
+<!--
+  Estate — a Driftland theme. An enchanted ink plan of an old town on stained parchment.
+  The town is grown procedurally in a worker (roads → angled districts → lots → marching squares, walls
+  written in tiny letters). It stays put: windows push the ink aside live (a GPU pass with a soft, wavy
+  edge), and when the town does change, the new ink spreads in blotches while the old fades. Never a blink.
+  Perf: the GPU pass runs only while a window moves or a change is spreading; otherwise nothing redraws.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Marauders</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #e9d8b4; }
+  canvas.layer { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .decor { transition: opacity 3.2s cubic-bezier(.4, 0, .2, 1); }
+  .step { position: fixed; left: 0; top: 0; pointer-events: none; opacity: 0; will-change: opacity;
+          animation: step 5.2s cubic-bezier(.33, 0, .25, 1) forwards; }
+  .step.mine { animation-duration: 3.4s; }
+  @keyframes step { 0% { opacity: 0; } 12% { opacity: .8; } 45% { opacity: .64; } 100% { opacity: 0; } }
+  @keyframes gone { from { opacity: var(--from, .55); } to { opacity: 0; } }
+  .tag { position: fixed; left: 0; top: 0; pointer-events: none; opacity: 0; will-change: transform, opacity;
+         transition: opacity 1.2s ease, transform 1.1s cubic-bezier(.25, .1, .25, 1); }
+</style>
+</head>
+<body>
+<canvas id="paper" class="layer"></canvas>
+<canvas id="ink" class="layer"></canvas>
+<canvas id="decorA" class="layer decor" style="opacity:0"></canvas>
+<canvas id="decorB" class="layer decor" style="opacity:0"></canvas>
+<script>
+'use strict';
+window.__opaque = false; window.__noMask = true;      // the ink layer needs alpha; no host stencil here
+const INK = 'rgba(70,44,26,0.9)', INK_SOFT = 'rgba(70,44,26,0.5)', RED = 'rgba(118,34,26,0.88)';
+const SCRIPT = '"Apple Chancery", "Snell Roundhand", "Iowan Old Style", serif';
+const P = { quality: 2 };
+let W = innerWidth, H = innerHeight, K = devicePixelRatio, fpsEMA = 0, fieldMs = 0, paused = false;
+const $ = id => document.getElementById(id);
+const cv = $('paper');
+
+function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const hash = s => { let h = 2166136261; for (const c of String(s)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
+
+/* ---------- names ---------- */
+const pick = (R, a) => a[Math.floor(R() * a.length)];
+const N = {
+  adj: ['Whispering', 'Crooked', 'Forgotten', 'Hollow', 'Lantern-lit', 'Weeping', 'Gilded', 'Sunken', 'Moonlit', 'Silent', 'Wandering', 'Ashen', 'Restless', 'Secret', 'Vanishing', 'Narrow', 'Mirrored', 'Sleeping'],
+  place: ['Stair', 'Gallery', 'Passage', 'Tower', 'Cloister', 'Chamber', 'Hall', 'Library', 'Court', 'Vault', 'Archive', 'Landing', 'Undercroft', 'Belfry', 'Study', 'Observatory', 'Scriptorium'],
+  of: ['Echoes', 'Lost Keys', 'Quiet Ink', 'Old Maps', 'the Small Hours', 'Borrowed Light', 'Forgotten Names', 'Unsent Letters', 'Moving Stairs', 'Seven Doors', 'Folded Paper', 'Patient Clocks'],
+  pre: ['Ash', 'Bram', 'Cinder', 'Dusk', 'Elder', 'Fern', 'Gloam', 'Ivy', 'Moss', 'North', 'Oak', 'Quill', 'Raven', 'Salt', 'Thistle', 'Umber', 'Wick', 'Yew', 'Thorn', 'Lark', 'Crow', 'Mallow', 'Hearth'],
+  suf: ['wood', 'combe', 'ford', 'by', 'well', 'moor', 'shaw', 'stead', 'field', 'brook', 'worth', 'gate', 'ley', 'hurst', 'mere', 'wick'],
+  fa: ['Al', 'Bel', 'Cor', 'Dun', 'El', 'Fen', 'Gil', 'Hal', 'Is', 'Jas', 'Kel', 'Lor', 'Mer', 'Nim', 'Ol', 'Per', 'Quil', 'Ros', 'Sel', 'Tam', 'Ver', 'Wil', 'Pip', 'Wren'],
+  fb: ['a', 'ric', 'wen', 'ith', 'o', 'an', 'eth', 'ys', 'ia', 'mund', 'ard', 'ella', 'in', 'ora', 'us', 'ette', 'wyn', ''],
+};
+function placeName(R) { const k = R(); if (k < .4) return `The ${pick(R, N.adj)} ${pick(R, N.place)}`; if (k < .7) return `${pick(R, N.place)} of ${pick(R, N.of)}`; return `${pick(R, N.pre)}${pick(R, N.suf)} ${pick(R, N.place)}`; }
+function personName(R) { return `${pick(R, N.fa)}${pick(R, N.fb)} ${pick(R, N.pre)}${pick(R, N.suf)}`; }
+
+function banner(x, text, cx, cy, size = 13, color = INK) {
+  x.save(); x.font = `${size}px ${SCRIPT}`; const tw = x.measureText(text).width + size * 2.4, h = size * 1.9, l = cx - tw / 2, r = cx + tw / 2, t = cy - h / 2, b = cy + h / 2;
+  x.fillStyle = 'rgba(236,222,190,.97)'; x.strokeStyle = INK; x.lineWidth = .9; x.lineJoin = 'round';
+  for (const s of [-1, 1]) { const ex = s < 0 ? l : r; x.beginPath(); x.moveTo(ex, t + 4); x.lineTo(ex + s * size * 1.1, t + 2); x.lineTo(ex + s * size * .6, cy + 2); x.lineTo(ex + s * size * 1.1, b + 4); x.lineTo(ex, b); x.closePath(); x.fill(); x.stroke(); }
+  x.beginPath(); x.moveTo(l, t); x.bezierCurveTo(cx - tw * .2, t - 3, cx + tw * .2, t + 3, r, t); x.lineTo(r, b); x.bezierCurveTo(cx + tw * .2, b + 3, cx - tw * .2, b - 3, l, b); x.closePath(); x.fill(); x.stroke();
+  x.fillStyle = color; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, cx, cy + 1); x.restore();
+}
+function compassRose(x, cx, cy, R) {
+  x.save(); x.translate(cx, cy);
+  x.strokeStyle = RED; x.lineWidth = .9; x.beginPath(); x.arc(0, 0, R * .62, 0, 7); x.stroke(); x.lineWidth = .6; x.beginPath(); x.arc(0, 0, R * .56, 0, 7); x.stroke();
+  const arm = (a, len, w) => { const tip = [Math.cos(a) * len, Math.sin(a) * len], l = [Math.cos(a - Math.PI / 2) * w, Math.sin(a - Math.PI / 2) * w], r = [Math.cos(a + Math.PI / 2) * w, Math.sin(a + Math.PI / 2) * w];
+    x.beginPath(); x.moveTo(0, 0); x.lineTo(...tip); x.lineTo(...l); x.closePath(); x.fillStyle = RED; x.fill(); x.stroke();
+    x.beginPath(); x.moveTo(0, 0); x.lineTo(...tip); x.lineTo(...r); x.closePath(); x.fillStyle = 'rgba(239,226,198,.9)'; x.fill(); x.stroke(); };
+  for (let i = 0; i < 4; i++) arm(Math.PI / 4 + i * Math.PI / 2, R * .6, R * .1);
+  for (let i = 0; i < 4; i++) arm(-Math.PI / 2 + i * Math.PI / 2, R, R * .15);
+  x.font = `${R * .3}px ${SCRIPT}`; x.fillStyle = RED; x.textAlign = 'center'; x.textBaseline = 'middle';
+  [['N', 0, -1.22], ['E', 1.22, 0], ['S', 0, 1.22], ['W', -1.22, 0]].forEach(([t, a, b]) => x.fillText(t, a * R, b * R));
+  x.restore();
+}
+
+/* ---------- the town: shape field lives in a worker; walls come back as letters every frame ---------- */
+const worker = new Worker('estate-worker.js');
+let deskI = 0, roads = [], citySeed = 1, generation = 0, building = false, townSeed = 1, morphStart = -1e9, MORPH_MS = 4200;
+let inflight = false, frameMs = 0, needFrame = true, inflightT0 = 0;
+worker.onerror = e => { try { webkit.messageHandlers.host.postMessage('JSERR worker ' + e.message + ' :' + e.lineno); } catch (_) {} };
+worker.onmessage = e => {
+  const d = e.data;
+  if (d.paper) { const p = $('paper'); p.width = d.paper.width; p.height = d.paper.height; p.getContext('2d').drawImage(d.paper, 0, 0); d.paper.close(); return; }
+  if (d.town && d.failed) { building = false; try { webkit.messageHandlers.host.postMessage('JSERR town ' + d.failed); } catch (_) {} return; }
+  if (d.town) {
+    building = false; fieldMs = d.ms; townGen = d.gen || 0;
+    if (growQueued) { const q = growQueued.seed; growQueued = null; setTimeout(() => grow(q), 0); }
+    // labels, round towers, splats: cross-fade between the old and new decor (after any cross-fade still running)
+    const apply = () => {
+    const back = decorFront === $('decorA') ? $('decorB') : $('decorA');
+    back.width = d.bitmap.width; back.height = d.bitmap.height;
+    const x = back.getContext('2d'); x.drawImage(d.bitmap, 0, 0); d.bitmap.close(); decorate(x, d.rings, d.spots);
+    const old = decorFront; back.style.opacity = 1; old.style.opacity = 0; decorFront = back;
+    clearTimeout(old._free); old._free = setTimeout(() => { if (old !== decorFront) { old.width = old.height = 1; } }, 3600);   // free ~24 MB
+    };
+    const nowD = performance.now(), at = Math.max(nowD, decorNext); decorNext = at + 3300;   // one cross-fade at a time, in order
+    if (at > nowD) setTimeout(apply, at - nowD); else apply();
+    roads = d.roads; for (const s of strangers) s.route = null;
+    morphStart = performance.now(); needFrame = true; wake();
+    return;
+  }
+  if (d.frame) { inflight = false; frameMs = d.ms || 0; ST.split = d.split; if (d.sent) ST.lat += performance.now() - d.sent, ST.latN++;
+    if (pending) worker.postMessage({ recycle: pending.inst }, [pending.inst.buffer]);   // superseded before it was shown
+    pending = d; if (!running) { running = true; lastT = 0; requestAnimationFrame(loop); } return; }
+};
+let decorFront = $("decorB"), pending = null, decorNext = 0;
+function grow(seed) {
+  if (building) { growQueued = { seed }; return; } building = true; buildT0 = performance.now();
+  townSeed = seed ?? hash(`${citySeed}:${generation++}`);
+  const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS); tFrozen = ease3(tm);
+  worker.postMessage({ town: true, W, H, K, seed: townSeed, t: tFrozen });
+}
+let growQueued = null, tFrozen = 0, townGen = 0, buildT0 = 0;
+// labels go only into open ground the town reported, and never overlap each other, the towers or the compass
+function decorate(x, rings, spots = []) {
+  x.setTransform(K, 0, 0, K, 0, 0);
+  const boxes = [[W * .09 - 70, H * .15 - 70, W * .09 + 70, H * .15 + 70]];
+  for (const rg of rings) boxes.push([rg.cx - rg.r - 8, rg.cy - rg.r - 8, rg.cx + rg.r + 8, rg.cy + rg.r + 8]);
+  const fits = (cx, cy, text, size) => {
+    x.font = `${size}px ${SCRIPT}`; const w = x.measureText(text).width + size * 4.6, h = size * 2.6;
+    const b = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
+    if (b[0] < 8 || b[1] < 8 || b[2] > W - 8 || b[3] > H - 8) return null;
+    return boxes.some(o => b[0] < o[2] + 14 && b[2] > o[0] - 14 && b[1] < o[3] + 14 && b[3] > o[1] - 14) ? null : b;
+  };
+  for (const rg of rings) {                          // a tower's name sits just beneath it
+    const name = placeName(rng(hash(`ring${townSeed}${rg.cx | 0}`))), cy = rg.cy + rg.r + 22, b = fits(rg.cx, cy, name, 11);
+    if (b) { boxes.push(b); banner(x, name, rg.cx, cy, 11); }
+  }
+  let placed = 0; const want = Math.round(W * H / 260000);
+  for (const [px, py] of spots) {
+    if (placed >= want) break;
+    const name = placeName(rng(hash(`b${townSeed}${px | 0}:${py | 0}`))), b = fits(px, py, name, 11.5);
+    if (!b) continue; boxes.push(b); banner(x, name, px, py, 11.5); placed++;
+  }
+  compassRose(x, W * .09, H * .15, 44);
+}
+
+/* ---------- GPU lettering: one instanced quad per letter, from a glyph atlas ---------- */
+const GLYPHS = 'ABCDEFGHILMNOPQRSTVX', AC = 8, AR = 3, CELL = 48, FONT_PX = 34;
+const gl = $('ink').getContext('webgl2', { premultipliedAlpha: true, antialias: true });
+const atlasCv = document.createElement('canvas'); atlasCv.width = AC * CELL; atlasCv.height = AR * CELL;
+const adv = (() => { const x = atlasCv.getContext('2d'); x.font = `${FONT_PX}px "Iowan Old Style", "Hoefler Text", Baskerville, serif`; x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  return [...GLYPHS].map((ch, i) => { x.fillText(ch, (i % AC + .5) * CELL, (Math.floor(i / AC) + .5) * CELL + 1); return x.measureText(ch).width / FONT_PX; }); })();
+worker.postMessage({ init: true, adv });
+const VS = `#version 300 es
+in vec2 aCorner; in vec4 aA; in vec2 aB;          // aA: x, y, angle, glyph   aB: alpha, size
+uniform vec2 uRes, uAtlas; uniform float uScale;
+out vec2 vUV; out float vA;
+void main() {
+  float c = cos(aA.z), s = sin(aA.z), sz = aB.y * uScale;
+  vec2 q = aCorner * sz, p = aA.xy + vec2(c * q.x - s * q.y, s * q.x + c * q.y);
+  gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.);
+  float g = aA.w; vUV = (vec2(mod(g, uAtlas.x), floor(g / uAtlas.x)) + aCorner + .5) / uAtlas; vA = aB.x;
+}`;
+const FS = `#version 300 es
+precision mediump float;
+uniform sampler2D uTex; in vec2 vUV; in float vA; out vec4 o;
+void main() { float a = texture(uTex, vUV).a * vA * .86; o = vec4(vec3(.245, .15, .085) * a, a); }`;
+function program(vs, fs) {
+  const sh = (t, src) => { const x = gl.createShader(t); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+  const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); return p;
+}
+const PR = program(VS, FS); gl.useProgram(PR);
+const U = {}; for (const k of ['uRes', 'uAtlas', 'uScale', 'uTex']) U[k] = gl.getUniformLocation(PR, k);
+const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-.5, -.5, .5, -.5, -.5, .5, .5, .5]), gl.STATIC_DRAW);
+const locC = gl.getAttribLocation(PR, 'aCorner'), locA = gl.getAttribLocation(PR, 'aA'), locB = gl.getAttribLocation(PR, 'aB');
+gl.enableVertexAttribArray(locC); gl.vertexAttribPointer(locC, 2, gl.FLOAT, false, 0, 0);
+let instCap = 0;
+const instBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+gl.enableVertexAttribArray(locA); gl.vertexAttribPointer(locA, 4, gl.FLOAT, false, 24, 0); gl.vertexAttribDivisor(locA, 1);
+gl.enableVertexAttribArray(locB); gl.vertexAttribPointer(locB, 2, gl.FLOAT, false, 24, 16); gl.vertexAttribDivisor(locB, 1);
+const atlas = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, atlas);
+gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasCv); gl.generateMipmap(gl.TEXTURE_2D);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+function drawGlyphs(inst, n) {
+  ST.draws++; { const nw = performance.now(); if (ST.lastDraw && nw - ST.lastDraw < 500) ST.dgap = Math.max(ST.dgap || 0, nw - ST.lastDraw); ST.lastDraw = nw; }
+  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  if (!n) return;
+  gl.useProgram(PR); gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
+  if (n * 6 > instCap) { instCap = Math.max(n * 6, instCap * 2); gl.bufferData(gl.ARRAY_BUFFER, instCap * 4, gl.DYNAMIC_DRAW); }
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst.subarray(0, n * 6));
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, atlas); gl.uniform1i(U.uTex, 0);
+  gl.uniform2f(U.uRes, W, H); gl.uniform2f(U.uAtlas, AC, AR); gl.uniform1f(U.uScale, CELL / FONT_PX);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
+}
+
+/* ---------- windows: eased toward where they really are; new ones push in, closed ones let go ---------- */
+let cur = [];
+function setTargets(list) {
+  const used = new Set();
+  for (const t of list) {
+    let best = null, bd = 1e9;
+    for (const c of cur) { if (used.has(c)) continue;
+      if (c.owner !== t.owner || !c.alive && c.life < .2) continue;   // only the same app's window can take this slot
+      const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2) + Math.abs(c.tw - t.w) * .5 + Math.abs(c.th - t.h) * .5;
+      if (d < bd) { bd = d; best = c; } }
+    if (best) {                     // same app → same slot, however far it jumped (minimise → Stage Manager strip)
+      used.add(best);
+      // velocity of the real window (for a little look-ahead while you drag)
+      const now = performance.now(), dtv = Math.max(1, now - (best.tT || now - 16)) / 1000;
+      // a jump (reveal-desktop click, minimise to the strip, Stage Manager shuffle) is not a drag: glide it
+      if (Math.hypot(t.x - best.tx, t.y - best.ty) > 60 || Math.abs(t.w - best.tw) > 40 || Math.abs(t.h - best.th) > 40) { best.glideUntil = now + 700; best.vx = best.vy = 0; best.tT = now; }
+      const vx = (t.x - best.tx) / dtv, vy = (t.y - best.ty) / dtv;
+      if (!(best.glideUntil > now)) { best.vx = (best.vx || 0) * .4 + vx * .6; best.vy = (best.vy || 0) * .4 + vy * .6; } best.tT = now;
+      Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, alive: true });
+    }
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, life: 0, alive: true }; cur.push(c); used.add(c); }
+  }
+  for (const c of cur) if (!used.has(c)) c.alive = false;
+  needFrame = true; wake();
+}
+let liveUntil = 0, animating = false, morphTick = 0;
+function stepWins(dt) {
+  // while you drag, the town keeps right up with the window; settling moves are softer
+  const live = performance.now() < liveUntil;
+  // dragging: stick to the window. Automatic jumps (minimise into the strip, Stage Manager shuffles): a quick,
+  // visible glide (~⅓ s) so the court flies with the window and the town grows back behind it.
+  let moving = false; const kl = 1 - Math.exp(-dt * 3.2), now = performance.now();
+  for (const c of cur) {
+    const hand = live && !(c.glideUntil > now);          // only continuous motion under your hand sticks; jumps glide
+    const k = hand ? 1 - Math.exp(-dt * 70) : 1 - Math.exp(-dt * 5.5);
+    // while dragging, macOS reports positions less often than the display refreshes. Between reports, carry
+    // the window forward on its own velocity (dead reckoning, capped at 45 ms ahead), and let each new report
+    // blend in — so the town glides at full frame rate instead of stepping from report to report.
+    const age = c.tT ? (now - c.tT) / 1000 : 1, fresh = hand && age < .09;
+    const lead = fresh ? Math.min(age + .018, .045) * Math.max(0, 1 - age / .09) : 0;
+    const gx = c.tx + (c.vx || 0) * lead, gy = c.ty + (c.vy || 0) * lead;
+    if (!fresh) { c.vx = 0; c.vy = 0; } else moving = true;
+    for (const [a, g] of [['x', gx], ['y', gy], ['w', c.tw], ['h', c.th]]) { const d = g - c[a]; if (Math.abs(d) > .2) { c[a] += d * k; moving = true; } else c[a] = g; }
+    const lt = c.alive ? 1 : 0, dl = lt - c.life; if (Math.abs(dl) > .003) { c.life += dl * kl; moving = true; } else c.life = lt;
+  }
+  cur = cur.filter(c => c.alive || c.life > .003);
+  return moving;
+}
+const hallTags = new Map();
+function drawHalls() {   // a red scroll naming each app's hall: a small sprite moved by the compositor
+  const seen = new Set(), best = new Map();
+  for (const c of cur) {
+    if (!c.owner || c.owner === 'WindowManager' || c.w * c.h < 60000) continue;
+    const b = best.get(c.owner); if (!b || c.life * c.w * c.h > b.life * b.w * b.h) best.set(c.owner, c);
+  }
+  // each tag takes the first spot that's clear of every window, every other tag and the screen edge; it keeps its last spot while that stays clear
+  const taken = [], rects = cur.filter(c => c.alive).map(c => [c.x - 4, c.y - 4, c.x + c.w + 4, c.y + c.h + 4]);
+  const clear = b => b[0] > 6 && b[1] > 6 && b[2] < W - 6 && b[3] < H - 6 && !rects.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]) && !taken.some(o => b[0] < o[2] + 26 && b[2] > o[0] - 26 && b[1] < o[3] + 4 && b[3] > o[1] - 4);
+  for (const c of [...best.values()].sort((a, b) => b.w * b.h - a.w * a.h)) {
+    seen.add(c.owner);
+    let el = hallTags.get(c.owner);
+    if (!el) {
+      const name = placeName(rng(hash('hall:' + c.owner))), m = document.createElement('canvas').getContext('2d'); m.font = `14px ${SCRIPT}`;
+      const tw = Math.ceil(m.measureText(name).width) + 52, th = 34; el = document.createElement('canvas');
+      el.width = tw * K; el.height = th * K; el.style.cssText = `position:fixed;left:0;top:0;width:${tw}px;height:${th}px;pointer-events:none;will-change:transform,opacity`;
+      const x = el.getContext('2d'); x.scale(K, K); banner(x, name, tw / 2, th / 2, 14, RED); el._w = tw; el._h = th;
+      document.body.appendChild(el); hallTags.set(c.owner, el);
+    }
+    const spots = [[c.x + c.w / 2, c.y - 26], [c.x + c.w / 2, c.y + c.h + 28], [c.x + 20 + el._w / 2, c.y - 26], [c.x + c.w - 20 - el._w / 2, c.y + c.h + 28],
+                   [c.x + c.w - 20 - el._w / 2, c.y - 26], [c.x + 20 + el._w / 2, c.y + c.h + 28]];
+    const box = ([x, y]) => [x - el._w / 2 + 14, y - el._h / 2 + 6, x + el._w / 2 - 14, y + el._h / 2 - 6];   // the scroll's ends may tuck in
+    let k = el._spot != null && clear(box(spots[el._spot])) ? el._spot : spots.findIndex(sp => clear(box(sp)));
+    const hide = k < 0; if (hide) k = el._spot ?? 0; el._spot = hide ? el._spot : k;
+    const [cx, cy] = spots[k]; if (!hide) taken.push(box(spots[k]));
+    if (el._leaving) { clearTimeout(el._leaving); el._leaving = 0; el.style.transition = ''; }
+    el.style.transform = `translate3d(${(cx - el._w / 2).toFixed(1)}px,${(cy - el._h / 2).toFixed(1)}px,0)`; el.style.transition = 'opacity .4s ease'; el.style.opacity = hide ? 0 : c.life.toFixed(3);
+  }
+  for (const [k, el] of hallTags) if (!seen.has(k) && !el._leaving) {
+    el.style.transition = 'opacity .6s ease'; el.style.opacity = 0;
+    el._leaving = setTimeout(() => { el.remove(); if (hallTags.get(k) === el) hallTags.delete(k); }, 650);
+  }
+}
+
+/* ---------- the loop: only while windows glide or the town is morphing ---------- */
+let running = false, lastT = 0, settledAt = 0, layoutKey = '';
+// the arrangement of your (big) windows, coarsely: a meaningful rearrangement grows a different town
+function maybeNewTown() {
+  if (building && performance.now() - buildT0 > 10000) building = false;          // lost town: allow a new one
+  if (!booted || building) return;
+  const key = cur.filter(c => c.alive && c.w * c.h >= 60000).map(c => `${c.owner}@${Math.round((c.x + c.w / 2) / 260)},${Math.round((c.y + c.h / 2) / 260)}:${Math.round(c.w / 300)}x${Math.round(c.h / 300)}`).sort().join('|');
+  if (key === layoutKey) return;
+  const first = layoutKey === ''; layoutKey = key;
+  if (!first) grow(hash(`${citySeed}|${key}`));
+}
+const ease3 = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
+const ST = { msgs: 0, draws: 0, lat: 0, latN: 0, rafs: 0 };
+setInterval(() => { if (ST.msgs || ST.draws) { try { webkit.messageHandlers.host.postMessage(`STAT winMsgs/s=${ST.msgs} draws/s=${ST.draws} rafs/s=${ST.rafs} worker+trip=${(ST.lat / Math.max(1, ST.latN)).toFixed(1)}ms frame=${frameMs}ms msgGap=${(ST.gap || 0) | 0}ms busy=${(ST.busy || 0) | 0}ms/s lives=${cur.map(c => c.life.toFixed(2)).join(',')} paused=${paused} run=${running} inflight=${inflight} pend=${!!pending} drawGap=${(ST.dgap || 0) | 0}ms [${ST.split}]`); } catch (_) {} }
+  ST.msgs = ST.draws = ST.lat = ST.latN = ST.rafs = 0; ST.gap = ST.dgap = ST.busy = 0; }, 1000);
+function loop(now) { const lt0 = performance.now(); loop0(now); ST.busy = (ST.busy || 0) + performance.now() - lt0; }
+function loop0(now) {
+  ST.rafs++;
+  if (paused) { running = false; return; }
+  const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60;
+  if (lastT) fpsEMA = fpsEMA ? fpsEMA * .9 + .1 / dt : 1 / dt;
+  lastT = now;
+  // 1) show the newest finished frame — exactly once per display refresh
+  if (pending) { drawGlyphs(pending.inst, pending.n); worker.postMessage({ recycle: pending.inst }, [pending.inst.buffer]); pending = null; }
+  // 2) advance the eased state and ask for the next frame right away, so it lands before the next refresh
+  const moving = stepWins(dt), morphing = (now - morphStart) < MORPH_MS;
+  animating = moving || morphing;
+  // window motion: every refresh; a slow town morph on its own: every other refresh (looks identical, half the work)
+  morphTick ^= 1;
+  if (moving || needFrame || (morphing && morphTick)) { needFrame = false; requestFrame(); }
+  if (moving) drawHalls();
+  if (moving) settledAt = now; else if (now - settledAt > 1200) maybeNewTown();
+  if (animating || inflight || pending) requestAnimationFrame(loop); else { drawHalls(); running = false; setTimeout(maybeNewTown, 1300); }
+}
+// one frame in flight at a time; the next is asked for the moment the last one lands (no idle gap)
+function requestFrame() {
+  if (inflight && performance.now() - inflightT0 > 1500) inflight = false;           // lost reply: ask again
+  if (inflight) { needFrame = true; return; }
+  inflight = true; inflightT0 = performance.now();
+  const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS);
+  worker.postMessage({ frame: true, sent: performance.now(), t: building ? tFrozen : ease3(tm), gen: townGen, wins: cur.map(c => ({ x: c.x, y: c.y, w: c.w, h: c.h, life: c.life })) });
+}
+
+/* ---------- shoeprints, walkers ---------- */
+function shoe(left) {
+  const c = document.createElement('canvas'), w = 8, h = 18; c.width = w * K; c.height = h * K;
+  const x = c.getContext('2d'); x.scale(K, K); if (left) { x.translate(w, 0); x.scale(-1, 1); }
+  x.fillStyle = 'rgb(112,40,28)';
+  const sole = new Path2D();
+  sole.moveTo(3.8, .5); sole.bezierCurveTo(6.6, .5, 7.5, 4, 7.1, 6.7); sole.bezierCurveTo(6.8, 8.8, 6.1, 10, 5.7, 11);
+  sole.lineTo(2.1, 11); sole.bezierCurveTo(1.4, 9.7, .4, 7.7, .5, 5.6); sole.bezierCurveTo(.6, 2.3, 1.7, .5, 3.8, .5); sole.closePath(); x.fill(sole);
+  x.beginPath(); x.roundRect(1.7, 12.2, 4.4, 5.2, [1, 1, 2.2, 2.2]); x.fill();
+  x.globalCompositeOperation = 'destination-out'; x.strokeStyle = 'rgba(0,0,0,.5)'; x.lineWidth = .4;
+  x.beginPath(); for (let y = 2.4; y < 10.6; y += 1.7) { x.moveTo(.4, y); x.lineTo(7.6, y + .4); } for (let y = 13.6; y < 17.2; y += 1.5) { x.moveTo(1.4, y); x.lineTo(6.6, y); } x.stroke();
+  return c.toDataURL();
+}
+const SHOES = [shoe(true), shoe(false)];
+function makeTag(name, color) {
+  const c = document.createElement('canvas'), m = c.getContext('2d'); m.font = `12px ${SCRIPT}`;
+  const tw = Math.ceil(m.measureText(name).width) + 44, th = 28; c.width = tw * K; c.height = th * K; c.style.width = tw + 'px'; c.style.height = th + 'px'; c.className = 'tag';
+  const x = c.getContext('2d'); x.scale(K, K); banner(x, name, tw / 2, th / 2, 12, color); document.body.appendChild(c); return c;
+}
+const SPREAD = 3.4;
+let liveSteps = 0;
+class Walker {
+  constructor(name, color, { stride = 32, trail = 0, mine = false } = {}) {
+    this.tag = makeTag(name, color); this.sm = null; this.dist = 0; this.side = 0; this.heading = null; this.stride = stride; this.trail = trail; this.mine = mine; this.prints = []; this.timer = null;
+  }
+  place(x, y) { this.sm = { x, y }; this.dist = 0; }
+  stamp(px, py, ang) {
+    if (liveSteps > 80) return;
+    const img = document.createElement('img'); img.src = SHOES[this.side]; img.className = this.mine ? 'step mine' : 'step'; img.width = 8; img.height = 18;
+    const o = this.side ? SPREAD : -SPREAD, nx = -Math.sin(ang) * o, ny = Math.cos(ang) * o;
+    img.style.transform = `translate3d(${(px + nx - 4).toFixed(2)}px,${(py + ny - 9).toFixed(2)}px,0) rotate(${(ang * 57.2958 + 90).toFixed(1)}deg)`;
+    const done = () => { if (img.isConnected) { img.remove(); liveSteps--; } };
+    img.addEventListener('animationend', done);
+    document.body.insertBefore(img, document.querySelector('.tag')); liveSteps++; this.side ^= 1;
+    if (this.trail) {                                  // short trail: retire the oldest prints gently
+      this.prints.push(img);
+      while (this.prints.length > this.trail) { const old = this.prints.shift(); old.style.setProperty('--from', getComputedStyle(old).opacity); old.style.animation = 'gone .9s ease forwards'; }
+    }
+    this.tag.style.opacity = 1; const tw = parseFloat(this.tag.style.width) || 120, th = parseFloat(this.tag.style.height) || 28;   // the name stays on the page, whatever the walker does
+    this.tag.style.transform = `translate3d(${Math.min(px + 14, W - tw - 6).toFixed(1)}px,${Math.min(py + 10, H - th - 6).toFixed(1)}px,0)`;
+    clearTimeout(this.timer); this.timer = setTimeout(() => this.tag.style.opacity = 0, 3000);
+  }
+  // walk in a straight segment to (nx, ny), laying prints every stride
+  move(nx, ny) {
+    if (!this.sm) { this.place(nx, ny); return; }
+    const dx = nx - this.sm.x, dy = ny - this.sm.y, d = Math.hypot(dx, dy);
+    if (d < .01) return;
+    const a = Math.atan2(dy, dx);
+    if (this.heading === null) this.heading = a;
+    let da = a - this.heading; da = Math.atan2(Math.sin(da), Math.cos(da)); this.heading += da * .6;
+    let t = this.stride - this.dist;
+    while (t <= d) { this.stamp(this.sm.x + dx * t / d, this.sm.y + dy * t / d, this.heading); t += this.stride; }
+    this.dist = (this.dist + d) % this.stride; this.sm = { x: nx, y: ny };
+  }
+}
+// you: a walker who follows the cursor at walking pace, leaving a short trail
+let me = null, target = null, chasing = false, chaseT = 0;
+function chase(now) {
+  if (!target || !me || paused) { chasing = false; return; }
+  const dt = chaseT ? Math.min((now - chaseT) / 1000, .05) : 1 / 60; chaseT = now;
+  const dx = target.x - me.sm.x, dy = target.y - me.sm.y, d = Math.hypot(dx, dy);
+  if (d < 1) { chasing = false; chaseT = 0; return; }
+  const step = Math.min(d * (1 - Math.exp(-dt * 6)), 170 * dt);     // eased, but never faster than a brisk walk
+  me.move(me.sm.x + dx / d * step, me.sm.y + dy / d * step);
+  requestAnimationFrame(chase);
+}
+// strangers: they walk the streets, turning onto the nearest connecting street at each end
+const strangers = [];
+function nearestOnRoads(p, skip) {
+  let best = null, bd = 1e9;
+  for (const r of roads) { if (r === skip) continue; for (let i = 0; i < r.length; i++) { const d = Math.hypot(r[i][0] - p.x, r[i][1] - p.y); if (d < bd) { bd = d; best = { r, i }; } } }
+  return best ? { ...best, d: bd } : null;
+}
+function onScreen(q) { return q[0] > 10 && q[1] > 10 && q[0] < W - 10 && q[1] < H - 10; }
+function newRoute(s) {
+  if (!roads.length) return;
+  if (!s.p) { const r = roads[Math.floor(s.R() * roads.length)], i = Math.floor(s.R() * r.length); if (!onScreen(r[i])) return; s.p = { x: r[i][0], y: r[i][1] }; s.w.place(s.p.x, s.p.y); }
+  const near = nearestOnRoads(s.p, null); if (!near) return;
+  s.route = near.r; s.i = near.i; s.dir = s.R() < .5 ? 1 : -1;
+}
+function startStrangers(seed) {
+  const R = rng(seed);
+  for (let i = 0; i < 4; i++) strangers.push({ w: new Walker(personName(R), INK, { stride: 28 }), v: 10 + R() * 6, R: rng(seed + i + 1), p: null, route: null });
+  let last = performance.now();
+  setInterval(() => {
+    const now = performance.now(), dt = Math.min((now - last) / 1000, .2); last = now;
+    if (paused || !roads.length) return;
+    for (const s of strangers) {
+      if (!s.route) { newRoute(s); continue; }
+      let budget = s.v * dt;
+      while (budget > 0) {
+        const n = s.route[s.i];
+        if (!n) {                                        // end of this street: turn onto a nearby one, or turn back
+          const next = nearestOnRoads(s.p, s.route);
+          if (next && next.d < 26) { s.route = next.r; s.i = next.i; s.dir = s.R() < .5 ? 1 : -1; }
+          else { s.dir = -s.dir; s.i = Math.max(0, Math.min(s.route.length - 1, s.i + s.dir * 2)); }
+          break;
+        }
+        const dx = n[0] - s.p.x, dy = n[1] - s.p.y, d = Math.hypot(dx, dy);
+        if (d <= budget) { s.p.x = n[0]; s.p.y = n[1]; budget -= d; s.i += s.dir; }
+        else { s.p.x += dx / d * budget; s.p.y += dy / d * budget; budget = 0; }
+      }
+      if (!onScreen([s.p.x, s.p.y])) { s.dir = -s.dir; s.i += s.dir * 2; }
+      s.w.move(s.p.x, s.p.y);
+    }
+  }, 100);
+}
+
+/* ---------- boot + host protocol ---------- */
+function size() {
+  W = innerWidth; H = innerHeight;
+  { const c = $('ink'); c.width = Math.round(W * K); c.height = Math.round(H * K); }
+  needFrame = true; if (typeof wake === 'function') wake();
+}
+size();
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { size(); worker.postMessage({ paper: true, W, H, K, seed: citySeed }); grow(); }, 250); });
+let FB = null; function commit() { } function refresh() { }
+window.__dbg = () => `steps=${document.querySelectorAll('.step').length} me=${!!(me && me.sm)} town=${fieldMs}ms frame=${frameMs}ms wins=${cur.length}`;
+let booted = false;
+const handle0 = m => {
+  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'desk') { deskI = m.i | 0; return; }
+  if (m.t === 'me') {
+    citySeed = ((m.seed >>> 0) ^ Math.imul(deskI, 0x9E3779B9)) >>> 0 || 1;   // each display grows its own town
+    if (!booted) { booted = true; worker.postMessage({ paper: true, W, H, K, seed: citySeed }); grow();
+    }
+    if (!me) { me = new Walker(personName(rng(citySeed)), RED, { stride: 30, trail: 9, mine: true }); startStrangers(citySeed + 7); }
+    return;
+  }
+  if (m.t === 'cursor') {
+    if (paused || !me) return; target = { x: m.x / K, y: m.y / K };
+    if (!me.sm) me.place(target.x, target.y);
+    if (!chasing) { chasing = true; chaseT = 0; requestAnimationFrame(chase); }
+    return;
+  }
+  if (m.t === 'windows') { ST.msgs++; const nw = performance.now(); if (ST.lastMsg) ST.gap = Math.max(ST.gap || 0, nw - ST.lastMsg); ST.lastMsg = nw; liveUntil = m.live ? nw + 250 : 0; }
+  if (m.t === 'windows') setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })));
+};
+const handle = m => { const t0 = performance.now(); handle0(m); ST.busy = (ST.busy || 0) + performance.now() - t0; };
+const host = window.chrome && window.chrome.webview;
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
+else {
+  handle({ t: 'me', seed: 42 });
+  handle({ t: 'windows', r: [[W * .35 * K, H * .3 * K, W * .7 * K, H * .66 * K]], n: ['Slack'] });
+  addEventListener('mousemove', e => handle({ t: 'cursor', x: e.clientX * K, y: e.clientY * K }));
+}
+</script>
+</body>
+</html>
