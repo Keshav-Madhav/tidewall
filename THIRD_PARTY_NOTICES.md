@@ -43,3 +43,9 @@ three.js r169 (core module, GLTFLoader, DRACOLoader, RoomEnvironment, BufferGeom
 
 ## Painted textures (Snowfall, Meadow, Beach)
 `themes/snow/backdrop.jpg`, `themes/meadow_grass.jpg` and `themes/beach_sand.jpg` were generated for these themes with Google Gemini (Nano Banana Pro) and made seamless locally.
+
+## Model Railway (themes/railway/)
+
+The building and tree atlases (`houses.webp`, `trees.webp`, `atlas.json`) are original stylized toy-model renders generated
+for Driftland with Google Gemini (gemini-3-pro-image), then keyed and cut out by hand. No third-party artwork or trademarks
+are reproduced. Everything else on the board (land, water, track, trains, cars, boats, balloon) is drawn in code.

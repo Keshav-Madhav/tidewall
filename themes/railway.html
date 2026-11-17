@@ -1,0 +1,1344 @@
+<!doctype html>
+<!--
+  Model Railway — a Driftland theme. Your desktop is a toy railway diorama: soft green baseboard in a timber frame,
+  hills built up in layers like cut foam (grass, then rock, then snow on the peaks), a sunken river with sandy banks,
+  fields, forests and farms. Your windows are towns: a road round each (little cars drive it), two rows of toy houses.
+
+  The railway is one network. The main line runs round the board in easy curves, through tunnels where the ground rises
+  and over red girder bridges at the river. Towns beside it get a station with a passing loop (the express stops at the
+  platform while the freight takes the loop and overtakes; the switches and their lamps change for it). Towns out in
+  the country get a branch line that leaves the main line at a junction and runs to a terminus by the town, worked by a
+  little push-pull shuttle. Rest your cursor beside any line and a signal stops the next train.
+
+  Cheap by design: the board is one picture, redrawn only when something on it changes; while windows move it is
+  redrawn a few times a second and each new picture blends over the last (no per-frame rebuilds). Trains, cars, boats,
+  steam and the balloon are small pictures the compositor slides around. Buildings and trees are generated toy-model
+  renders (see THIRD_PARTY_NOTICES.md).
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Model Railway</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #93c96b; }
+  canvas.board { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+  .sprite { position: fixed; left: 0; top: 0; pointer-events: none; will-change: transform; z-index: 2; }
+  .puff { position: fixed; left: 0; top: 0; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; pointer-events: none; z-index: 3;
+    background: radial-gradient(circle at 38% 34%, #fff 0%, #f6f6f3 38%, #dcdcd6 64%, rgba(215,215,208,0) 71%);
+    animation: puff 2.3s cubic-bezier(.2,.7,.3,1) forwards; }
+  .xl { position: fixed; left: 0; top: 0; width: 3.4px; height: 3.4px; margin: -1.7px 0 0 -1.7px; border-radius: 50%; pointer-events: none; z-index: 3; background: #ff4b3a; box-shadow: 0 0 4px 1.5px rgba(255,75,58,.7); opacity: 0; transition: opacity .3s; }
+  .xl.on { animation: blink .9s steps(1) infinite; }
+  .xl.on.b { animation-delay: .45s; }
+  @keyframes blink { 0% { opacity: 1; } 50% { opacity: .08; } }
+  @keyframes puff { from { opacity: 1; transform: translate(var(--x0), var(--y0)) scale(.45); } to { opacity: 0; transform: translate(var(--x1), var(--y1)) scale(2.2); } }
+</style>
+</head>
+<body>
+<canvas id="board" class="board"></canvas>
+<script>
+'use strict';
+window.__noMask = true;
+let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
+const P = { quality: 1 };                                              // read by the host's bench probe
+let FB = null; function commit() { } function refresh() { }          // hooks the host calls on every theme
+const post = s => { try { webkit.messageHandlers.host.postMessage(s); } catch (_) { console.log(s); } };
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const h1 = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+let SEED = 0;
+
+/* ======================= noise ======================= */
+function hash(i, j) { let h = (i * 374761393 + j * 668265263 + SEED * 144665 + 1013) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function vnoise(x, y) { const i = Math.floor(x), j = Math.floor(y), fx = x - i, fy = y - j, u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+  const a = hash(i, j), b = hash(i + 1, j), c = hash(i, j + 1), d = hash(i + 1, j + 1); return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v; }
+function fbm(x, y, o) { let s = 0, a = .5, f = 1, n = 0; for (let k = 0; k < o; k++) { s += a * vnoise(x * f + k * 17.3, y * f - k * 9.1); n += a; f *= 2.03; a *= .5; } return s / n; }
+
+/* ======================= the layout's geometry ======================= */
+const VERGE = 7, ROAD = 9, HOUSE_GAP = VERGE + ROAD + 3, ROW2 = 40, TOP = 30;   // a grass verge, then a road round each town's window, two rows of houses beyond; TOP: the menu bar
+const T = 76, EDGE = 40, FRAME = 14;                                  // the main line keeps T from the windows, EDGE from the board's edge
+const G = 6, SM = 110, STEP = 3;                                      // field grid (pt), how wide the line's fillets are, track sample spacing
+const LV = [.1, .22, .35, .48, .62, .76, .9], TUN = .48;              // the hills, layer by layer: grass ×4, rock ×2, snow
+const LV_TOP = ['#a5d673', '#b3dd7d', '#c1e489', '#cdea94', '#d3cab9', '#e0d9cb', '#f7f9fc'];
+const LV_SIDE = ['#5c9140', '#679b47', '#72a44f', '#7dad57', '#948a79', '#a3998a', '#b6c3d4'];
+const LIFT = 5, LOOP_OFF = 10, LOOP_HALF = 112;                       // layer edge height; passing loop: track spacing, half length
+let slots = [], nextId = 1, lastKey = '';
+function sdRB(px, py, cx, cy, bx_, by_, r) { const qx = Math.abs(px - cx) - bx_ + r, qy = Math.abs(py - cy) - by_ + r; return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r; }
+const smax = (a, b, k) => { const h = clamp(.5 - .5 * (b - a) / k, 0, 1); return a * h + b * (1 - h) + k * h * (1 - h); };
+// distance to the nearest window (eased: a window that's arriving or leaving grows/shrinks its block)
+function eWin(x, y) { let e = 1e5; for (const s of slots) e = Math.min(e, sdRB(x, y, s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 10) + (1 - s.life) * (T + 30)); return e; }
+
+function setTargets(list) {
+  const key = list.map(t => `${t.x | 0},${t.y | 0},${t.w | 0},${t.h | 0},${t.owner},${t.sm}`).join(';');
+  if (key === lastKey) return; lastKey = key;                        // nothing changed on this screen: nothing to redo
+  const sm = list.filter(t => t.sm), rest = list.filter(t => !t.sm && t.w >= 50 && t.h >= 40 && t.x > -20);
+  if (sm.length) { const x0 = Math.min(...sm.map(t => t.x)), y0 = Math.min(...sm.map(t => t.y)), x1 = Math.max(...sm.map(t => t.x + t.w)), y1 = Math.max(...sm.map(t => t.y + t.h));
+    rest.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, owner: 'Stage Manager', stage: true }); }
+  const used = new Set();
+  for (const t of rest.slice(0, 16)) {
+    let best = null, bd = 1e9;
+    for (const c of slots) { if (used.has(c) || !c.alive || c.owner !== t.owner) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
+    else { const c = { id: nextId++, owner: t.owner, stage: !!t.stage, x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, life: 0, alive: true }; slots.push(c); used.add(c); }
+  }
+  for (const c of slots) c.town = !c.stage && c.tw >= 200 && c.th >= 140 && c.owner !== 'Notification Centre';   // a town for a real app window; Stage Manager and widgets are just open ground
+  for (const c of slots) if (!used.has(c)) c.alive = false;
+  dirty = true; wake();
+}
+function stepLayout(dt) {
+  let changed = false;
+  for (const c of slots) { for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) if (c[a] !== c[b]) { c[a] = c[b]; changed = true; }
+    const lt = c.alive ? 1 : 0; if (c.life !== lt) { c.life = lt; changed = true; } }
+  const n = slots.length; slots = slots.filter(c => c.alive); return changed || slots.length !== n;
+}
+
+/* ======================= grids, contours, polylines ======================= */
+function samp(A, nx, ny, cell, x, y) { const fx = clamp(x / cell, 0, nx - 1.001), fy = clamp(y / cell, 0, ny - 1.001), i = fx | 0, j = fy | 0, u = fx - i, v = fy - j, k = j * nx + i;
+  return (A[k] * (1 - u) + A[k + 1] * u) * (1 - v) + (A[k + nx] * (1 - u) + A[k + nx + 1] * u) * v; }
+// closed rings round the region where v < 0 (the grid's border counts as outside, so every ring closes); edges: 0 top, 1 right, 2 bottom, 3 left
+const SEGS = [null, [3, 0], [0, 1], [3, 1], [1, 2], [3, 0, 1, 2], [0, 2], [3, 2], [2, 3], [2, 0], [0, 1, 2, 3], [2, 1], [1, 3], [1, 0], [0, 3], null];
+let CB = null;                                                        // scratch buffers, reused (no garbage per rebuild)
+function contours(v0, nx0, ny0, cell, minPts) {
+  const nx = nx0 + 2, ny = ny0 + 2, N = nx * ny;
+  if (!CB || CB.N < N) CB = { N, v: new Float32Array(N), nxt: new Int32Array(2 * N), px: new Float32Array(2 * N), py: new Float32Array(2 * N), st: new Int32Array(2 * N), sn: new Int32Array(2 * N), gen: 0, keys: new Int32Array(2 * N) };
+  const { v, nxt, px, py, st, sn, keys } = CB, gen = ++CB.gen; let nk = 0;
+  v.fill(1, 0, N);
+  for (let j = 0; j < ny0; j++) for (let i = 0; i < nx0; i++) { const a = v0[j * nx0 + i]; v[(j + 1) * nx + i + 1] = a === 0 ? 1e-6 : a; }
+  const pt = (i, j, e) => { const k = 2 * (j * nx + i) + e; if (st[k] !== gen) { st[k] = gen; const a = v[j * nx + i], b = e === 0 ? v[j * nx + i + 1] : v[(j + 1) * nx + i], t = a / (a - b);
+      px[k] = e === 0 ? (i - 1 + t) * cell : (i - 1) * cell; py[k] = e === 0 ? (j - 1) * cell : (j - 1 + t) * cell; } return k; };
+  const E = (i, j, e) => e === 0 ? pt(i, j, 0) : e === 1 ? pt(i + 1, j, 1) : e === 2 ? pt(i, j + 1, 0) : pt(i, j, 1);
+  for (let j = 0; j < ny - 1; j++) { const r0 = j * nx, r1 = r0 + nx; for (let i = 0; i < nx - 1; i++) {
+    const idx = (v[r0 + i] < 0 ? 1 : 0) | (v[r0 + i + 1] < 0 ? 2 : 0) | (v[r1 + i + 1] < 0 ? 4 : 0) | (v[r1 + i] < 0 ? 8 : 0);
+    const sg = SEGS[idx]; if (!sg) continue;
+    for (let q = 0; q < sg.length; q += 2) { const a = E(i, j, sg[q]), b = E(i, j, sg[q + 1]); nxt[a] = b; sn[a] = gen; keys[nk++] = a; } } }
+  const out = [];
+  for (let q = 0; q < nk; q++) { const s0 = keys[q]; if (sn[s0] !== gen) continue;
+    const ring = []; let k = s0; while (sn[k] === gen) { sn[k] = -gen; ring.push([px[k], py[k]]); k = nxt[k]; }
+    if (k === s0 && ring.length >= minPts) out.push(ring); }
+  return out;
+}
+function chaikin(ring, it) { for (let n = 0; n < it; n++) { const r2 = []; for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; r2.push([a[0] * .75 + b[0] * .25, a[1] * .75 + b[1] * .25], [a[0] * .25 + b[0] * .75, a[1] * .25 + b[1] * .75]); } ring = r2; } return ring; }
+function ringsPath(rings) { const p = new Path2D(); for (const r of rings) { p.moveTo(r[0][0], r[0][1]); for (let i = 1; i < r.length; i++) p.lineTo(r[i][0], r[i][1]); p.closePath(); } return p; }
+// even spacing along a polyline
+function resample(pts, step, closed) {
+  const n = pts.length, m = closed ? n : n - 1, out = [pts[0].slice()]; let need = step;
+  for (let i = 0; i < m; i++) { const a = pts[i], b = pts[(i + 1) % n], d = Math.hypot(b[0] - a[0], b[1] - a[1]); let t0 = 0;
+    while (d - t0 >= need) { t0 += need; const f = t0 / d; out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]); need = step; }
+    need -= d - t0; }
+  if (closed) { const l = out[out.length - 1]; if (Math.hypot(l[0] - out[0][0], l[1] - out[0][1]) < step * .5) out.pop(); }
+  else { const l = out[out.length - 1], e = pts[n - 1]; if (Math.hypot(l[0] - e[0], l[1] - e[1]) > step * .3) out.push(e.slice()); }
+  return out;
+}
+// relax a polyline toward its neighbours' average: irons out kinks so every curve is an easy one
+function laplace(pts, it, a, closed, fixA = 1, fixB = 1) {
+  const n = pts.length;
+  for (let k = 0; k < it; k++) { const q = pts.map(p => p.slice());
+    for (let i = 0; i < n; i++) { if (!closed && (i < fixA || i >= n - fixB)) continue; const p0 = pts[(i - 1 + n) % n], p1 = pts[(i + 1) % n];
+      q[i][0] += a * ((p0[0] + p1[0]) / 2 - pts[i][0]); q[i][1] += a * ((p0[1] + p1[1]) / 2 - pts[i][1]); }
+    pts = q; }
+  return pts;
+}
+
+/* ======================= the land: fixed per board, flattened round the towns ======================= */
+let nxT, nyT, H0, N2, Hh, Wf, nxS = 2, nyS = 2, Sg = new Float32Array(4), EWg = new Float32Array(4).fill(1e5), levelPaths = [], waterPath = null, rivers = [], sparkles = [];
+function buildStatic() {
+  nxT = Math.ceil(W / G) + 2; nyT = Math.ceil(H / G) + 2; H0 = new Float32Array(nxT * nyT); N2 = new Float32Array(nxT * nyT);
+  // the river: a level line of a slow noise; N2 ends up as the distance to it in pt (value over gradient)
+  const R = new Float32Array(nxT * nyT);
+  for (let j = 0; j < nyT; j++) for (let i = 0; i < nxT; i++) R[j * nxT + i] = fbm(i * G / 700 + 30, j * G / 700 - 11, 3) - .5;
+  for (let j = 0; j < nyT; j++) for (let i = 0; i < nxT; i++) { const k = j * nxT + i, gx = (R[j * nxT + Math.min(i + 1, nxT - 1)] - R[j * nxT + Math.max(i - 1, 0)]) / (2 * G), gy = (R[Math.min(j + 1, nyT - 1) * nxT + i] - R[Math.max(j - 1, 0) * nxT + i]) / (2 * G);
+    N2[k] = R[k] / Math.max(Math.hypot(gx, gy), 2e-5); }
+  // keep only water that runs off the board: closed level lines (moats, rings) are filled in
+  { const seen = new Uint8Array(nxT * nyT), wet = k => Math.abs(N2[k]) < 14;
+    for (let s0 = 0; s0 < nxT * nyT; s0++) { if (seen[s0] || !wet(s0)) continue;
+      const comp = [s0], q = [s0]; seen[s0] = 1; let edge = false;
+      while (q.length) { const k = q.pop(), i = k % nxT, j = (k / nxT) | 0; if (i < 4 || j < 4 || i > nxT - 5 || j > nyT - 5) edge = true;
+        for (const n of [k - 1, k + 1, k - nxT, k + nxT]) if (n >= 0 && n < nxT * nyT && !seen[n] && Math.abs((n % nxT) - i) <= 1 && wet(n)) { seen[n] = 1; q.push(n); comp.push(n); } }
+      if (!edge) for (const k of comp) N2[k] = 1e3; } }
+  const edge = SEED % 3;                                               // which side the mountains stand on
+  for (let j = 0; j < nyT; j++) for (let i = 0; i < nxT; i++) {
+    const x = i * G, y = j * G, k = j * nxT + i, de = edge === 0 ? y : edge === 1 ? x : W - x;
+    const ridge = Math.exp(-(((de - 30) / 210) ** 2)) * sstep(.3, .62, fbm(x / 210 + 5, y / 210 + 3, 4)) * .93;
+    const hills = sstep(.53, .8, fbm(x / 330 - 7, y / 330 + 13, 5)) * .7;
+    let h = Math.max(ridge, hills);
+    h += h * sstep(.3, .7, h) * (fbm(x / 60, y / 60, 3) - .5) * .4;   // knobbly up on the heights
+    h *= sstep(8, 110, Math.abs(N2[k]));                             // the river cuts a valley
+    H0[k] = h;
+  }
+  Hh = new Float32Array(nxT * nyT); Wf = new Float32Array(nxT * nyT);
+  for (let k = 0; k < nxT * nyT; k++) Wf[k] = Math.abs(N2[k]) - 8;   // water: within 8 pt of the river's line (it runs on under the towns; their roads bridge it)
+  waterPath = ringsPath(contours(Wf, nxT, nyT, G, 6).map(r => chaikin(r, 2)));
+  rivers = [];                                                         // the river's centre lines, for boats and sparkles
+  for (const ring of contours(N2, nxT, nyT, G, 10).map(r => chaikin(r, 2))) {
+    let cur = [];
+    const flush = () => { if (cur.length > 2) { const cum = [0]; for (let i = 1; i < cur.length; i++) cum.push(cum[i - 1] + Math.hypot(cur[i][0] - cur[i - 1][0], cur[i][1] - cur[i - 1][1])); if (cum[cum.length - 1] > 260) rivers.push({ pts: cur, cum, len: cum[cum.length - 1] }); } cur = []; };
+    for (const p of ring) { if (p[0] > 4 && p[1] > 4 && p[0] < W - 4 && p[1] < H - 4 && samp(Wf, nxT, nyT, G, p[0], p[1]) < -3) cur.push(p); else flush(); }
+    flush();
+  }
+  rivers.sort((a, b) => b.len - a.len);
+  sparkles = [];
+  for (const r of rivers) for (let s = 20; s < r.len; s += 28) { const [x, y, a] = riverAt(r, s), o = (h1(s + r.len) - .5) * 7; sparkles.push([x - Math.sin(a) * o, y + Math.cos(a) * o, a, 2.5 + 2.5 * h1(s * 1.7)]); }
+  buildWorld();
+  buildStaticScenery();
+}
+function riverAt(r, s) { s = clamp(s, 0, r.len - .01); let lo = 0, hi = r.cum.length - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (r.cum[m] <= s) lo = m; else hi = m; }
+  const a = r.pts[lo], b = r.pts[hi], t = (s - r.cum[lo]) / Math.max(1e-6, r.cum[hi] - r.cum[lo]); return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, Math.atan2(b[1] - a[1], b[0] - a[0])]; }
+
+/* ======================= the world beneath: villages and the country roads between them (fixed per board) ======================= */
+const VNAMES = ['Puddleby', 'Little Hollow', 'Thornbury', 'Mossgate', 'Brookfield', 'Elderwick', 'Fernleigh', 'Ashcombe', 'Bramble End', 'Kettlewell', 'Oakhurst', 'Pennycross'];
+let villages = [], roads = [], rnodes = [], RD = new Float32Array(4).fill(1e4), nxR = 2, nyR = 2, TW2 = new Float32Array(4).fill(1e5), NS2 = new Float32Array(4).fill(1e5), nxW2 = 2, nyW2 = 2;
+const h0At = (x, y) => samp(H0, nxT, nyT, G, x, y), n2At = (x, y) => samp(N2, nxT, nyT, G, x, y);
+const rdAt = (x, y) => samp(RD, nxR, nyR, G, x, y), twAt = (x, y) => samp(TW2, nxW2, nyW2, 12, x, y), nsAt = (x, y) => samp(NS2, nxW2, nyW2, 12, x, y);   // towns; solid windows (Stage Manager's small tilted cards don't hide the ground)
+function chaikinOpen(pts, it) { for (let n = 0; n < it; n++) { const o = [pts[0]]; for (let k = 0; k < pts.length - 1; k++) { const a = pts[k], b = pts[k + 1]; o.push([a[0] * .75 + b[0] * .25, a[1] * .75 + b[1] * .25], [a[0] * .25 + b[0] * .75, a[1] * .25 + b[1] * .75]); } o.push(pts[pts.length - 1]); pts = o; } return pts; }
+// A* on a precomputed grid: ok[] passable, cs[] cost per cell, extra(k) per-route cost
+function gridPath(Q, A, C, nx, ny, ok, cs, extra) {
+  const N = nx * ny, st = clamp(Math.round(Q[1] / C), 0, ny - 1) * nx + clamp(Math.round(Q[0] / C), 0, nx - 1), gl = clamp(Math.round(A[1] / C), 0, ny - 1) * nx + clamp(Math.round(A[0] / C), 0, nx - 1);
+  const o1 = ok[st], o2 = ok[gl]; ok[st] = ok[gl] = 1;
+  const g = new Float32Array(N).fill(1e9), from = new Int32Array(N).fill(-1), heap = [], gx = gl % nx, gy = (gl / nx) | 0;
+  const push = (f, k) => { heap.push([f, k]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+  g[st] = 0; push(0, st); let found = false, it = 0;
+  while (heap.length && it++ < N * 3) { const [f, k] = pop(); if (k === gl) { found = true; break; } const i = k % nx, j = (k / nx) | 0;
+    if (f > g[k] + Math.hypot(i - gx, j - gy) * C + 1e-3) continue;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { if (!di && !dj) continue; const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
+      const q = jj * nx + ii; if (!ok[q]) continue; const ng = g[k] + Math.hypot(di, dj) * C * ((cs[k] + cs[q]) / 2 + extra(q));
+      if (ng < g[q]) { g[q] = ng; from[q] = k; push(ng + Math.hypot(ii - gx, jj - gy) * C, q); } } }
+  ok[st] = o1; ok[gl] = o2;
+  if (!found) return null;
+  const out = []; for (let k = from[gl]; k >= 0 && k !== st; k = from[k]) out.push([(k % nx) * C, ((k / nx) | 0) * C]);
+  return out.reverse();
+}
+let exits = [];
+function buildWorld() {
+  villages = []; roads = []; rnodes = []; exits = []; oldRoads = []; roadKey = null; roadJob = null;
+  // villages: on flat dry ground, spread out over the board
+  const cand = [];
+  for (let y = 150; y < H - 120; y += 30) for (let x = 140; x < W - 140; x += 30) { const px = x + (h1(x * .13 + y + SEED) - .5) * 20, py = y + (h1(y * .17 + x + SEED) - .5) * 20;
+    if (h0At(px, py) < .08 && Math.abs(n2At(px, py)) > 45) cand.push([px, py]); }
+  const nV = clamp(Math.round(W * H / 240000), 3, 7);
+  if (cand.length) { const picked = [cand[Math.floor(h1(SEED * 7.7 + 1) * cand.length)]];
+    while (picked.length < nV) { let best = null, bd = 0; for (const c of cand) { let d = 1e9; for (const p of picked) d = Math.min(d, Math.hypot(c[0] - p[0], c[1] - p[1])); if (d > bd) { bd = d; best = c; } } if (!best || bd < 230) break; picked.push(best); }
+    villages = picked.map((p, i) => ({ id: 'v' + i, i, x: p[0], y: p[1], name: VNAMES[(SEED * 5 + i) % VNAMES.length] })); }
+  // a road off each side of the board
+  for (let side = 1; side < 4; side++) for (let tries = 0; tries < 6; tries++) { const t = .2 + .6 * h1(SEED * 3 + side * 11 + tries * 1.7);   // not off the top: that's under the menu bar
+    const x = side < 2 ? W * t : side === 2 ? 2 : W - 2, y = side >= 2 ? H * t : side === 0 ? 2 : H - 2, nx = side === 2 ? 1 : side === 3 ? -1 : 0, ny = side === 0 ? 1 : side === 1 ? -1 : 0;
+    if (h0At(x, y) < .2 && Math.abs(n2At(x, y)) > 30) { exits.push({ x, y, ix: x + nx * 40, iy: y + ny * 40, exit: true }); break; } }
+}
+
+/* ---------- the road network, routed for the current layout: villages, towns (their ring roads), exits ---------- */
+let roadKey = null, roadJob = null, oldRoads = [], roadFade = 1, lastMoveT = 0;
+const OM = VERGE + ROAD / 2;                                          // the ring road's centre line, out from its window
+const isVis = v => kAt(v.x, v.y) > HOUSE_GAP + 34 && nsAt(v.x, v.y) > 30;
+// where a road from (ox, oy) meets a town's ring road: on the facing side, clear of the corners
+function ringEnd(s, ox, oy) {
+  const dx = ox < s.x ? s.x - ox : ox > s.x + s.w ? ox - s.x - s.w : 0, dy = oy < s.y ? s.y - oy : oy > s.y + s.h ? oy - s.y - s.h : 0;
+  if (dy >= dx) { const x = clamp(ox, s.x + 30, s.x + s.w - 30), t = oy < s.y + s.h / 2 ? -1 : 1, y = t < 0 ? s.y - OM : s.y + s.h + OM; return { end: [x, y], n: [0, t] }; }
+  const y = clamp(oy, s.y + 30, s.y + s.h - 30), t = ox < s.x + s.w / 2 ? -1 : 1, x = t < 0 ? s.x - OM : s.x + s.w + OM; return { end: [x, y], n: [t, 0] };
+}
+const layoutKey = () => slots.filter(s => s.alive).map(s => [s.tx, s.ty, s.tw, s.th].map(v => Math.round(v / 6)).join(',') + (s.town ? 't' : '')).join(';');
+function startRoads() {
+  const nodes = [];
+  for (const v of villages) if (isVis(v)) nodes.push({ x: v.x, y: v.y, v, kind: 'vil' });
+  for (const s of slots) if (s.alive && s.town && s.life > .9) nodes.push({ x: s.x + s.w / 2, y: s.y + s.h / 2, s, kind: 'town' });
+  const core = nodes.length;
+  for (const e of exits) if (ewAt(e.ix, e.iy) > 30) nodes.push({ x: e.x, y: e.y, e, kind: 'exit' });
+  nodes.forEach((n, i) => { n.i = i; n.roads = []; });
+  // which pairs: a spanning tree over villages and towns, two extra links, each exit to its nearest
+  const d = (a, b) => Math.hypot(nodes[a].x - nodes[b].x, nodes[a].y - nodes[b].y), edges = [], has = (a, b) => edges.some(e => (e[0] === a && e[1] === b) || (e[0] === b && e[1] === a));
+  if (core) { const inT = [0]; while (inT.length < core) { let best = null; for (const a of inT) for (let b = 0; b < core; b++) if (!inT.includes(b) && (!best || d(a, b) < best[2])) best = [a, b, d(a, b)]; edges.push(best); inT.push(best[1]); }
+    const extra = []; for (let a = 0; a < core; a++) for (let b = a + 1; b < core; b++) if (!has(a, b) && d(a, b) < 600) extra.push([a, b, d(a, b)]);
+    extra.sort((p, q) => p[2] - q[2]); edges.push(...extra.slice(0, 2));
+    for (let e = core; e < nodes.length; e++) { let best = 0; for (let v = 1; v < core; v++) if (d(e, v) < d(e, best)) best = v; edges.push([e, best, d(e, best)]); } }
+  edges.sort((p, q) => p[2] - q[2]);                                   // short roads first: the long ones then join them
+  // the grid the roads are routed on: around windows and hills, across the river and the railway briefly and squarely
+  const C = 12, nx = Math.ceil(W / C) + 1, ny = Math.ceil(H / C) + 1, ok = new Uint8Array(nx * ny), cs = new Float32Array(nx * ny);
+  const plat = []; for (const st of stations) if (st.ok) for (let u = -LOOP_HALF; u <= LOOP_HALF; u += 12) plat.push(at(st.L, st.s + u));
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const x = i * C, y = j * C, k = j * nx + i, e = ewAt(x, y), tw = twAt(x, y), h = hAt(x, y), t = tAt(x, y);
+    ok[k] = x > FRAME + 8 && y > MENU + 10 && x < W - FRAME - 8 && y < H - FRAME - 8 && h < .42 && e > VERGE + 4 && !plat.some(p => Math.abs(p[0] - x) < 30 && Math.abs(p[1] - y) < 30) ? 1 : 0;
+    cs[k] = 1 + 5 * h + (Math.abs(n2At(x, y)) < 14 ? 6 : 0) + (t < 18 ? 9 : 0) + (tw < HOUSE_GAP + 6 ? 9 : tw < HOUSE_GAP + 2 * ROW2 ? 1.5 : 0) + (e < 40 && tw > e + 4 ? 4 : 0); }
+  roadJob = { nodes, edges, k: 0, out: [], C, nx, ny, ok, cs, used: new Uint8Array(nx * ny), key: layoutKey() };
+}
+function endOf(node, other) {
+  if (node.kind === 'town') { const { end, n } = ringEnd(node.s, other.x, other.y); return { pts: [end, [end[0] + n[0] * 22, end[1] + n[1] * 22]], route: [end[0] + n[0] * 40, end[1] + n[1] * 40] }; }
+  if (node.kind === 'exit') return { pts: [[node.e.x, node.e.y]], route: [node.e.ix, node.e.iy] };
+  return { pts: [[node.x, node.y]], route: [node.x, node.y] };
+}
+function stepRoadJob(budget) {
+  const J = roadJob, t0 = performance.now();
+  while (J.k < J.edges.length && performance.now() - t0 < budget) {
+    const [a, b] = J.edges[J.k++], A = J.nodes[a], B = J.nodes[b], ea = endOf(A, B), eb = endOf(B, A);
+    const nearEnd = q => { const x = (q % J.nx) * J.C, y = ((q / J.nx) | 0) * J.C; return Math.hypot(x - ea.route[0], y - ea.route[1]) < 50 || Math.hypot(x - eb.route[0], y - eb.route[1]) < 50; };
+    const path = gridPath(ea.route, eb.route, J.C, J.nx, J.ny, J.ok, J.cs, q => J.used[q] && !nearEnd(q) ? 7 : 0);
+    if (!path) continue;
+    let mid = [ea.route, ...path.filter((p, k) => k % 3 === 1), eb.route];
+    mid = resample(chaikinOpen(mid, 3), 6, false); mid = laplace(mid, 24, .5, false, 1, 1);
+    const pts = resample([...ea.pts, ...mid, ...eb.pts.slice().reverse()], STEP, false);
+    const r = { pts, len: (pts.length - 1) * STEP, a, b, closed: false };
+    for (const p of pts) { const i = Math.round(p[0] / J.C), j = Math.round(p[1] / J.C); for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const ii = i + di, jj = j + dj; if (ii >= 0 && jj >= 0 && ii < J.nx && jj < J.ny) J.used[jj * J.nx + ii] = 1; } }
+    J.out.push(r);
+  }
+  if (J.k < J.edges.length) return false;
+  // done: swap the network in (the old one fades out)
+  for (const r of J.out) { r.id = 'r' + Math.random().toString(36).slice(2, 7); J.nodes[r.a].roads.push(r); J.nodes[r.b].roads.push(r);
+    const wet = r.pts.map(p => samp(Wf, nxT, nyT, G, p[0], p[1]) < 3); r.br = wet.map((w, k) => { for (let q = Math.max(0, k - 3); q <= Math.min(wet.length - 1, k + 3); q++) if (wet[q]) return true; return false; }); }
+  oldRoads = roads.length ? roads : []; roadFade = roads.length ? 0 : 1;
+  roads = J.out; rnodes = J.nodes; roadKey = J.key; roadJob = null;
+  for (const v of villages) v.node = rnodes.findIndex(n => n.v === v);
+  nxR = Math.ceil(W / G) + 1; nyR = Math.ceil(H / G) + 1; RD = chamfer(nxR, nyR, roads.flatMap(r => r.pts));
+  buildVillageScen();
+  for (const c of rcars) { c.el.style.transition = 'opacity .6s'; c.el.style.opacity = 0; const el = c.el; setTimeout(() => el.remove(), 700); } rcars = [];
+  dirty = true; wake();
+  return true;
+}
+// a distance field (pt) from a set of points, on the G grid: two-pass chamfer
+function chamfer(nx, ny, pts) {
+  const D = new Float32Array(nx * ny).fill(1e4);
+  for (const p of pts) { const i = Math.round(p[0] / G), j = Math.round(p[1] / G); if (i >= 0 && j >= 0 && i < nx && j < ny) D[j * nx + i] = 0; }
+  const d1 = G, d2 = G * 1.414;
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const k = j * nx + i; let v = D[k];
+    if (i > 0) v = Math.min(v, D[k - 1] + d1); if (j > 0) { v = Math.min(v, D[k - nx] + d1); if (i > 0) v = Math.min(v, D[k - nx - 1] + d2); if (i < nx - 1) v = Math.min(v, D[k - nx + 1] + d2); } D[k] = v; }
+  for (let j = ny - 1; j >= 0; j--) for (let i = nx - 1; i >= 0; i--) { const k = j * nx + i; let v = D[k];
+    if (i < nx - 1) v = Math.min(v, D[k + 1] + d1); if (j < ny - 1) { v = Math.min(v, D[k + nx] + d1); if (i < nx - 1) v = Math.min(v, D[k + nx + 1] + d2); if (i > 0) v = Math.min(v, D[k + nx - 1] + d2); } D[k] = v; }
+  return D;
+}
+// per layout: one pass over the windows fills the window-distance and track fields; everything else reads them
+function buildFields() {
+  nxS = Math.ceil(W / G) + 1; nyS = Math.ceil(H / G) + 1; Sg = new Float32Array(nxS * nyS); EWg = new Float32Array(nxS * nyS);
+  // window distance: exact on a 12 pt grid, interpolated to 6 pt (a distance field is near-linear, so nothing is lost)
+  const nx2 = Math.ceil(W / 12) + 2, ny2 = Math.ceil(H / 12) + 2, E2 = new Float32Array(nx2 * ny2);
+  for (let j = 0; j < ny2; j++) for (let i = 0; i < nx2; i++) E2[j * nx2 + i] = eWin(i * 12, j * 12);
+  nxW2 = nx2; nyW2 = ny2; TW2 = new Float32Array(nx2 * ny2); NS2 = new Float32Array(nx2 * ny2); const towns = slots.filter(s => s.town), solid = slots.filter(s => !s.stage);
+  for (let j = 0; j < ny2; j++) for (let i = 0; i < nx2; i++) { let e = 1e5; for (const s of solid) e = Math.min(e, sdRB(i * 12, j * 12, s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 0)); NS2[j * nx2 + i] = e; }
+  for (let j = 0; j < ny2; j++) for (let i = 0; i < nx2; i++) { let e = 1e5; for (const s of towns) e = Math.min(e, sdRB(i * 12, j * 12, s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 0) + (1 - s.life) * 60); TW2[j * nx2 + i] = e; }
+  for (let j = 0; j < nyS; j++) for (let i = 0; i < nxS; i++) { const x = i * G, y = j * G, k = j * nxS + i, e = samp(E2, nx2, ny2, 12, x, y); EWg[k] = e; Sg[k] = smax(T - e, EDGE - Math.min(x, y, W - x, H - y), SM); }
+  for (let j = 0; j < nyT; j++) for (let i = 0; i < nxT; i++) { const k = j * nxT + i; Hh[k] = H0[k] * sstep(HOUSE_GAP + 20, HOUSE_GAP + 190, Math.min(samp(TW2, nx2, ny2, 12, i * G, j * G), samp(NS2, nx2, ny2, 12, i * G, j * G) + 220)); }
+  // the hill layers, traced on a 12 pt grid (their outlines are smoothed anyway)
+  const hx = Math.ceil(nxT / 2), hy = Math.ceil(nyT / 2), f = new Float32Array(hx * hy);
+  let hmax = 0; for (let k = 0; k < Hh.length; k++) if (Hh[k] > hmax) hmax = Hh[k];
+  levelPaths = LV.map(lv => { if (lv >= hmax) return null; for (let j = 0; j < hy; j++) for (let i = 0; i < hx; i++) f[j * hx + i] = lv - Hh[Math.min(2 * j, nyT - 1) * nxT + Math.min(2 * i, nxT - 1)];
+    return ringsPath(contours(f, hx, hy, 2 * G, 4).map(r => chaikin(r, 3))); });
+}
+const kAt = (x, y) => Math.min(twAt(x, y), nsAt(x, y) + 110);   // room from the towns (other windows only mustn't cover things)
+const hAt = (x, y) => samp(Hh, nxT, nyT, G, x, y), wAt = (x, y) => samp(Wf, nxT, nyT, G, x, y), sAt = (x, y) => samp(Sg, nxS, nyS, G, x, y), ewAt = (x, y) => samp(EWg, nxS, nyS, G, x, y);
+
+/* ======================= lines (the main loop, branches, passing loops) ======================= */
+// a line: { id, pts (every STEP pt), len, closed, tun[], br[], depth[] }
+function runs(m, closed) {
+  const n = m.length, out = [];
+  if (closed) { const s0 = m.findIndex(v => !v); if (s0 < 0) return n ? [[0, n]] : [];
+    for (let k = 0; k < n; k++) { const i = (s0 + k) % n; if (m[i] && !m[(i - 1 + n) % n]) { let l = 0; while (l < n && m[(i + l) % n]) l++; out.push([i, l]); } } }
+  else { let i = 0; while (i < n) { if (m[i]) { let l = 0; while (i + l < n && m[i + l]) l++; out.push([i, l]); i += l; } else i++; } }
+  return out;
+}
+function markLine(L) {
+  const n = L.pts.length, C = L.closed, tun = L.pts.map(p => hAt(p[0], p[1]) > TUN), br = new Array(n).fill(false);
+  for (const [i, l] of runs(tun, C)) if (l * STEP < 45) for (let k = 0; k < l; k++) tun[(i + k) % n] = false;   // no tunnel shorter than 45 pt
+  for (const [i, l] of runs(tun.map(v => !v), C)) { if (!C && (i === 0 || i + l >= n)) continue; if (l * STEP < 60 && l < n) for (let k = 0; k < l; k++) tun[(i + k) % n] = true; }   // nor daylight gaps under 60
+  const wet = L.pts.map(p => wAt(p[0], p[1]) < 0);
+  for (const [i, l] of runs(wet, C)) for (let k = -5; k < l + 5; k++) { const q = C ? (i + k + n) % n : i + k; if (q >= 0 && q < n && !tun[q]) br[q] = true; }
+  const depth = new Float32Array(n); let far = 1e9;                    // how deep into a tunnel each point is (pt): trains fade as they enter
+  for (let pass = 0; pass < (C ? 2 : 1); pass++) for (let k = 0; k < n; k++) { far = tun[k] ? far + STEP : 0; depth[k] = far; }
+  far = 1e9; for (let pass = 0; pass < (C ? 2 : 1); pass++) for (let k = n - 1; k >= 0; k--) { far = tun[k] ? far + STEP : 0; depth[k] = Math.min(depth[k], far); }
+  Object.assign(L, { tun, br, depth, len: (C ? n : n - 1) * STEP });
+}
+const at = (L, s) => { const n = L.pts.length; let f = s / STEP; if (L.closed) f = (f % n + n) % n; else f = clamp(f, 0, n - 1.0001);
+  const i = Math.floor(f), t = f - i, a = L.pts[i], b = L.pts[(i + 1) % n]; return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]; };
+const tangent = (L, s) => { const a = at(L, s - 4), b = at(L, s + 4); return Math.atan2(b[1] - a[1], b[0] - a[0]); };
+const idxOf = (L, s) => { const n = L.pts.length, i = Math.round(s / STEP); return L.closed ? ((i % n) + n) % n : clamp(i, 0, n - 1); };
+const rel = (L, d) => L.closed ? ((d % L.len) + L.len * 1.5) % L.len - L.len / 2 : d;   // signed distance along a line
+function nearestS(L, x, y) { let best = 0, bd = 1e12; for (let i = 0; i < L.pts.length; i++) { const p = L.pts[i], d = (p[0] - x) ** 2 + (p[1] - y) ** 2; if (d < bd) { bd = d; best = i; } } return { s: best * STEP, d: Math.sqrt(bd), i: best }; }
+
+// the main line: the outer zero line of S (T from the windows, EDGE from the board's edge), relaxed into easy curves
+let mainL = null;
+let TT = T; const MENU = 34;                                          // the menu bar (and the notch in it): the line keeps below it                                                           // how far the main line keeps from the windows, this layout
+function inRing(r, x, y) { let c = false; for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const a = r[i], b = r[j]; if ((a[1] > y) !== (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; }
+function traceMain() {
+  // The main line splits the band between the windows and the board's edge in a fixed ratio: never folded, never doubled.
+  // Windows touching the edge (Stage Manager, widgets, maximised windows) count as edge: the line bends inside them.
+  const RHO = .45, CAP = 140, C = 12, nx = Math.ceil(W / C) + 2, ny = Math.ceil(H / C) + 2, F = new Float32Array(nx * ny);
+  const bEdge = (x, y) => Math.min(x, y - MENU, W - x, H - y), isEdge = s => Math.min(s.x, s.y - MENU, W - s.x - s.w, H - s.y - s.h) < 30;
+  const inner = slots.filter(s => s.alive && !isEdge(s));
+  // windows at the edge become one block each (a Stage Manager strip is one block, not a row of dents), joined to the edge
+  let blocks = slots.filter(s => s.alive && isEdge(s)).map(s => ({ x0: s.x, y0: s.y, x1: s.x + s.w, y1: s.y + s.h }));
+  for (let merged = true; merged;) { merged = false;
+    for (let a = 0; a < blocks.length && !merged; a++) for (let b = a + 1; b < blocks.length; b++) { const A = blocks[a], B = blocks[b];
+      if (Math.max(A.x0, B.x0) - Math.min(A.x1, B.x1) < 90 && Math.max(A.y0, B.y0) - Math.min(A.y1, B.y1) < 90) {
+        blocks[a] = { x0: Math.min(A.x0, B.x0), y0: Math.min(A.y0, B.y0), x1: Math.max(A.x1, B.x1), y1: Math.max(A.y1, B.y1) }; blocks.splice(b, 1); merged = true; break; } } }
+  for (const b of blocks) { if (b.x0 < 30) b.x0 = -60; if (b.y0 - MENU < 30) b.y0 = -60; if (W - b.x1 < 30) b.x1 = W + 60; if (H - b.y1 < 30) b.y1 = H + 60; }
+  const smin = (a, b, k) => -smax(-a, -b, k);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const x = i * C, y = j * C;
+    let e = CAP; for (const s of inner) e = Math.min(e, sdRB(x, y, s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 10));
+    let g = bEdge(x, y); for (const b of blocks) g = smin(g, sdRB(x, y, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.x1 - b.x0) / 2, (b.y1 - b.y0) / 2, 40), 140);   // a wide fillet where the block meets the edge
+    F[j * nx + i] = g - RHO * Math.max(e, 0); }
+  let best = null, ba = 0;
+  for (const ring of contours(F.map(v => -v), nx, ny, C, 12)) {
+    let area = 0; for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; area += a[0] * b[1] - b[0] * a[1]; }
+    if (Math.abs(area) > ba) { ba = Math.abs(area); best = area < 0 ? ring.slice().reverse() : ring; } }
+  if (!best || ba < 50000) return null;
+  TT = T;
+  let pts = resample(chaikin(best, 2), 10, true);
+  pts = laplace(pts, 60, .5, true);
+  pts = resample(pts, STEP, true);
+  const L = { id: 'main', pts, closed: true }; markLine(L); return L;
+}
+
+/* ---------- stations (with passing loops) on the main line; branch lines to the towns away from it ---------- */
+const SUFFIX = ['Junction', 'Central', 'Road', 'Parkway', 'Halt', 'Street', 'Town', 'Bridge'];
+let stations = [], branches = [], ghosts = [];
+const stName = s => `${(s.owner || 'Town').replace(/\.app$/, '').split(' ')[0]} ${SUFFIX[s.id % SUFFIX.length]}`;
+const loopF = u => sstep(LOOP_HALF, LOOP_HALF - 40, Math.abs(u));    // 0 at the switches, 1 alongside the platform
+function layNetwork() {
+  const out = [], newB = []; BRD = [];
+  const C = 12, mx = Math.ceil(W / C) + 1, my = Math.ceil(H / C) + 1, MM = new Uint8Array(mx * my);
+  const markM = (p, r) => { const ci = Math.round(p[0] / C), cj = Math.round(p[1] / C); for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) { const ii = ci + di, jj = cj + dj; if (ii >= 0 && jj >= 0 && ii < mx && jj < my) MM[jj * mx + ii] = 1; } };
+  const inM = p => MM[clamp(Math.round(p[1] / C), 0, my - 1) * mx + clamp(Math.round(p[0] / C), 0, mx - 1)];
+  if (mainL) for (let i = 0; i < mainL.pts.length; i += 2) markM(mainL.pts[i], 1);
+  const ctx = { inM };
+  // the places that want a station: the villages, then the towns round the windows
+  const towns = villages.filter(v => isVis(v)).map(v => ({ kind: 'vil', v, id: v.id, x: v.x, y: v.y, name: v.name, key: 'v', slot: { x: v.x, y: v.y, w: 0, h: 0 } }))
+    .concat(slots.filter(s => s.alive && s.life > .6 && s.town).map(s => ({ kind: 'win', s, id: String(s.id), x: s.x + s.w / 2, y: s.y + s.h / 2, name: stName(s), key: [s.x, s.y, s.w, s.h].map(Math.round).join(','), slot: s })));
+  const STN = ['North', 'East', 'South', 'West'];
+  for (const tw of towns) {
+    let best = null, nOn = 0;
+    const want = tw.kind === 'win' ? clamp(Math.floor((tw.s.w + tw.s.h) / 520), 1, 3) : 1;
+    while (mainL && nOn < want) { const L = mainL, n = L.pts.length; best = null;
+      for (let i = 0; i < n; i += 2) {
+        const p = L.pts[i], e = tw.kind === 'win' ? sdRB(p[0], p[1], tw.x, tw.y, tw.s.w / 2, tw.s.h / 2, 10) : Math.hypot(p[0] - tw.x, p[1] - tw.y) - 40; if (e > (tw.kind === 'win' ? Math.max(TT + 18, HOUSE_GAP + 2 * ROW2 + 60) : Math.max(TT + 18, 84))) continue;
+        if (out.some(o => o.L === mainL && Math.abs(rel(mainL, o.s - i * STEP)) < 2 * LOOP_HALF + 70)) continue;
+        let bad = false; for (let k = -40; k <= 40; k += 4) { const q = (i + k + n) % n; if (L.tun[q] || L.br[q]) { bad = true; break; } } if (bad) continue;
+        const ta = tangent(L, i * STEP), sd = ((tw.x - p[0]) * -Math.sin(ta) + (tw.y - p[1]) * Math.cos(ta)) > 0 ? 1 : -1, bxp = p[0] - Math.sin(ta) * sd * 26, byp = p[1] + Math.cos(ta) * sd * 26;
+        if (Math.min(bxp, W - bxp, H - byp) < FRAME + 40 || byp < TOP + 12) continue;   // its nameboard must stand on the board
+        if (rdAt(p[0] - Math.sin(ta) * sd * 13, p[1] + Math.cos(ta) * sd * 13) < 9) continue;   // and the platform not on a road
+        const a0 = tangent(L, i * STEP - 50), a1 = tangent(L, i * STEP + 50), bend = Math.abs(Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0)));
+        const score = e + bend * 120;
+        if (!best || score < best.score) best = { s: i * STEP, score, side: sd }; }
+      if (!best) break;
+      let name = tw.name; if (nOn) { const p = at(mainL, best.s), dx = p[0] - tw.x, dy = p[1] - tw.y; name = `${tw.name.split(' ')[0]} ${Math.abs(dx) * tw.s.h > Math.abs(dy) * tw.s.w ? (dx > 0 ? STN[1] : STN[3]) : (dy > 0 ? STN[2] : STN[0])}`; }
+      out.push({ id: 'st' + tw.id + (nOn ? ':' + nOn : ''), L: mainL, s: best.s, name, slot: tw.slot, ok: true, kind: 'main', side: best.side, loopSide: -best.side, sw: [0, 0] }); nOn++; }
+    if (nOn) continue;
+    if (!mainL) continue;
+    // no main line close by: a branch line out to it (the one from last time, if it still fits)
+    const prev = branches.find(b => b.id === 'b' + tw.id);
+    const b = prev && prev.key === tw.key && stillGood(prev, tw, newB, out, ctx) ? prev : buildBranch(tw, newB, out, ctx);
+    if (b) { b.key = tw.key; newB.push(b); for (let i = 0; i < b.pts.length; i += 3) markM(b.pts[i], 1);
+      const p = at(b, b.len - 50), a = tangent(b, b.len - 50);
+      out.push({ id: 'st' + tw.id, L: b, s: b.len - 50, name: tw.name, slot: tw.slot, ok: true, kind: 'term', side: ((tw.x - p[0]) * -Math.sin(a) + (tw.y - p[1]) * Math.cos(a)) > 0 ? 1 : -1 }); }
+  }
+  // branches that changed shape a lot cross-fade; small changes just follow
+  for (const b of newB) { const prev = branches.find(x => x.id === b.id);
+    if (prev === b) { } else if (prev && lineDiff(prev, b) < 16) { b.vis = prev.vis; } else { if (prev) { prev.target = 0; ghosts.push(prev); } b.vis = 0; }
+    b.target = 1; }
+  for (const p of branches) if (!newB.some(b => b.id === p.id)) { p.target = 0; ghosts.push(p); }
+  branches = newB;
+  for (const o of stations) if (!out.some(n => n.id === o.id) && (VIS.get(o.id) || 0) > 0) out.push(Object.assign(o, { ok: false }));
+  stations = out;
+}
+function lineDiff(a, b) { let s = 0; for (let k = 0; k <= 10; k++) { const p = at(a, a.len * k / 10), q = at(b, b.len * k / 10); s += Math.hypot(p[0] - q[0], p[1] - q[1]); } return s / 11; }
+// is last time's branch still good? its junction still on the main line, clear of tunnels and stations, its course clear of the windows
+function stillGood(b, tw, others, sts, ctx) {
+  const L0 = mainL, n0 = L0.pts.length, p0 = b.pts[0], q = nearestS(L0, p0[0], p0[1]); if (q.d > 2.5) return false;
+  for (let k = -30; k <= 30; k += 3) { const i = (q.i + k + n0) % n0; if (L0.tun[i] || L0.br[i]) return false; }
+  if (sts.some(o => o.L === L0 && Math.abs(rel(L0, o.s - q.s)) < LOOP_HALF + 90) || others.some(o => Math.abs(rel(L0, o.jS - q.s)) < 150)) return false;
+  const n = b.pts.length; let left = false;
+  for (let k = 4; k < n; k += 3) { const p = b.pts[k], m = ctx.inM(p); if (!m) left = true; if (m && left && k < n - 10) return false;
+    if (k < n - 45 && ewAt(p[0], p[1]) < HOUSE_GAP + 26) return false; }
+  b.jS = q.s; markLine(b); return true;
+}
+// a branch: from a junction on the main line, one smooth curve to a terminus by the town
+let BRD = [];
+function buildBranch(tw, others, sts, ctx) {
+  const L0 = mainL, n0 = L0.pts.length;
+  const cands = [];
+  if (tw.kind === 'win') { const s = tw.s;
+    for (let side = 0; side < 4; side++) { const horiz = side < 2, len = horiz ? s.w : s.h; if (len < 130) continue;
+      let c = side === 0 ? [s.x + s.w / 2, s.y - T] : side === 1 ? [s.x + s.w / 2, s.y + s.h + T] : side === 2 ? [s.x - T, s.y + s.h / 2] : [s.x + s.w + T, s.y + s.h / 2];
+      const dir = horiz ? [1, 0] : [0, 1], m = nearestS(L0, c[0], c[1]), mp = L0.pts[m.i];
+      const shift = clamp((mp[0] - c[0]) * dir[0] + (mp[1] - c[1]) * dir[1], -(len / 2 - 60), len / 2 - 60);   // slide the platform toward the main line
+      cands.push({ c: [c[0] + dir[0] * shift, c[1] + dir[1] * shift], dir }); } }
+  else for (let k = 0; k < 12; k++) { const th = k / 12 * 6.2832 + .2; cands.push({ c: [tw.x + Math.cos(th) * 60, tw.y + Math.sin(th) * 60], dir: [-Math.sin(th), Math.cos(th)] }); }
+  let best = null;
+  for (const { c, dir } of cands) {
+    if (Math.min(c[0], c[1], W - c[0], H - c[1]) < FRAME + 40 || wAt(c[0], c[1]) < 4 || hAt(c[0], c[1]) > TUN || ewAt(c[0], c[1]) < T - 8 || rdAt(c[0], c[1]) < 12) continue;
+    if (villages.some(v => v !== tw.v && Math.hypot(v.x - c[0], v.y - c[1]) < 100)) continue;
+    const m = nearestS(L0, c[0], c[1]), mp = L0.pts[m.i], sc = Math.hypot(mp[0] - c[0], mp[1] - c[1]);
+    if (!best || sc < best.sc) best = { sc, c, dir, mp };
+  }
+  if (!best) { BRD.push(tw.name + ':noside'); return null; }
+  const { c, mp } = best; let dir = best.dir;
+  if ((mp[0] - c[0]) * dir[0] + (mp[1] - c[1]) * dir[1] < 0) dir = [-dir[0], -dir[1]];   // dir points from the buffers toward the junction
+  const pNear = [c[0] + dir[0] * 50, c[1] + dir[1] * 50], pFar = [c[0] - dir[0] * 50, c[1] - dir[1] * 50], A = [pNear[0] + dir[0] * 34, pNear[1] + dir[1] * 34];
+  if ([pNear, pFar, A].some(p => ewAt(p[0], p[1]) < T - 8 || Math.min(p[0], p[1], W - p[0], H - p[1]) < FRAME + 20 || rdAt(p[0], p[1]) < 9)) { BRD.push(tw.name + ':platform'); return null; }
+  // try junction points along the main line; from each, one smooth curve that leaves the main line along it and arrives
+  // straight into the platform. Keep the shortest with no tight bends, no crossing of other lines, clear of towns and villages.
+  const free = i => { for (let k = -30; k <= 30; k += 3) { const q = (i + k + n0) % n0; if (L0.tun[q] || L0.br[q]) return false; }
+    return !sts.some(o => o.L === L0 && Math.abs(rel(L0, o.s - i * STEP)) < LOOP_HALF + 90) && !others.some(b => Math.abs(rel(L0, b.jS - i * STEP)) < 150); };
+  const tryCurve = (i, dJ) => {
+    const p = L0.pts[i], D = Math.hypot(A[0] - p[0], A[1] - p[1]); if (D < 110 || D > 950) return null;
+    const a = tangent(L0, i * STEP) + (dJ < 0 ? Math.PI : 0), t0 = [Math.cos(a), Math.sin(a)];
+    if (t0[0] * (A[0] - p[0]) / D + t0[1] * (A[1] - p[1]) / D < .2) return null;   // the town must lie ahead
+    const d1 = D * .5, c1 = [p[0] + t0[0] * d1, p[1] + t0[1] * d1], c2 = [A[0] + dir[0] * d1, A[1] + dir[1] * d1];
+    const N = Math.ceil(D / 3), out = [];
+    for (let k = 0; k <= N; k++) { const t = k / N, u = 1 - t; out.push([u * u * u * p[0] + 3 * u * u * t * c1[0] + 3 * u * t * t * c2[0] + t * t * t * A[0], u * u * u * p[1] + 3 * u * u * t * c1[1] + 3 * u * t * t * c2[1] + t * t * t * A[1]]); }
+    const pts = resample([...out, pNear, pFar], STEP, false), n = pts.length, ang = [];
+    for (let k = 0; k < n - 1; k++) ang.push(Math.atan2(pts[k + 1][1] - pts[k][1], pts[k + 1][0] - pts[k][0]));
+    for (let k = 0; k + 11 < ang.length; k += 2) { const d = ang[k + 11] - ang[k]; if (Math.abs(Math.atan2(Math.sin(d), Math.cos(d))) > .75) return null; }   // no curve tighter than ~45 pt
+    let left = false;
+    for (let k = 4; k < n; k += 2) { const q = pts[k], m = ctx.inM(q); if (!m) left = true;   // a crossing: back on another line after leaving the main
+      if ((m && left && k < n - 10) || Math.min(q[0], q[1] - MENU, W - q[0], H - q[1]) < FRAME + 10) return null;
+      if (ewAt(q[0], q[1]) < HOUSE_GAP + 26 && Math.hypot(q[0] - c[0], q[1] - c[1]) > 70) return null;
+      if (villages.some(v => Math.hypot(q[0] - v.x, q[1] - v.y) < (v === tw.v ? 34 : 60))) return null; }
+    return { pts, len: n * STEP };
+  };
+  let bestC = null;
+  for (let i = 0; i < n0; i += 4) { if (!free(i)) continue; for (const dJ of [1, -1]) { const r = tryCurve(i, dJ); if (r && (!bestC || r.len < bestC.len)) bestC = Object.assign(r, { i, dJ }); } }
+  if (!bestC) { BRD.push(tw.name + ':nocurve'); return null; }
+  const sJ = bestC.i * STEP, dJ = bestC.dJ, pts = bestC.pts, aj = tangent(L0, sJ);
+  const sg = ((A[0] - pts[0][0]) * -Math.sin(aj) + (A[1] - pts[0][1]) * Math.cos(aj)) > 0 ? 1 : -1;
+  const L = { id: 'b' + tw.id, pts, closed: false, jS: sJ, jSide: sg, dJ }; markLine(L);
+  if (L.len < 300) { BRD.push(tw.name + ':short'); return null; }
+  return L;
+}
+// A* across a 12 pt grid: free board only (away from the main line and the towns), hills and water cost a little extra
+function route(Q, A, others) {
+  const C = 12, nx = Math.ceil(W / C) + 1, ny = Math.ceil(H / C) + 1, N = nx * ny, block = new Uint8Array(N), cost = new Float32Array(N);
+  // blocked: the board's rim, the houses round every town, the main line itself (except where the branch leaves it)
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const x = i * C, y = j * C, k = j * nx + i, e = ewAt(x, y);
+    const near = Math.hypot(x - A[0], y - A[1]) < 46;
+    block[k] = (x < FRAME + 14 || y < FRAME + 14 || x > W - FRAME - 14 || y > H - FRAME - 14 || (e < HOUSE_GAP + 32 && !near)) ? 1 : 0;
+    cost[k] = 1 + 3 * hAt(x, y) + (wAt(x, y) < 0 ? 2 : 0) + 3 * sstep(T + 30, HOUSE_GAP + 2 * ROW2, e); }   // threading between towns costs a little
+  for (let i = 0; i < mainL.pts.length; i += 2) { const p = mainL.pts[i]; if (Math.hypot(p[0] - Q[0], p[1] - Q[1]) < 40) continue; const ci = Math.round(p[0] / C), cj = Math.round(p[1] / C);
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const ii = ci + di, jj = cj + dj; if (ii >= 0 && jj >= 0 && ii < nx && jj < ny) block[jj * nx + ii] = 1; } }
+  for (const b of others) for (let i = 0; i < b.pts.length; i += 4) { const p = b.pts[i], ci = Math.round(p[0] / C), cj = Math.round(p[1] / C);
+    for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) { const ii = ci + di, jj = cj + dj; if (ii >= 0 && jj >= 0 && ii < nx && jj < ny) block[jj * nx + ii] = 1; } }
+  const st = clamp(Math.round(Q[1] / C), 0, ny - 1) * nx + clamp(Math.round(Q[0] / C), 0, nx - 1), gl = clamp(Math.round(A[1] / C), 0, ny - 1) * nx + clamp(Math.round(A[0] / C), 0, nx - 1);
+  block[st] = block[gl] = 0;
+  const g = new Float32Array(N).fill(1e9), from = new Int32Array(N).fill(-1), heap = [], gx = gl % nx, gy = (gl / nx) | 0;
+  const push = (f, k) => { heap.push([f, k]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+  g[st] = 0; push(0, st); let found = false, it = 0;
+  while (heap.length && it++ < N * 3) { const [f, k] = pop(); if (k === gl) { found = true; break; } const i = k % nx, j = (k / nx) | 0;
+    if (f > g[k] + Math.hypot(i - gx, j - gy) * C + 1e-3) continue;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { if (!di && !dj) continue; const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
+      const q = jj * nx + ii; if (block[q]) continue; const ng = g[k] + Math.hypot(di, dj) * C * (cost[k] + cost[q]) / 2;
+      if (ng < g[q]) { g[q] = ng; from[q] = k; push(ng + Math.hypot(ii - gx, jj - gy) * C, q); } } }
+  if (!found) return null;
+  const out = []; for (let k = from[gl]; k >= 0 && k !== st; k = from[k]) out.push([(k % nx) * C, ((k / nx) | 0) * C]);
+  return out.reverse();
+}
+// a passing loop's centre line, beside a main-line station
+function loopPts(st) { const out = []; for (let u = -LOOP_HALF; u <= LOOP_HALF; u += STEP) { const p = at(st.L, st.s + u), a = tangent(st.L, st.s + u), o = LOOP_OFF * loopF(u) * st.loopSide; out.push([p[0] - Math.sin(a) * o, p[1] + Math.cos(a) * o]); } return out; }
+
+/* ---------- how far everything is from the nearest track (a distance field, for placing scenery) ---------- */
+let DT = new Float32Array(4), nxD = 2, nyD = 2;
+function buildDT() {
+  nxD = Math.ceil(W / G) + 1; nyD = Math.ceil(H / G) + 1;
+  const pts = []; if (mainL) pts.push(...mainL.pts); for (const b of branches) pts.push(...b.pts); for (const st of stations) if (st.ok && st.kind === 'main') pts.push(...loopPts(st));
+  DT = chamfer(nxD, nyD, pts);
+}
+const tAt = (x, y) => samp(DT, nxD, nyD, G, x, y) - 2;
+
+/* ======================= scenery: towns, farms, fields, forests ======================= */
+let ATLAS = null;
+const IMG = {}; for (const n of ['houses', 'trees']) { IMG[n] = new Image(); IMG[n].src = `railway/${n}.webp`; IMG[n].onload = () => { dirty = true; wake(); }; }
+fetch('railway/atlas.json').then(r => r.json()).then(j => { ATLAS = j; ATLAS.H = {}; for (const h of j.houses) ATLAS.H[h.n] = h.r;
+  ATLAS.T = { fir: [], tree: [], autumn: [], bush: [] }; for (const t of j.trees) ATLAS.T[t.k].push(t.r); buildStaticScenery(); dirty = true; wake(); }).catch(e => post('JSERR atlas ' + e));
+const TOWN = [['cottage', 27], ['blue', 27], ['yellow', 20], ['timber', 23], ['pink', 17], ['terrace', 30], ['bakery', 23], ['cafe', 28], ['chalet', 27], ['brick', 25], ['mint', 23], ['lavender', 23]];
+const CIVIC = [['church', 33], ['townhall', 37], ['bandstand', 23]];
+const FARM = [['barn', 33], ['farm', 37], ['windmill', 24], ['watertower', 17]];
+const FIELD = [['#b07c50', '#8e5e38'], ['#ecc86a', '#d6ab48'], ['#c3e086', '#a5c86a'], ['#f3dc52', '#dcc23a'], ['#b9a0dc', '#9a7fc4'], ['#9fd06e', '#8bc05c']];   // ploughed, wheat, meadow, rapeseed, lavender, pasture
+let footbridges = [], staticScen = [], staticFields = [], villageScen = [], scen = [], fields = [], markSpots = [];
+const VIS = new Map();
+function buildVillageScen() {
+  villageScen = []; if (!ATLAS) return;
+  for (const v of villages) {
+    if (!(v.node >= 0) || !isVis(v)) continue; const nd = rnodes[v.node]; let k = 0, church = false;
+    const add = (x, y, nm, dw) => villageScen.push({ id: `vh${v.i}:${k++}`, x, y, src: 'houses', r: ATLAS.H[nm], dw });
+    for (const rd of nd.roads) { const fromA = rd.a === v.node;                       // houses facing each road out of the village
+      for (const side of [-1, 1]) { let u = 28;
+        while (u < 112 && u < rd.len - 24) { const n = v.i * 131 + k * 7.7 + side * 3.1, [nm, dw0] = TOWN[Math.floor(h1(n) * TOWN.length)], dw = dw0 * .9, r = ATLAS.H[nm], dh = dw * r[3] / r[2];
+          const sp = fromA ? u : rd.len - u, p = at(rd, sp), a = tangent(rd, sp), nx = -Math.sin(a) * side, ny = Math.cos(a) * side;
+          const ext = Math.abs(nx) * dw + Math.abs(ny) * dh, cx = p[0] + nx * (7 + ext / 2), cy = p[1] + ny * (7 + ext / 2);
+          add(cx, cy + dh / 2, nm, dw);
+          u += Math.abs(Math.cos(a)) * dw + Math.abs(Math.sin(a)) * dh + 3 + (h1(n + .5) < .2 ? 12 : 0); } } }
+    const dirs = nd.roads.map(rd => { const p = at(rd, rd.a === v.node ? 14 : rd.len - 14); return Math.atan2(p[1] - v.y, p[0] - v.x); });
+    for (let q = 0; q < 10; q++) { const th = q / 10 * 6.2832 + .3;                // round the square: the church first
+      if (dirs.some(d0 => Math.abs(Math.atan2(Math.sin(d0 - th), Math.cos(d0 - th))) < .5)) continue;
+      const [nm, dw] = !church ? ['church', 28] : TOWN[Math.floor(h1(v.i * 7 + q) * TOWN.length)], r = ATLAS.H[nm], dw2 = dw * .9, dh = dw2 * r[3] / r[2]; church = true;
+      add(v.x + Math.cos(th) * (24 + dw2 * .35), v.y + Math.sin(th) * (24 + dh * .35) + dh / 2, nm, dw2); }
+  }
+}
+function buildStaticScenery() {
+  if (!ATLAS || !H0) return;
+  staticScen = []; staticFields = [];
+  buildVillageScen();
+  for (let j = 0; j * 14 < H + 14; j++) for (let i = 0; i * 14 < W + 14; i++) {   // the belt outside the main line (only used out there)
+    const n = j * 4513 + i * 92821 + SEED * 17 + 5, x = (i + .1 + .8 * h1(n)) * 14, y = (j + .1 + .8 * h1(n + .5)) * 14, r = h1(n + .25), wood = fbm(x / 160 + 9, y / 160 - 4, 3);
+    if (r > .28 + .45 * sstep(.4, .65, wood)) continue;
+    if (r < .012) { const [nm, dw] = FARM[Math.floor(h1(n + .77) * FARM.length)]; staticScen.push({ id: 'bf' + n, x, y, src: 'houses', r: ATLAS.H[nm], dw, bld: true, belt: true }); continue; }
+    const kind = wood > .55 ? (r < .3 ? 'fir' : r < .5 ? 'autumn' : 'tree') : r < .1 ? 'bush' : r < .16 ? 'fir' : 'tree';
+    const list = ATLAS.T[kind], rr = list[Math.floor(h1(n + .77) * list.length)], ht = kind === 'fir' ? 17 + 9 * h1(n + .6) : kind === 'bush' ? 8 + 3 * h1(n + .6) : 16 + 7 * h1(n + .6);
+    staticScen.push({ id: 'bt' + n, x, y, src: 'trees', r: rr, dw: ht * rr[2] / rr[3], bld: false, belt: true });
+  }
+  const C = 18;
+  for (let j = 0; j * C < H + C; j++) for (let i = 0; i * C < W + C; i++) {
+    const n = j * 7919 + i * 104729 + SEED * 31, x = (i + .1 + .8 * h1(n)) * C, y = (j + .1 + .8 * h1(n + .5)) * C, r = h1(n + .25);
+    const hz = samp(H0, nxT, nyT, G, x, y), forest = fbm(x / 230 + 40, y / 230, 3);
+    let kind = null;
+    if (hz > .24) { if (r < .66) kind = 'fir'; }
+    else if (forest > .6) { if (r < .6) kind = r < .22 ? 'fir' : r < .48 ? 'tree' : 'autumn'; }
+    else if (r < .055) kind = 'tree'; else if (r < .07) kind = 'autumn'; else if (r < .11) kind = 'bush';
+    else if (r < .115 && hz < .1) kind = 'farm';
+    if (!kind) continue;
+    const pick = h1(n + .77);
+    if (kind === 'farm') { const [nm, dw] = FARM[Math.floor(pick * FARM.length)]; staticScen.push({ id: 'f' + n, x, y, src: 'houses', r: ATLAS.H[nm], dw, bld: true }); continue; }
+    const list = ATLAS.T[kind], rr = list[Math.floor(pick * list.length)], ht = kind === 'fir' ? 17 + 9 * h1(n + .6) : kind === 'bush' ? 8 + 3 * h1(n + .6) : 16 + 7 * h1(n + .6);
+    staticScen.push({ id: 't' + n, x, y, src: 'trees', r: rr, dw: ht * rr[2] / rr[3], bld: false });
+  }
+  markSpots = []; const cand = [];                                     // landmark spots: grassy hilltops, well apart
+  for (let y = 80; y < H - 30; y += 20) for (let x = 60; x < W - 60; x += 20) { const v = samp(H0, nxT, nyT, G, x, y); if (v > .2 && v < .66) cand.push([x, y, v]); }
+  cand.sort((a, b) => b[2] - a[2]);
+  for (const c of cand) if (!markSpots.some(m => Math.hypot(m[0] - c[0], m[1] - c[1]) < 130)) markSpots.push(c);
+  const FC = 76;                                                       // patchwork fields in the flat country
+  for (let j = 0; j * FC < H; j++) for (let i = 0; i * FC < W; i++) {
+    const n = j * 3571 + i * 6007 + SEED * 13, x = (i + .2 + .6 * h1(n)) * FC, y = (j + .2 + .6 * h1(n + .3)) * FC;
+    if (h1(n + .9) > .6 || samp(H0, nxT, nyT, G, x, y) > .08 || fbm(x / 230 + 40, y / 230, 3) > .56) continue;
+    staticFields.push({ id: 'p' + n, x, y, w: 46 + 38 * h1(n + .1), h: 30 + 26 * h1(n + .2), a: (fbm(x / 500, y / 500, 2) - .5) * 1.4, type: Math.floor(h1(n + .4) * FIELD.length), n });
+  }
+}
+// what's on the board now: station buildings, towns round the windows, then whatever of the countryside still fits
+function layScenery() {
+  if (!ATLAS) { scen = []; fields = []; return; }
+  const out = [], foot = [];                                          // foot: building footprints placed so far
+  const OC = 24, onx = Math.ceil(W / OC) + 1, ony = Math.ceil(H / OC) + 1, OUT = new Uint8Array(onx * ony), ring = mainL ? mainL.pts.filter((p, k) => k % 4 === 0) : null;
+  if (ring) for (let j = 0; j < ony; j++) for (let i = 0; i < onx; i++) OUT[j * onx + i] = inRing(ring, i * OC, j * OC) ? 0 : 1;
+  const outside = (x, y) => !!ring && OUT[clamp(Math.round(y / OC), 0, ony - 1) * onx + clamp(Math.round(x / OC), 0, onx - 1)] === 1;
+  const clearOf = (x0, y0, x1, y1, track, ground, road = 6) => {
+    for (let a = 0; a <= 2; a++) for (let b = 0; b <= 2; b++) { const x = x0 + (x1 - x0) * a / 2, y = y0 + (y1 - y0) * b / 2;
+      if (x < FRAME + 3 || y < TOP || x > W - FRAME - 3 || y > H - FRAME - 3) return false;
+      if (tAt(x, y) < track || nsAt(x, y) < 6 || twAt(x, y) < HOUSE_GAP - 1 || wAt(x, y) < 4 || hAt(x, y) > ground || rdAt(x, y) < road) return false; }
+    return true; };
+  const plat = [];
+  for (const st of stations) if (st.ok) for (let u = -46; u <= 46; u += 5) { const p = at(st.L, st.s + u), a = tangent(st.L, st.s + u); for (const o of [10, 15, 20, 25, 30]) plat.push([p[0] - Math.sin(a) * o * st.side, p[1] + Math.cos(a) * o * st.side]); }
+  const onPlat = (x0, y0, x1, y1) => plat.some(([x, y]) => x > x0 - 3 && x < x1 + 3 && y > y0 - 3 && y < y1 + 3);
+  const overlaps = (x0, y0, x1, y1) => foot.some(f => x0 < f[2] && x1 > f[0] && y0 < f[3] && y1 > f[1]);
+  const walk = (x0, y0, x1, y1) => { const d = Math.hypot(x1 - x0, y1 - y0), n = Math.max(1, Math.ceil(d / 5)); for (let k = 0; k <= n; k++) if (tAt(x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n) < 6) return false; return true; };
+  const toRing = (s, x, y) => { const px = clamp(x, s.x, s.x + s.w), py = clamp(y, s.y, s.y + s.h), l = Math.hypot(x - px, y - py) || 1; return [px + (x - px) / l * OM, py + (y - py) / l * OM]; };
+  const hitsFoot = (x0, y0, x1, y1) => onPlat(x0, y0, x1, y1) || overlaps(x0, y0, x1, y1);
+  // a station building on whichever side has room (across the line: a footbridge), then a few houses or a landmark round it
+  footbridges = [];
+  for (const st of stations) { if (!st.ok || !st.side) continue;
+    const r = ATLAS.H.station, dw = 36, dh = dw * r[3] / r[2]; let placed = null;
+    for (const sd of [st.side, -st.side]) for (const u of [30, -30, 0]) { if (placed) break;
+      const p = at(st.L, st.s + u), a = tangent(st.L, st.s + u), off = sd === st.side ? 40 : 30, q = [p[0] - Math.sin(a) * sd * off, p[1] + Math.cos(a) * sd * off];
+      const x0 = q[0] - dw / 2, by = q[1] + dh * .3, y0 = by - dh;
+      if (clearOf(x0, y0, x0 + dw, by, 8, .5, 4) && !overlaps(x0, y0, x0 + dw, by) && (sd !== st.side || walk(q[0], by - 3, p[0] - Math.sin(a) * sd * 14, p[1] + Math.cos(a) * sd * 14))) placed = { q, x0, y0, by, sd, u }; }
+    if (!placed) continue;
+    out.push({ id: 'sb' + st.id, x: placed.q[0], y: placed.by, src: 'houses', r, dw, ok: true }); foot.push([placed.x0, placed.y0, placed.x0 + dw, placed.by]);
+    if (placed.sd !== st.side) footbridges.push({ L: st.L, s: st.s + placed.u * .5 + (placed.u ? 0 : 20) });
+    // the station's own little place: houses on its side, reachable from it; or one landmark if only that fits
+    const sd = placed.sd; let nb = 0;
+    for (const [u, off] of [[-62, 38], [62, 38], [-90, 34], [90, 34], [-36, 70], [36, 70], [0, 72]]) { if (nb >= 4) break;
+      const p = at(st.L, st.s + placed.u + u), a = tangent(st.L, st.s + placed.u + u), q = [p[0] - Math.sin(a) * sd * off, p[1] + Math.cos(a) * sd * off];
+      const n = st.s * .37 + u * 1.3, lm = nb === 0 && h1(n) < .35, [nm, w0] = lm ? [['watertower', 18], ['bandstand', 22], ['windmill', 22]][Math.floor(h1(n + .4) * 3)] : TOWN[Math.floor(h1(n + .7) * TOWN.length)];
+      const rr = ATLAS.H[nm], hh = w0 * rr[3] / rr[2], x0 = q[0] - w0 / 2, by = q[1] + hh * .35, y0 = by - hh;
+      if (!clearOf(x0, y0, x0 + w0, by, 8, .45, 4) || hitsFoot(x0 + 1, y0 + 1, x0 + w0 - 1, by) || !walk(q[0], by - 3, placed.q[0], placed.by - 3)) continue;
+      out.push({ id: `sh${st.id}:${u}`, x: q[0], y: by, src: 'houses', r: rr, dw: w0, ok: true }); foot.push([x0 + 1, y0 + 1, x0 + w0 - 1, by]); nb++; }
+  }
+  // the towns: two rows of houses facing the road on every side of each window
+  for (const s of slots) {
+    if (s.life < .02 || !s.town) continue;
+    let civic = 0;
+    for (let row = 0; row < 2; row++) {
+      const gap = HOUSE_GAP + row * ROW2;
+      const sides = [[s.w + 2 * gap, 'top'], [s.w + 2 * gap, 'bottom'], [s.h + 2 * gap - 30, 'left'], [s.h + 2 * gap - 30, 'right']];
+      for (let sd = 0; sd < 4; sd++) {
+        const [len, side] = sides[sd], vertical = sd >= 2; let p = 2 + row * 8, k = 0;
+        while (k < 90) {
+          const n = s.id * 977 + sd * 131 + k * 17 + row * 5003, rr = h1(n);
+          const [nm, dw] = (rr < .07 && civic < 2 && s.w > 260) ? CIVIC[Math.floor(h1(n + .3) * CIVIC.length)] : TOWN[Math.floor(h1(n + .6) * TOWN.length)];
+          if (CIVIC.some(c => c[0] === nm)) civic++;
+          const r = ATLAS.H[nm], dh = dw * r[3] / r[2];
+          if (p + (vertical ? dh : dw) > len) break;
+          let x0, y0;
+          if (side === 'top') { x0 = s.x - gap + p; y0 = s.y - gap - dh; }
+          else if (side === 'bottom') { x0 = s.x - gap + p; y0 = s.y + s.h + gap; }
+          else if (side === 'left') { x0 = s.x - gap - dw; y0 = s.y - gap + 15 + p; }
+          else { x0 = s.x + s.w + gap; y0 = s.y - gap + 15 + p; }
+          p += (vertical ? dh : dw) + 2 + (h1(n + .9) < .15 ? 9 : 2.5 * h1(n + .8));
+          k++;
+          const rp = toRing(s, x0 + dw / 2, y0 + dh * .75);
+          const ok = s.alive && clearOf(x0, y0, x0 + dw, y0 + dh, 9, .3) && !hitsFoot(x0 + 1, y0 + 1, x0 + dw - 1, y0 + dh) && walk(x0 + dw / 2, y0 + dh * .75, rp[0], rp[1]);   // the whole house clear, and reachable
+          out.push({ id: `h${s.id}:${row}:${sd}:${k}`, x: x0 + dw / 2, y: y0 + dh, src: 'houses', r, dw, ok });
+          if (ok) foot.push([x0 + 1, y0 + 1, x0 + dw - 1, y0 + dh]);
+        }
+      }
+    }
+  }
+  // the villages: houses along their streets and round their squares
+  for (const t of villageScen) { const r = t.r, dh = t.dw * r[3] / r[2], x0 = t.x - t.dw / 2, y0 = t.y - dh;
+    const ok = clearOf(x0, y0, x0 + t.dw, t.y, 8, .3, 3.5) && !hitsFoot(x0 + 1, y0 + 1, x0 + t.dw - 1, t.y) && !villages.some(v => Math.hypot(t.x - v.x, t.y - dh / 2 - v.y) < 18);
+    out.push({ id: t.id, x: t.x, y: t.y, src: 'houses', r, dw: t.dw, ok }); if (ok) foot.push([x0 + 1, y0 + 1, x0 + t.dw - 1, t.y]); }
+  // the fields
+  fields = [];
+  for (const f of staticFields) {
+    const c = Math.cos(f.a), sn = Math.sin(f.a), pts = [[0, 0], [-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]].map(([u, v]) => [f.x + (u * f.w * c - v * f.h * sn) / 2, f.y + (u * f.w * sn + v * f.h * c) / 2]);
+    const ok = pts.every(([x, y]) => x > FRAME + 5 && y > FRAME + 5 && x < W - FRAME - 5 && y < H - FRAME - 5 && tAt(x, y) > 14 && kAt(x, y) > T + 6 && wAt(x, y) > 7 && hAt(x, y) < LV[0] && rdAt(x, y) > 9) && !villages.some(v => Math.hypot(f.x - v.x, f.y - v.y) < 110)
+      && !fields.some(g => g.ok && Math.hypot(g.x - f.x, g.y - f.y) < (Math.max(g.w, g.h) + Math.max(f.w, f.h)) * .5);
+    fields.push(Object.assign(f, { ok }));
+  }
+  const inField = (x, y) => fields.some(f => { if (!f.ok) return false; const c = Math.cos(-f.a), sn = Math.sin(-f.a), dx = x - f.x, dy = y - f.y; return Math.abs(dx * c - dy * sn) < f.w / 2 + 3 && Math.abs(dx * sn + dy * c) < f.h / 2 + 3; });
+  // landmarks: the castle on the best hilltop that's clear, then a chapel, the alpine hotel, another chapel
+  const MARKS = [['castle', 46], ['chapel', 22], ['hotel', 34], ['chapel', 20]]; let mk = 0;
+  for (let q = 0; q < markSpots.length && mk < MARKS.length; q++) {
+    const [x, y] = markSpots[q], [nm, dw] = MARKS[mk], r = ATLAS.H[nm], dh = dw * r[3] / r[2], by = y + dh * .3, x0 = x - dw / 2, y0 = by - dh;
+    if (!(clearOf(x0, y0, x0 + dw, by, 11, 2) && hAt(x, y) > .16 && kAt(x, y) > T + 10 && !hitsFoot(x0, y0, x0 + dw, by))) continue;
+    foot.push([x0, y0, x0 + dw, by]); out.push({ id: `m${q}${nm}`, x, y: by, src: 'houses', r, dw, ok: true }); mk++;
+  }
+  for (const s0 of VIS.keys()) if (s0[0] === 'm' && !out.some(o => o.id === s0)) { const [, q, nm] = s0.match(/^m(\d+)(\D+)$/) || []; if (nm && markSpots[q]) { const r = ATLAS.H[nm], dw = MARKS.find(m => m[0] === nm)[1], dh = dw * r[3] / r[2]; out.push({ id: s0, x: markSpots[q][0], y: markSpots[q][1] + dh * .3, src: 'houses', r, dw, ok: false }); } }
+  // farms and trees wherever they still fit
+  for (const t of staticScen) {
+    const r = t.r, dh = t.dw * r[3] / r[2], x0 = t.x - t.dw / 2, y0 = t.y - dh;
+    let ok;
+    if (t.bld) { ok = clearOf(x0, y0, x0 + t.dw, t.y, 10, LV[0]) && !hitsFoot(x0, y0, x0 + t.dw, t.y) && !inField(t.x, t.y) && kAt(t.x, t.y) > T + 8 && (!t.belt || outside(t.x, t.y));
+      if (ok) foot.push([x0, y0, x0 + t.dw, t.y]); }
+    else { const hb = hAt(t.x, t.y);
+      ok = clearOf(t.x - t.dw * .4, t.y - dh, t.x + t.dw * .4, t.y, 8, 2) && hb < LV[5] && !inField(t.x, t.y) && !hitsFoot(t.x - t.dw * .35, t.y - dh * .8, t.x + t.dw * .35, t.y) && kAt(t.x, t.y) > HOUSE_GAP + 2 * ROW2 && (!t.belt || outside(t.x, t.y)) && !villages.some(v => Math.hypot(t.x - v.x, t.y - v.y) < 26); }
+    out.push({ id: t.id, x: t.x, y: t.y, src: t.src, r, dw: t.dw, ok, tree: !t.bld });
+  }
+  scen = out;
+}
+function easeScenery(dt) {
+  for (const o of scen.concat(fields, stations)) VIS.set(o.id, o.ok ? 1 : 0);
+  for (const L of branches) L.vis = 1;
+  ghosts = []; roadFade = 1; oldRoads = [];
+  return false;
+}
+
+/* ======================= drawing the board (into whichever canvas is being presented) ======================= */
+let bx = null, washCv = null, speckCv = null;
+let pats = new WeakMap();
+function prep() {
+  pats = new WeakMap();
+  washCv = document.createElement('canvas'); washCv.width = 64; washCv.height = 40; const wx = washCv.getContext('2d'), im = wx.createImageData(64, 40);
+  for (let j = 0; j < 40; j++) for (let i = 0; i < 64; i++) { const n = (Math.sin(i * .37 + SEED) + Math.sin(j * .41 + i * .13 + SEED * 2) + Math.sin(i * .11 - j * .23)) / 3, o = (j * 64 + i) * 4;
+    const v = n > 0 ? [255, 250, 200, n * 40] : [40, 90, 30, -n * 40]; im.data.set([v[0], v[1], v[2], v[3] | 0], o); }
+  wx.putImageData(im, 0, 0);
+  speckCv = document.createElement('canvas'); speckCv.width = speckCv.height = Math.round(80 * K); const x = speckCv.getContext('2d'); x.scale(K, K);
+  for (let i = 0; i < 150; i++) { const r = h1(i * 3.1 + SEED); x.fillStyle = r < .45 ? 'rgba(190,230,140,.55)' : r < .9 ? 'rgba(95,150,60,.4)' : r < .95 ? 'rgba(255,255,250,.9)' : r < .975 ? 'rgba(255,220,90,.9)' : 'rgba(250,160,200,.9)';
+    x.beginPath(); x.ellipse(h1(i * 1.7 + 1) * 80, h1(i * 2.3 + 2) * 80, r < .9 ? .6 : .8, r < .9 ? 1.2 : .8, 0, 0, 7); x.fill(); }
+}
+function speck(ctx) { let p = pats.get(ctx); if (!p) { p = ctx.createPattern(speckCv, 'repeat'); p.setTransform(new DOMMatrix().scale(1 / K)); pats.set(ctx, p); } return p; }
+function drawBoard(ctx) {
+  const t0 = performance.now(); bx = ctx;
+  bx.setTransform(K, 0, 0, K, 0, 0); bx.globalAlpha = 1;
+  bx.fillStyle = '#93c96b'; bx.fillRect(0, 0, W, H);
+  bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = 'high'; bx.drawImage(washCv, 0, 0, W, H);
+  bx.fillStyle = speck(bx); bx.fillRect(0, 0, W, H);
+  for (const f of fields) drawField(f);
+  drawWater();
+  bx.lineJoin = 'round';                                               // the hills, layer on layer: shadow, cut edge, top, a light catch on the rim
+  levelPaths.forEach((p, k) => { if (!p) return;
+    bx.save(); bx.translate(5, LIFT + 4); bx.fillStyle = 'rgba(35,70,20,.2)'; bx.fill(p, 'evenodd'); bx.restore();
+    bx.save(); bx.translate(0, LIFT); bx.fillStyle = LV_SIDE[k]; bx.fill(p, 'evenodd'); bx.restore();
+    bx.fillStyle = LV_TOP[k]; bx.fill(p, 'evenodd');
+    bx.strokeStyle = 'rgba(255,255,235,.55)'; bx.lineWidth = 1.2; bx.stroke(p); });
+  drawRoadNet();
+  for (const L of ghosts) drawLine(L);
+  for (const L of branches) drawLine(L);
+  if (mainL) drawLine(mainL);
+  for (const st of stations) if (st.kind === 'main') drawLoop(st);
+  for (const b of branches) junctionBox(b);
+  drawCrossings();
+  for (const st of stations) drawPlatform(st);
+  for (const fb of footbridges) { const p = at(fb.L, fb.s), a = tangent(fb.L, fb.s);
+    bx.save(); bx.translate(p[0], p[1]); bx.rotate(a);
+    bx.fillStyle = 'rgba(30,60,20,.3)'; bx.fillRect(-2.5, -30 + 3, 7, 60);
+    bx.fillStyle = '#3f6fa8'; bx.fillRect(-3.5, -24, 7, 48); bx.fillStyle = '#e9edf2'; bx.fillRect(-2.2, -24, 4.4, 48);
+    bx.fillStyle = '#c9cdd4'; for (let k = -22; k <= 22; k += 3) bx.fillRect(-2.2, k, 4.4, .6);
+    bx.fillStyle = '#3f6fa8'; for (const e of [-1, 1]) { bx.fillRect(-4.5, e * 24 - 4, 9, 8); bx.fillStyle = '#e9edf2'; bx.fillRect(-3.2, e * 24 - 2.8, 6.4, 5.6); bx.fillStyle = '#3f6fa8'; }
+    bx.restore(); }
+  drawSprites();
+  for (const st of stations) drawNameboard(st);
+  drawFrame();
+  fieldMs = fieldMs * .8 + (performance.now() - t0) * .2;
+}
+function drawWater() {
+  if (!waterPath) return;
+  bx.lineJoin = 'round';
+  bx.strokeStyle = '#efe3b6'; bx.lineWidth = 4; bx.stroke(waterPath);                                       // a sandy bank
+  bx.fillStyle = '#3f8ea4'; bx.fill(waterPath, 'evenodd');                                                 // the far bank's wall
+  bx.save(); bx.clip(waterPath, 'evenodd'); bx.translate(0, 3); bx.fillStyle = '#62c3d7'; bx.fill(waterPath, 'evenodd'); bx.translate(0, -3);
+  bx.strokeStyle = 'rgba(255,255,255,.6)'; bx.lineWidth = 1; bx.lineCap = 'round';
+  for (const [x, y, a, l] of sparkles) { bx.beginPath(); bx.moveTo(x - Math.cos(a) * l, y - Math.sin(a) * l); bx.quadraticCurveTo(x - Math.sin(a) * 1, y + Math.cos(a) * 1, x + Math.cos(a) * l, y + Math.sin(a) * l); bx.stroke(); }
+  bx.restore();
+}
+function drawField(f) {
+  const v = VIS.get(f.id) || 0; if (v <= 0) return;
+  const [c0, c1] = FIELD[f.type];
+  bx.save(); bx.globalAlpha = v; bx.translate(f.x, f.y); bx.rotate(f.a); const sc = .7 + .3 * v; bx.scale(sc, sc);
+  bx.beginPath(); bx.roundRect(-f.w / 2, -f.h / 2, f.w, f.h, 4); bx.fillStyle = c0; bx.fill();
+  bx.save(); bx.clip(); bx.strokeStyle = c1; bx.lineWidth = 1.1; bx.lineCap = 'round';
+  if (f.type !== 5) for (let y = -f.h / 2 + 2.5; y < f.h / 2; y += 3.4) { bx.beginPath(); bx.moveTo(-f.w / 2 + 2.5, y); bx.lineTo(f.w / 2 - 2.5, y); bx.stroke(); }
+  else for (let i = 0; i < 5; i++) { const x = (h1(f.n + i) - .5) * f.w * .75, y = (h1(f.n + i + .5) - .5) * f.h * .65, a = h1(f.n + i * 3) * 6.28, white = h1(f.n + i * 2) > .4;   // cows
+    bx.save(); bx.translate(x, y); bx.rotate(a); bx.scale(.8, .8);
+    bx.fillStyle = 'rgba(30,60,20,.25)'; bx.beginPath(); bx.ellipse(1, 1.4, 4, 2.2, 0, 0, 7); bx.fill();
+    bx.fillStyle = white ? '#fbfaf6' : '#8a5a3c'; bx.beginPath(); bx.ellipse(0, 0, 4, 2.2, 0, 0, 7); bx.fill();
+    if (white) { bx.fillStyle = '#2e2e2e'; bx.beginPath(); bx.arc(-1, -.6, 1, 0, 7); bx.arc(1.4, .7, .8, 0, 7); bx.fill(); }
+    bx.fillStyle = white ? '#f0c9b8' : '#5e3b26'; bx.beginPath(); bx.arc(3.9, 0, 1.3, 0, 7); bx.fill(); bx.restore(); }
+  const lg = bx.createLinearGradient(-f.w / 2, -f.h / 2, f.w / 2, f.h / 2); lg.addColorStop(0, 'rgba(255,255,230,.18)'); lg.addColorStop(1, 'rgba(0,30,0,.1)'); bx.fillStyle = lg; bx.fillRect(-f.w / 2, -f.h / 2, f.w, f.h);
+  bx.restore();
+  bx.beginPath(); bx.roundRect(-f.w / 2, -f.h / 2, f.w, f.h, 4);                                           // a round-topped hedge round it
+  bx.save(); bx.translate(1, 1.6); bx.lineWidth = 4; bx.strokeStyle = 'rgba(30,60,20,.25)'; bx.stroke(); bx.restore();
+  bx.lineWidth = 3.5; bx.strokeStyle = '#4f8a36'; bx.stroke(); bx.lineWidth = 1.3; bx.strokeStyle = 'rgba(170,220,120,.7)'; bx.setLineDash([1.3, 2]); bx.stroke(); bx.setLineDash([]);
+  bx.restore();
+}
+function drawRoad(s) {
+  const a = clamp(s.life * 1.4 - .2, 0, 1); if (a <= 0 || !s.town) return;
+  bx.globalAlpha = a; const k = .5 + .5 * s.life, o1 = VERGE * k, o2 = (VERGE + ROAD) * k, om = (o1 + o2) / 2;
+  const rect = o => { const p = new Path2D(); p.roundRect(s.x - o, s.y - o, s.w + 2 * o, s.h + 2 * o, Math.max(4, o + 4)); return p; };
+  const ring = rect(o2); ring.addPath(rect(o1));
+  bx.save(); bx.translate(1.2, 2); bx.fillStyle = 'rgba(30,60,20,.2)'; bx.fill(ring, 'evenodd'); bx.restore();
+  bx.fillStyle = '#7c8390'; bx.fill(ring, 'evenodd');
+  bx.strokeStyle = '#eee8dc'; bx.lineWidth = 1.5; bx.stroke(rect(o2)); bx.stroke(rect(o1));
+  bx.setLineDash([4, 4]); bx.strokeStyle = 'rgba(255,250,235,.85)'; bx.lineWidth = .8; bx.stroke(rect(om)); bx.setLineDash([]);
+  bx.globalAlpha = 1;
+}
+
+// the country roads: kerbs, asphalt, centre dashes; stone parapets where they bridge the river; the village squares
+function offPath(pts, i0, i1, off, dx = 0, dy = 0) { const n = pts.length; bx.beginPath();
+  for (let k = i0; k <= i1; k++) { const a = pts[Math.max(0, k - 2)], b = pts[Math.min(n - 1, k + 2)], l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, nx = -(b[1] - a[1]) / l, ny = (b[0] - a[0]) / l, p = pts[k];
+    const x = p[0] + nx * off + dx, y = p[1] + ny * off + dy; k === i0 ? bx.moveTo(x, y) : bx.lineTo(x, y); } }
+function drawRoadNet() {
+  const rings = slots.filter(s => s.town && s.life > .02).map(s => { const k = .5 + .5 * s.life, o = OM * k, p = new Path2D(); p.roundRect(s.x - o, s.y - o, s.w + 2 * o, s.h + 2 * o, Math.max(4, o + 4)); return { p, a: clamp(s.life * 1.4 - .2, 0, 1) }; });
+  const sets = [[oldRoads, 1 - roadFade], [roads, roadFade]].filter(([l, a]) => l.length && a > .01).map(([l, a]) => [l.map(r => ({ r, open: runs(r.pts.map(p => twAt(p[0], p[1]) > OM - .5), false) })), a]);
+  const each = (fn, ringFn) => { for (const [list, a] of sets) { bx.globalAlpha = a; for (const o of list) for (const [i, l] of o.open) if (l > 1) fn(o.r, i, i + l - 1); } bx.globalAlpha = 1; if (ringFn) for (const g of rings) { bx.globalAlpha = g.a; ringFn(g.p); } bx.globalAlpha = 1; };
+  bx.lineJoin = bx.lineCap = 'round';
+  for (const [list, a] of sets) { bx.globalAlpha = a; for (const o of list) for (const [i, l] of runs(o.r.br.map((b, k) => b && twAt(o.r.pts[k][0], o.r.pts[k][1]) > OM), false)) { offPath(o.r.pts, i, i + l - 1, 0, 2.5, 4.5); bx.strokeStyle = 'rgba(10,50,60,.35)'; bx.lineWidth = 12; bx.stroke(); } }
+  each((r, i0, i1) => { offPath(r.pts, i0, i1, 0, .8, 1.4); bx.strokeStyle = 'rgba(30,60,20,.18)'; bx.lineWidth = 11; bx.stroke(); },
+       p => { bx.save(); bx.translate(.8, 1.4); bx.strokeStyle = 'rgba(30,60,20,.18)'; bx.lineWidth = 11; bx.stroke(p); bx.restore(); });
+  each((r, i0, i1) => { offPath(r.pts, i0, i1, 0); bx.strokeStyle = '#ebe4d6'; bx.lineWidth = 10; bx.stroke(); }, p => { bx.strokeStyle = '#ebe4d6'; bx.lineWidth = 10; bx.stroke(p); });
+  each((r, i0, i1) => { offPath(r.pts, i0, i1, 0); bx.strokeStyle = '#7c8390'; bx.lineWidth = 8; bx.stroke(); }, p => { bx.strokeStyle = '#7c8390'; bx.lineWidth = 8; bx.stroke(p); });
+  bx.setLineDash([4, 5]); bx.lineCap = 'butt';
+  each((r, i0, i1) => { if (i1 - i0 < 6) return; offPath(r.pts, i0 + 3, i1 - 3, 0); bx.strokeStyle = 'rgba(255,250,235,.8)'; bx.lineWidth = .8; bx.stroke(); }, p => { bx.strokeStyle = 'rgba(255,250,235,.8)'; bx.lineWidth = .8; bx.stroke(p); });
+  bx.setLineDash([]); bx.lineCap = 'round';
+  for (const [list, a] of sets) { bx.globalAlpha = a; for (const o of list) for (const [i, l] of runs(o.r.br, false)) for (const off of [-5.6, 5.6]) {
+    offPath(o.r.pts, i, i + l - 1, off); bx.strokeStyle = '#a89a83'; bx.lineWidth = 2.6; bx.stroke(); offPath(o.r.pts, i, i + l - 1, off - .5); bx.strokeStyle = '#efe5d2'; bx.lineWidth = 1.1; bx.stroke(); } }
+  bx.globalAlpha = 1;
+  for (const v of villages) { if (!isVis(v) || !(v.node >= 0)) continue;
+    bx.fillStyle = 'rgba(30,60,20,.18)'; bx.beginPath(); bx.arc(v.x + 1, v.y + 1.6, 17, 0, 7); bx.fill();
+    bx.fillStyle = '#e6dcc8'; bx.beginPath(); bx.arc(v.x, v.y, 16, 0, 7); bx.fill(); bx.strokeStyle = '#c9bca4'; bx.lineWidth = 1; bx.stroke();
+    bx.fillStyle = '#cfc3ad'; bx.beginPath(); bx.arc(v.x, v.y, 5.6, 0, 7); bx.fill(); bx.fillStyle = '#7fcbdc'; bx.beginPath(); bx.arc(v.x, v.y, 4, 0, 7); bx.fill();
+    bx.fillStyle = 'rgba(255,255,255,.8)'; bx.beginPath(); bx.arc(v.x - 1.2, v.y - 1.2, 1, 0, 7); bx.fill(); }
+}
+// where a road crosses a line: a planked deck, the rails over it
+function drawCrossings() {
+  for (const cr of crossings) {
+    bx.save(); bx.translate(cr.x, cr.y); bx.rotate(cr.ra);
+    bx.fillStyle = '#dccdaa'; bx.fillRect(-8, -4.4, 16, 8.8); bx.strokeStyle = 'rgba(120,95,60,.45)'; bx.lineWidth = .5;
+    for (let x = -7; x <= 7; x += 2.3) { bx.beginPath(); bx.moveTo(x, -4.4); bx.lineTo(x, 4.4); bx.stroke(); }
+    bx.fillStyle = '#fff'; bx.fillRect(-11.5, -4, .9, 8); bx.fillRect(10.6, -4, .9, 8);
+    bx.restore();
+    bx.save(); bx.translate(cr.x, cr.y); bx.rotate(cr.ta);
+    for (const o of [-GAUGE, GAUGE]) { bx.strokeStyle = '#5f6875'; bx.lineWidth = 1.2; bx.beginPath(); bx.moveTo(-7, o); bx.lineTo(7, o); bx.stroke(); bx.strokeStyle = 'rgba(245,248,252,.9)'; bx.lineWidth = .45; bx.beginPath(); bx.moveTo(-7, o - .25); bx.lineTo(7, o - .25); bx.stroke(); }
+    bx.restore();
+  }
+}
+const GAUGE = 2.8;
+// track along a polyline: ballast, girder bridges, sleepers, rails, tunnel mouths, buffers at an open end
+function drawRails(pts, closed, tun, br, alpha) {
+  const n = pts.length; if (n < 3 || alpha <= 0) return;
+  bx.globalAlpha = alpha;
+  const ix = i => closed ? ((i % n) + n) % n : clamp(i, 0, n - 1);
+  const norm = i => { const a = pts[ix(i - 2)], b = pts[ix(i + 2)], l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; return [-(b[1] - a[1]) / l, (b[0] - a[0]) / l]; };
+  const path = (i0, len, off, dx = 0, dy = 0) => { bx.beginPath(); for (let k = 0; k <= len; k++) { const i = ix(i0 + k), p = pts[i], nn = norm(i), x = p[0] + nn[0] * off + dx, y = p[1] + nn[1] * off + dy; k ? bx.lineTo(x, y) : bx.moveTo(x, y); } };
+  bx.lineJoin = 'round'; bx.lineCap = 'butt';
+  const lenOf = l => closed ? Math.min(l, n) : Math.max(0, l - 1);
+  const open = runs(tun.map(v => !v), closed), ground = runs(tun.map((v, i) => !v && !br[i]), closed), bridges = runs(br, closed);
+  for (const [i, l] of ground) { const ln = lenOf(l);
+    path(i, ln, 0, .8, 1.3); bx.strokeStyle = 'rgba(40,70,25,.2)'; bx.lineWidth = 13; bx.stroke();
+    path(i, ln, 0); bx.strokeStyle = '#b8ad9a'; bx.lineWidth = 11.5; bx.stroke(); bx.strokeStyle = '#d6cdbb'; bx.lineWidth = 8.6; bx.stroke(); }
+  for (const [i, l] of bridges) { const ln = lenOf(l);
+    path(i, ln, 0, 3, 5); bx.strokeStyle = 'rgba(10,50,60,.35)'; bx.lineWidth = 13; bx.stroke();
+    path(i, ln, 0); bx.strokeStyle = '#5d5a57'; bx.lineWidth = 10.5; bx.stroke();
+    for (const off of [-6.2, 6.2]) { path(i, ln, off); bx.strokeStyle = '#b8402f'; bx.lineWidth = 2.2; bx.stroke(); path(i, ln, off - .5); bx.strokeStyle = '#e8735b'; bx.lineWidth = .8; bx.stroke(); }
+    bx.strokeStyle = '#c9533f'; bx.lineWidth = .6; bx.beginPath();
+    for (let k = 0; k < ln - 3; k += 3) { const a = pts[ix(i + k)], na = norm(i + k), b = pts[ix(i + k + 3)], nb = norm(i + k + 3);
+      for (const s of [-1, 1]) { bx.moveTo(a[0] + na[0] * 6.2 * s, a[1] + na[1] * 6.2 * s); bx.lineTo(b[0] + nb[0] * 7.8 * s, b[1] + nb[1] * 7.8 * s); } }
+    bx.stroke(); }
+  bx.beginPath();                                                      // sleepers, one path for the lot
+  for (const [i0, l] of open) for (let k = 0; k < l; k += 2) { const i = ix(i0 + k), p = pts[i], nn = norm(i), tx = nn[1], ty = -nn[0], hw = 4.8, ht = .95;
+    bx.moveTo(p[0] - nn[0] * hw - tx * ht, p[1] - nn[1] * hw - ty * ht); bx.lineTo(p[0] + nn[0] * hw - tx * ht, p[1] + nn[1] * hw - ty * ht); bx.lineTo(p[0] + nn[0] * hw + tx * ht, p[1] + nn[1] * hw + ty * ht); bx.lineTo(p[0] - nn[0] * hw + tx * ht, p[1] - nn[1] * hw + ty * ht); bx.closePath(); }
+  bx.fillStyle = '#8f6b4c'; bx.fill();
+  for (const [i, l] of open) { const ln = lenOf(l); for (const off of [-GAUGE, GAUGE]) { path(i, ln, off); bx.strokeStyle = '#5f6875'; bx.lineWidth = 1.2; bx.stroke(); path(i, ln, off - .25); bx.strokeStyle = 'rgba(245,248,252,.9)'; bx.lineWidth = .45; bx.stroke(); } }
+  for (const [i, l] of runs(tun, closed)) { if (l >= n) continue; if (closed || i > 0) portal(pts, ix(i), ix(i + 4), 1); if (closed || i + l < n) portal(pts, ix(i + l - 1), ix(i + l - 5), 1); }
+  bx.globalAlpha = 1;
+}
+function drawLine(L) {
+  const a = L.closed ? 1 : L.vis; if (a <= 0) return;
+  drawRails(L.pts, L.closed, L.tun, L.br, a);
+  if (!L.closed) { const n = L.pts.length, p = L.pts[n - 1], q = L.pts[n - 4], ang = Math.atan2(p[1] - q[1], p[0] - q[0]);   // buffer stop
+    bx.save(); bx.globalAlpha = a; bx.translate(p[0], p[1]); bx.rotate(ang);
+    bx.fillStyle = 'rgba(30,60,20,.3)'; bx.fillRect(-1, -4.5 + 1.2, 4, 10);
+    bx.fillStyle = '#e8483a'; bx.beginPath(); bx.roundRect(-1.6, -4.5, 3.6, 9, 1.2); bx.fill(); bx.fillStyle = '#fff'; bx.fillRect(-1.6, -1.2, 3.6, 2.4);
+    bx.restore(); }
+}
+// a tunnel mouth at point i, the bore running toward point j: the dark of the bore, a stone face with a keystone, wing walls
+function portal(pts, i, j) {
+  const p = pts[i], q = pts[j], a = Math.atan2(q[1] - p[1], q[0] - p[0]);
+  bx.save(); bx.translate(p[0], p[1]); bx.rotate(a); bx.scale(.62, .62);
+  const g = bx.createLinearGradient(-1, 0, 16, 0); g.addColorStop(0, 'rgba(20,24,30,.95)'); g.addColorStop(1, 'rgba(20,24,30,0)');
+  bx.fillStyle = g; bx.beginPath(); bx.roundRect(-1, -10, 17, 20, 4); bx.fill();
+  bx.fillStyle = 'rgba(30,50,20,.3)'; bx.beginPath(); bx.roundRect(-4, -14, 8, 32, 3); bx.fill();
+  bx.fillStyle = '#d5c8b3'; bx.strokeStyle = '#8c7e69'; bx.lineWidth = 1;
+  for (const s of [-1, 1]) { bx.save(); bx.translate(-1, s * 15); bx.rotate(s * .65); bx.beginPath(); bx.roundRect(0, -2.5, 13, 5, 2); bx.fill(); bx.stroke(); bx.restore(); }
+  bx.beginPath(); bx.roundRect(-6, -16, 8, 32, 3); bx.fill(); bx.stroke();
+  bx.fillStyle = '#e9dfcd'; bx.beginPath(); bx.roundRect(-6, -3, 8, 6, 1.5); bx.fill(); bx.stroke();
+  bx.restore();
+}
+// a passing loop beside a main-line station, its two switches with lever boxes and lamps (green when set for the loop)
+function drawLoop(st) {
+  const v = VIS.get(st.id) || 0; if (v <= 0) return;
+  const pts = loopPts(st), f = pts.map(() => false);
+  drawRails(pts, false, f, f, v);
+  for (const e of [0, 1]) { const u = e ? LOOP_HALF - 6 : -LOOP_HALF + 6, p = at(st.L, st.s + u), a = tangent(st.L, st.s + u), o = -st.loopSide * 10, x = p[0] - Math.sin(a) * o, y = p[1] + Math.cos(a) * o;
+    bx.globalAlpha = v; bx.fillStyle = 'rgba(30,60,20,.3)'; bx.fillRect(x - 2, y - 1.5, 5, 4.5);
+    bx.fillStyle = '#4a4d55'; bx.beginPath(); bx.roundRect(x - 2.5, y - 2.5, 5, 4.5, 1); bx.fill();
+    bx.fillStyle = st.sw[e] ? '#4ee08a' : '#ff6b5a'; bx.beginPath(); bx.arc(x, y - .3, 1.3, 0, 7); bx.fill(); }
+  bx.globalAlpha = 1;
+}
+function junctionBox(b) {
+  if (b.vis <= 0) return;
+  const p = at(mainL, b.jS + b.dJ * 10), a = tangent(mainL, b.jS + b.dJ * 10), o = -b.jSide * 11, x = p[0] - Math.sin(a) * o, y = p[1] + Math.cos(a) * o;
+  bx.globalAlpha = b.vis; bx.fillStyle = 'rgba(30,60,20,.3)'; bx.fillRect(x - 2, y - 1.5, 5, 4.5);
+  bx.fillStyle = '#4a4d55'; bx.beginPath(); bx.roundRect(x - 2.5, y - 2.5, 5, 4.5, 1); bx.fill(); bx.fillStyle = '#f2c14e'; bx.beginPath(); bx.arc(x, y - .3, 1.2, 0, 7); bx.fill();
+  bx.globalAlpha = 1;
+}
+function drawPlatform(st) {
+  const v = (VIS.get(st.id) || 0) * (st.L.closed ? 1 : st.L.vis ?? 1); if (v <= 0) return;
+  const L = st.L, c = st.slot, p0 = at(L, st.s), a0 = tangent(L, st.s), cx = c.x + c.w / 2, cy = c.y + c.h / 2;
+  const side = ((cx - p0[0]) * -Math.sin(a0) + (cy - p0[1]) * Math.cos(a0)) > 0 ? 1 : -1; st.side = side;   // the platform is on the town's side
+  const strip = (o0, o1, from, to) => { bx.beginPath(); for (let s = from; s <= to; s += 3) { const p = at(L, st.s + s), a = tangent(L, st.s + s); bx.lineTo(p[0] - Math.sin(a) * side * o0, p[1] + Math.cos(a) * side * o0); }
+    for (let s = to; s >= from; s -= 3) { const p = at(L, st.s + s), a = tangent(L, st.s + s); bx.lineTo(p[0] - Math.sin(a) * side * o1, p[1] + Math.cos(a) * side * o1); } bx.closePath(); };
+  bx.globalAlpha = v;
+  bx.save(); bx.translate(1.2, 2); strip(7.5, 18, -44, 44); bx.fillStyle = 'rgba(30,60,20,.22)'; bx.fill(); bx.restore();
+  strip(7.5, 18, -44, 44); bx.fillStyle = '#e4dccb'; bx.fill();
+  strip(7.5, 8.8, -44, 44); bx.fillStyle = '#f6d65a'; bx.fill();
+  strip(10, 16, -28, 28); bx.fillStyle = '#d2604b'; bx.fill(); strip(10, 12.6, -28, 28); bx.fillStyle = 'rgba(255,255,255,.25)'; bx.fill();
+  bx.fillStyle = '#4b4f58'; for (const u of [-38, -6, 22, 38]) { const p = at(L, st.s + u), a = tangent(L, st.s + u); bx.beginPath(); bx.arc(p[0] - Math.sin(a) * side * 16.5, p[1] + Math.cos(a) * side * 16.5, .8, 0, 7); bx.fill(); }   // lamp posts
+  bx.globalAlpha = 1;
+}
+function drawNameboard(st) {
+  const v = (VIS.get(st.id) || 0) * (st.L.closed ? 1 : st.L.vis ?? 1); if (v <= 0) return;
+  const L = st.L, p = at(L, st.s), a = tangent(L, st.s), side = st.side || 1, nx = -Math.sin(a), ny = Math.cos(a);
+  const tx = p[0] + nx * side * 25, ty = p[1] + ny * side * 25;
+  bx.save(); bx.globalAlpha = v; bx.translate(tx, ty); let r = a; if (Math.cos(r) < 0) r += Math.PI; bx.rotate(r);
+  bx.font = '700 7px "Avenir Next", "Helvetica Neue", sans-serif'; const label = st.name.toUpperCase(), w = bx.measureText(label).width + 12;
+  bx.fillStyle = 'rgba(30,50,20,.25)'; bx.beginPath(); bx.roundRect(-w / 2 + 1, -5.5 + 1.6, w, 11, 5.5); bx.fill();
+  bx.fillStyle = st.kind === 'term' ? '#7a3f9a' : '#2d5d9b'; bx.beginPath(); bx.roundRect(-w / 2, -5.5, w, 11, 5.5); bx.fill();
+  bx.strokeStyle = 'rgba(255,255,255,.85)'; bx.lineWidth = .8; bx.beginPath(); bx.roundRect(-w / 2 + 1.3, -4.2, w - 2.6, 8.4, 4.2); bx.stroke();
+  bx.fillStyle = '#fff'; bx.textAlign = 'center'; bx.textBaseline = 'middle'; bx.fillText(label, 0, .5);
+  bx.restore();
+}
+// sprites pre-shrunk once to their exact size on screen, packed in one sheet: every later draw is a 1:1 copy, not a resample
+const SC = { cv: null, ctx: null, x: 0, y: 0, rowh: 0, map: new Map(), K: 0 };
+function scaled(src, r, dw) {
+  if (SC.K !== K) { SC.map.clear(); SC.x = SC.y = SC.rowh = 0; SC.K = K; if (SC.cv) { SC.cv.width = SC.cv.height = 1; SC.cv = null; } }
+  const q = Math.round(dw * 4) / 4, key = `${src}${r[0]},${r[1]}@${q}`; let e = SC.map.get(key); if (e) return e;
+  const sw = Math.round(q * K), sh = Math.round(q * r[3] / r[2] * K);
+  if (!SC.cv) { SC.cv = document.createElement('canvas'); SC.cv.width = 2048; SC.cv.height = 512; SC.ctx = SC.cv.getContext('2d'); }
+  if (SC.x + sw + 2 > 2048) { SC.x = 0; SC.y += SC.rowh + 2; SC.rowh = 0; }
+  if (SC.y + sh + 2 > SC.cv.height) { if (SC.cv.height >= 2048) return null;   // grow the sheet (what's in it keeps its place)
+    const n = document.createElement('canvas'); n.width = 2048; n.height = SC.cv.height * 2; n.getContext('2d').drawImage(SC.cv, 0, 0); SC.cv.width = SC.cv.height = 1; SC.cv = n; SC.ctx = n.getContext('2d'); }
+  const c = SC.ctx; c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high'; c.drawImage(IMG[src], r[0], r[1], r[2], r[3], SC.x + 1, SC.y + 1, sw, sh);
+  e = { sx: SC.x + 1, sy: SC.y + 1, sw, sh }; SC.x += sw + 2; SC.rowh = Math.max(SC.rowh, sh); SC.map.set(key, e); return e;
+}
+function drawSprites() {
+  if (!ATLAS || !IMG.houses.complete || !IMG.trees.complete) return;
+  const vis = scen.filter(o => (VIS.get(o.id) || 0) > 0).sort((a, b) => a.y - b.y);
+  bx.imageSmoothingQuality = quick ? 'medium' : 'high';
+  bx.fillStyle = 'rgba(35,70,25,.26)';                               // shadows first, falling to the lower right
+  for (const o of vis) { const v = VIS.get(o.id), dh = o.dw * o.r[3] / o.r[2]; bx.globalAlpha = v;
+    bx.beginPath(); if (o.tree) bx.ellipse(o.x + o.dw * .3, o.y - 1, o.dw * .5, o.dw * .28, .45, 0, 7); else bx.ellipse(o.x + o.dw * .12, o.y - dh * .18, o.dw * .56, dh * .26, 0, 0, 7); bx.fill(); }
+  for (const o of vis) { const v = VIS.get(o.id), e = scaled(o.src, o.r, o.dw); bx.globalAlpha = v;
+    if (!e) { const dh = o.dw * o.r[3] / o.r[2]; bx.drawImage(IMG[o.src], o.r[0], o.r[1], o.r[2], o.r[3], o.x - o.dw / 2, o.y - dh, o.dw, dh); continue; }
+    const w = e.sw / K, h = e.sh / K; bx.drawImage(SC.cv, e.sx, e.sy, e.sw, e.sh, Math.round((o.x - w / 2) * K) / K, Math.round((o.y - h) * K) / K, w, h); }
+  bx.imageSmoothingQuality = 'high';
+  bx.globalAlpha = 1;
+}
+function drawFrame() {
+  const f = FRAME;
+  bx.fillStyle = '#b07a4e'; bx.fillRect(0, 0, W, f); bx.fillRect(0, H - f, W, f); bx.fillRect(0, 0, f, H); bx.fillRect(W - f, 0, f, H);
+  bx.fillStyle = 'rgba(255,225,180,.35)'; bx.fillRect(0, 0, W, 2); bx.fillRect(0, 0, 2, H);
+  bx.fillStyle = 'rgba(90,50,20,.35)'; bx.fillRect(0, H - 2, W, 2); bx.fillRect(W - 2, 0, 2, H);
+  for (let i = 0; i < 26; i++) { bx.strokeStyle = `rgba(${h1(i) > .5 ? '120,75,40' : '200,150,100'},.25)`; bx.lineWidth = .7; const y = 3 + h1(i * 3.1) * (f - 6);
+    bx.beginPath(); bx.moveTo(0, y); bx.bezierCurveTo(W * .3, y + 2, W * .6, y - 2, W, y + 1); bx.stroke(); bx.beginPath(); bx.moveTo(0, H - f + y); bx.bezierCurveTo(W * .4, H - f + y - 1.5, W * .7, H - f + y + 2, W, H - f + y); bx.stroke(); }
+  bx.strokeStyle = 'rgba(60,35,15,.45)'; bx.lineWidth = 2; bx.strokeRect(f + 1, f + 1, W - 2 * f - 2, H - 2 * f - 2);
+  const label = 'DRIFTLAND & DISTRICT RAILWAY', w = 200;
+  bx.fillStyle = 'rgba(60,35,15,.3)'; bx.beginPath(); bx.roundRect(W / 2 - w / 2 + 1, H - f + 3, w, f - 5, 3.5); bx.fill();
+  const g = bx.createLinearGradient(0, H - f + 2, 0, H - 2); g.addColorStop(0, '#f0d58a'); g.addColorStop(1, '#c9a24f');
+  bx.fillStyle = g; bx.beginPath(); bx.roundRect(W / 2 - w / 2, H - f + 2, w, f - 5, 3.5); bx.fill();
+  bx.fillStyle = '#5a3d12'; bx.font = '700 7px "Avenir Next", "Helvetica Neue", sans-serif'; bx.textAlign = 'center'; bx.textBaseline = 'middle'; bx.fillText(label, W / 2, H - f / 2 + .5);
+}
+// presenting the board: drawn straight in when it's the first picture; otherwise into the hidden canvas, which then
+// blends in over the old one. While windows move this runs a few times a second, so the land morphs at almost no cost.
+let cv = document.getElementById('board'), back = null, lastPresent = 0, backFreed = true;
+let quick = false, rebuildGen = 0, presentGen = 0, blendT0 = 0;
+const BLEND = 380, blendF = (gen, now) => gen !== presentGen ? 0 : (t => t * t * (3 - 2 * t))(clamp((now - blendT0) / BLEND, 0, 1));
+function present(blend) {
+  if (!blend) { drawBoard(cv.getContext('2d')); return; }
+  if (!back) { back = document.createElement('canvas'); back.className = 'board'; document.body.insertBefore(back, cv); }
+  if (backFreed || back.width !== cv.width) { back.width = cv.width; back.height = cv.height; backFreed = false; }
+  back.style.transition = 'none'; back.style.opacity = 0; back.style.zIndex = 1; cv.style.zIndex = 0;
+  drawBoard(back.getContext('2d'));
+  cv.style.transition = 'none'; cv.style.opacity = 1;
+  void back.offsetWidth; back.style.transition = `opacity ${BLEND}ms cubic-bezier(.45,0,.25,1)`; back.style.opacity = 1;
+  [cv, back] = [back, cv];
+}
+function freeBack() { if (back && !backFreed && performance.now() - lastPresent > 1500) { back.width = back.height = 1; backFreed = true; pats.delete(back.getContext('2d')); } }
+
+/* ======================= small pictures the compositor moves ======================= */
+function sprite(w, h, draw) {
+  const c = document.createElement('canvas'), k = K * 2; c.width = Math.ceil(w * k); c.height = Math.ceil(h * k); c.style.width = w + 'px'; c.style.height = h + 'px'; c.className = 'sprite';
+  const x = c.getContext('2d'); x.scale(k, k); x.translate(w / 2, h / 2); draw(x); document.body.appendChild(c); c._w = w; c._h = h; c._o = 1; return c;
+}
+const place = (el, x, y, a, o) => { el.style.transform = `translate3d(${(x - el._w / 2).toFixed(1)}px,${(y - el._h / 2).toFixed(1)}px,0) rotate(${a.toFixed(3)}rad)`;
+  if (o !== el._o && (Math.abs(o - el._o) > .02 || o === 0 || o === 1)) { el._o = o; el.style.opacity = o.toFixed(2); } };
+const rr = (x, X, Y, w, h, r) => { x.beginPath(); x.roundRect(X, Y, w, h, r); };
+
+/* ---------- the trains: toy rolling stock seen from above, facing +x ---------- */
+const shade = (x, len, wid) => { x.fillStyle = 'rgba(30,55,20,.3)'; rr(x, -len / 2 + 1.2, -wid / 2 + 1.8, len, wid, 2.5); x.fill(); };
+const coach = (side, roof) => x => { const len = 24, wid = 7.2; shade(x, len, wid);
+  x.fillStyle = side; rr(x, -len / 2, -wid / 2, len, wid, 2.5); x.fill();
+  x.fillStyle = roof; rr(x, -len / 2 + 1, -wid / 2 + 1.4, len - 2, wid - 2.8, 2); x.fill();
+  x.fillStyle = 'rgba(255,255,255,.35)'; rr(x, -len / 2 + 1.6, -wid / 2 + 1.6, len - 3.2, 1.6, .8); x.fill();
+  x.fillStyle = 'rgba(0,0,0,.18)'; for (let i = -2; i <= 2; i++) { x.beginPath(); x.arc(i * 3.9, .5, .65, 0, 7); x.fill(); }
+  x.fillStyle = '#3a3a3e'; x.fillRect(-len / 2 - 1.2, -1.8, 1.2, 3.6); x.fillRect(len / 2, -1.8, 1.2, 3.6); };
+const wagon = (box) => x => { const len = 20, wid = 7.2; shade(x, len, wid);
+  x.fillStyle = '#4a4a50'; rr(x, -len / 2, -wid / 2, len, wid, 1.6); x.fill();
+  x.fillStyle = box; rr(x, -len / 2 + 1, -wid / 2 + .7, len - 2, wid - 1.4, 1.2); x.fill();
+  x.strokeStyle = 'rgba(0,0,0,.2)'; x.lineWidth = .5; for (let i = -7.6; i <= 7.6; i += 1.9) { x.beginPath(); x.moveTo(i, -wid / 2 + 1.2); x.lineTo(i, wid / 2 - 1.2); x.stroke(); }
+  x.fillStyle = 'rgba(255,255,255,.3)'; x.fillRect(-len / 2 + 1.3, -wid / 2 + 1, len - 2.6, 1.2); };
+const steam = (body, trim) => x => { x.scale(.85, .72); shade(x, 34, 11);
+  x.fillStyle = '#2b2b30'; rr(x, -17, -5.5, 34, 11, 3); x.fill();
+  x.fillStyle = body; rr(x, -12, -4.2, 20, 8.4, 4); x.fill();
+  x.fillStyle = 'rgba(255,255,255,.4)'; rr(x, -11, -3.6, 18, 2.2, 1.2); x.fill();
+  x.fillStyle = trim; x.fillRect(-6, -4.2, 1.2, 8.4); x.fillRect(1, -4.2, 1.2, 8.4);
+  x.fillStyle = '#333338'; rr(x, 8, -4, 6, 8, 2); x.fill();
+  x.fillStyle = '#151518'; x.beginPath(); x.arc(11, 0, 2, 0, 7); x.fill();
+  x.fillStyle = trim; x.beginPath(); x.arc(-2.5, 0, 1.6, 0, 7); x.fill();
+  x.fillStyle = body; rr(x, -17, -5.5, 6, 11, 2); x.fill(); x.fillStyle = '#2b2b30'; rr(x, -16.4, -4.4, 4.8, 8.8, 1.6); x.fill();
+  x.fillStyle = '#e04a3a'; x.fillRect(16, -5.5, 1.6, 11); };
+const diesel = (body, nose) => x => { x.scale(.85, .72); shade(x, 30, 11);
+  x.fillStyle = body; rr(x, -15, -5.2, 30, 10.4, 4); x.fill();
+  x.fillStyle = nose; rr(x, 10, -5.2, 5, 10.4, 3); x.fill(); rr(x, -15, -5.2, 5, 10.4, 3); x.fill();
+  x.fillStyle = 'rgba(255,255,255,.35)'; rr(x, -13, -4.4, 26, 2, 1); x.fill();
+  x.fillStyle = 'rgba(0,0,0,.25)'; for (let i = -2; i <= 2; i++) { x.beginPath(); x.arc(i * 3.6, .8, 1.1, 0, 7); x.fill(); } };
+const SPECS = {
+  express: { kind: 'express', steam: true, speed: 40, cars: [steam('#c83b2d', '#e8b64a'), coach('#8a2c2a', '#f1e7cf'), coach('#8a2c2a', '#f1e7cf'), coach('#8a2c2a', '#f1e7cf'), coach('#8a2c2a', '#f1e7cf')], len: [29, 24, 24, 24, 24] },
+  freight: { kind: 'freight', steam: false, speed: 32, cars: [diesel('#2f6db5', '#f4c430'), wagon('#e8783a'), wagon('#3a9b6b'), wagon('#f2c94c'), wagon('#4b7bd0'), wagon('#d9534f'), wagon('#8a62d1')], len: [26, 20, 20, 20, 20, 20, 20] },
+  shuttle: { kind: 'shuttle', steam: true, speed: 26, cars: [steam('#2f8f7a', '#f2c14e'), coach('#2f5f8a', '#eef1f4'), coach('#2f5f8a', '#eef1f4')], len: [29, 24, 24] },
+};
+const trainLen = spec => spec.len.reduce((a, b) => a + b + 2, 0);
+let trains = [];
+function makeTrain(spec, L, s) { return { spec, L, s, v: 0, dir: 1, els: spec.cars.map((d, i) => sprite(spec.len[i] + 4, 15, d)), stopUntil: 0, lastStop: null, puffT: 0 }; }
+function removeTrain(t) { for (const e of t.els) { e.style.transition = 'opacity .8s'; e.style.opacity = 0; setTimeout(() => e.remove(), 900); } }
+// after the network changes: trains stay on (the new shape of) their lines; new lines get a train, lost ones lose theirs
+function reassign() {
+  const keep = [];
+  if (mainL) {
+    const want = [SPECS.express]; if (mainL.len > 1900) want.push(SPECS.freight);
+    for (const spec of want) {
+      const t = trains.find(t => t.spec === spec);
+      if (t) { const p = at(t.L, t.s), ns = nearestS(mainL, p[0], p[1]).s; t.old = { L: t.L, s: t.s, sNew: ns, gen: rebuildGen }; t.L = mainL; t.s = ns; keep.push(t); }
+      else { const other = keep[0]; keep.push(makeTrain(spec, mainL, other ? (other.s + mainL.len / 2) % mainL.len : h1(SEED + 3) * mainL.len)); }
+    }
+  }
+  for (const b of branches) {
+    const t = trains.find(t => t.spec === SPECS.shuttle && t.bid === b.id);
+    if (t) { const ns = clamp(t.s / t.L.len * b.len, 0, b.len); if (t.L !== b) t.old = { L: t.L, s: t.s, sNew: ns, gen: rebuildGen }; t.s = ns; t.L = b; keep.push(t); }
+    else { const nt = makeTrain(SPECS.shuttle, b, b.len - 10); nt.bid = b.id; nt.dir = -1; nt.stopUntil = performance.now() + 4000; keep.push(nt); }
+  }
+  for (const t of trains) if (!keep.includes(t)) removeTrain(t);
+  trains = keep;
+}
+let puffs = 0;
+function puff(x, y, a, big) {
+  if (puffs > 40) return; puffs++;
+  const d = document.createElement('div'); d.className = 'puff'; if (big) d.style.width = d.style.height = '16px';
+  const dx = (Math.random() - .5) * 7 - Math.cos(a) * 7, dy = (Math.random() - .5) * 7 - Math.sin(a) * 7;
+  d.style.setProperty('--x0', `${x}px`); d.style.setProperty('--y0', `${y}px`); d.style.setProperty('--x1', `${x + dx}px`); d.style.setProperty('--y1', `${y + dy - 5}px`);
+  d.addEventListener('animationend', () => { d.remove(); puffs--; }); document.body.appendChild(d);
+}
+const zoneOf = s => stations.find(st => st.ok && st.kind === 'main' && Math.abs(rel(mainL, s - st.s)) < LOOP_HALF);
+// where a car of train t stands at s: the freight runs through the passing loops, everyone else on the main track
+function posOf(t, s) {
+  const L = t.L, p = at(L, s), a = tangent(L, s);
+  if (t.spec.kind !== 'freight') return [p[0], p[1], a];
+  const st = zoneOf(s); if (!st) return [p[0], p[1], a];
+  const off = (u) => LOOP_OFF * loopF(u) * st.loopSide, u = rel(L, s - st.s), o0 = off(u), o1 = off(u + 3), q = at(L, s + 3), b = tangent(L, s + 3);
+  const x0 = p[0] - Math.sin(a) * o0, y0 = p[1] + Math.cos(a) * o0, x1 = q[0] - Math.sin(b) * o1, y1 = q[1] + Math.cos(b) * o1;
+  return [x0, y0, Math.atan2(y1 - y0, x1 - x0)];
+}
+let swDirty = false;
+function stepTrains(dt, layoutMoving) {
+  const now = performance.now();
+  for (const t of trains) {
+    const L = t.L, spec = t.spec, len = trainLen(spec);
+    if (spec.kind === 'shuttle') { stepShuttle(t, dt, now, layoutMoving); continue; }
+    let limit = 1e9;
+    if (spec.kind === 'express') for (const st of stations) if (st.ok && st.L === L && st !== t.lastStop) limit = Math.min(limit, rel(L, st.s - t.s) >= 0 ? rel(L, st.s - t.s) : 1e9);
+    if (signal && signal.L === L && signal.red) { const d = rel(L, signal.s - 16 - t.s); if (d >= 0 && d < 170) limit = Math.min(limit, d); }
+    for (const o of trains) if (o !== t && o.L === L) {
+      const zo = zoneOf(o.s), zt = zoneOf(o.s - trainLen(o.spec));
+      if (zo && zo === zt && o.spec.kind !== t.spec.kind) continue;     // side by side at a station: one in the loop, one at the platform
+      const d = rel(L, o.s - trainLen(o.spec) - t.s); if (d >= 0) limit = Math.min(limit, Math.max(0, d - 26)); }
+    let target = spec.speed;
+    if (now < t.stopUntil) target = 0; else if (layoutMoving) target = Math.min(target, 10);
+    target = Math.min(target, Math.sqrt(2 * 20 * Math.max(0, limit - 2)));
+    const acc = target > t.v ? 11 : 28; t.v += clamp(target - t.v, -acc * dt, acc * dt);
+    t.s = (t.s + t.v * dt + L.len) % L.len;
+    if (spec.kind === 'express') {
+      for (const st of stations) if (st.ok && st.L === L && st !== t.lastStop && Math.abs(rel(L, st.s - t.s)) < 3 && t.v < 4) { t.stopUntil = now + 3500 + Math.random() * 2500; t.lastStop = st; t.v = 0; t.puffT = 0; }
+      // waiting at a station: hold the departure while the freight is coming up behind or still in the loop
+      if (t.lastStop && now >= t.stopUntil - 50 && Math.abs(rel(L, t.lastStop.s - t.s)) < 4) { const st = t.lastStop;
+        if (trains.some(o => o.spec.kind === 'freight' && o.L === L && (() => { const d = rel(L, st.s - o.s); return d > -LOOP_HALF - trainLen(o.spec) && d < 320; })())) t.stopUntil = now + 300; }
+      if (t.lastStop && Math.abs(rel(L, t.lastStop.s - t.s)) > 150) t.lastStop = null;
+    }
+    // switches: set for the loop while the freight is near one end of it
+    if (spec.kind === 'freight') for (const st of stations) if (st.ok && st.kind === 'main' && st.L === L) {
+      const d = rel(L, t.s - st.s), sw = [d > -LOOP_HALF - 90 && d < -LOOP_HALF + 40 ? 1 : 0, d - len > LOOP_HALF - 60 || (d > LOOP_HALF - 60 && d - len < LOOP_HALF + 10) ? 1 : 0];
+      if (sw[0] !== st.sw[0] || sw[1] !== st.sw[1]) { st.sw = sw; swDirty = true; } }
+    placeCars(t);
+  }
+}
+function placeCars(t) {
+  const spec = t.spec, L = t.L, vis = L.closed ? 1 : (L.vis ?? 1);
+  let s = t.s;
+  const now = performance.now(), O = t.old, f = O ? blendF(O.gen, now) : 1, trav = O ? (L.closed ? rel(L, t.s - O.sNew) : t.s - O.sNew) : 0;
+  if (O && f >= 1) t.old = null;
+  t.els.forEach((el, i) => { const sc = s - spec.len[i] / 2; let [x, y, a] = posOf(t, sc);
+    if (O && f < 1) { const s0 = O.s + trav - (t.s - sc), p0 = at(O.L, s0), a0 = tangent(O.L, s0); x = p0[0] + (x - p0[0]) * f; y = p0[1] + (y - p0[1]) * f; a = a0 + Math.atan2(Math.sin(a - a0), Math.cos(a - a0)) * f; }
+    const o = vis * clamp(1 - (L.depth[idxOf(L, sc)] - 2) / 12, 0, 1); place(el, x, y, a, o); s -= spec.len[i] + 2; });
+  if (spec.steam && L.depth[idxOf(L, t.s - 5)] === 0 && vis > .5) { t.puffT -= 1 / 30; if (t.puffT <= 0) { const [x, y, a] = posOf(t, t.s - 5); puff(x, y, a, t.v > 18); t.puffT = t.v > 2 ? clamp(14 / (t.v + 6), .22, .7) : 1.5; } }
+}
+// a branch shuttle: runs to the buffers at the terminus, waits, propels back to the junction, waits, and so on
+function stepShuttle(t, dt, now, layoutMoving) {
+  const L = t.L, len = trainLen(t.spec), sMin = 80 + len, sMax = L.len - 8;
+  const goal = t.dir > 0 ? sMax : sMin; let dist = (goal - t.s) * t.dir;
+  if (signal && signal.L === L && signal.red) { const d = (signal.s - t.s) * t.dir - (t.dir > 0 ? 14 : len + 14); if (d >= 0 && d < 160) dist = Math.min(dist, d); }
+  let target = now < t.stopUntil ? 0 : Math.min(t.spec.speed, Math.sqrt(2 * 18 * Math.max(0, dist - 1)));
+  if (layoutMoving) target = Math.min(target, 8);
+  const acc = target > t.v ? 10 : 26; t.v += clamp(target - t.v, -acc * dt, acc * dt);
+  t.s = clamp(t.s + t.v * t.dir * dt, sMin - 1, sMax + 1);
+  if ((goal - t.s) * t.dir < 1.5 && t.v < 2 && now >= t.stopUntil) { t.stopUntil = now + 4500 + Math.random() * 3000; t.dir = -t.dir; t.v = 0; }
+  placeCars(t);
+}
+
+/* ---------- cars on the town roads ---------- */
+function rrAt(sl, off, d) {
+  const x0 = sl.x - off, y0 = sl.y - off, w = sl.w + 2 * off, h = sl.h + 2 * off, r = Math.max(4, off + 4), a = w - 2 * r, b = h - 2 * r, q = Math.PI * r / 2, Pm = 2 * a + 2 * b + 4 * q;
+  let t = ((d % Pm) + Pm) % Pm;
+  if (t < a) return [x0 + r + t, y0, 0]; t -= a;
+  if (t < q) { const th = -Math.PI / 2 + t / r; return [x0 + w - r + r * Math.cos(th), y0 + r + r * Math.sin(th), th + Math.PI / 2]; } t -= q;
+  if (t < b) return [x0 + w, y0 + r + t, Math.PI / 2]; t -= b;
+  if (t < q) { const th = t / r; return [x0 + w - r + r * Math.cos(th), y0 + h - r + r * Math.sin(th), th + Math.PI / 2]; } t -= q;
+  if (t < a) return [x0 + w - r - t, y0 + h, Math.PI]; t -= a;
+  if (t < q) { const th = Math.PI / 2 + t / r; return [x0 + r + r * Math.cos(th), y0 + h - r + r * Math.sin(th), th + Math.PI / 2]; } t -= q;
+  if (t < b) return [x0, y0 + h - r - t, -Math.PI / 2]; t -= b;
+  const th = Math.PI + t / r; return [x0 + r + r * Math.cos(th), y0 + r + r * Math.sin(th), th + Math.PI / 2];
+}
+const CAR_COLORS = ['#e8483a', '#f2b632', '#3d8fd6', '#ffffff', '#47b37a', '#f07fb0', '#8a62d1', '#ff8c42'];
+const carPic = col => x => { x.scale(.8, .8); shade(x, 11, 6);
+  x.fillStyle = col; rr(x, -5.5, -3, 11, 6, 2.4); x.fill();
+  x.fillStyle = '#3b4656'; rr(x, 1, -2.4, 2.2, 4.8, 1); x.fill(); rr(x, -3.6, -2.2, 1.6, 4.4, .8); x.fill();
+  x.fillStyle = 'rgba(255,255,255,.35)'; rr(x, -1.8, -2.2, 2.6, 4.4, 1); x.fill(); };
+const cars = new Map();                                                // slot id -> [{ el, d, dir, v }]
+function stepCars(dt) {
+  for (const s of slots) {
+    let list = cars.get(s.id); if (!s.k) continue;
+    const kf = s.kOld ? blendF(s.kGen, performance.now()) : 1, g = kf >= 1 ? s.k : { x: s.kOld.x + (s.k.x - s.kOld.x) * kf, y: s.kOld.y + (s.k.y - s.kOld.y) * kf, w: s.kOld.w + (s.k.w - s.kOld.w) * kf, h: s.kOld.h + (s.k.h - s.kOld.h) * kf };         // cars drive the road as it's drawn (the last presented picture)
+    const want = s.alive && s.life > .95 && s.town ? clamp(Math.floor((2 * s.w + 2 * s.h) / 380), 1, 5) : 0;
+    if (!list) { list = []; cars.set(s.id, list); }
+    while (list.length < want) { const i = list.length, el = sprite(12, 8, carPic(CAR_COLORS[(s.id * 3 + i) % CAR_COLORS.length])); el.style.transition = 'opacity .6s'; el.style.opacity = 0; el._o = 0; requestAnimationFrame(() => { el.style.opacity = 1; el._o = 1; });
+      list.push({ el, d: h1(s.id + i * 7.3) * 4000, dir: i % 2 ? -1 : 1, v: 16 + 7 * h1(s.id * 3 + i) }); }
+    while (list.length > want) { const c = list.pop(); c.el.style.opacity = 0; setTimeout(() => c.el.remove(), 700); }
+    for (const c of list) { c.d += c.v * c.dir * dt; const off = VERGE + (c.dir > 0 ? ROAD * .72 : ROAD * .28), [x, y, a] = rrAt(g, off, c.d); place(c.el, x, y, a + (c.dir < 0 ? Math.PI : 0), c.el._o); }
+  }
+  for (const [id, list] of cars) if (!slots.some(s => s.id === id)) { for (const c of list) { c.el.style.opacity = 0; setTimeout(() => c.el.remove(), 700); } cars.delete(id); }
+}
+
+
+/* ---------- level crossings: barriers drop and lights flash while a train is near ---------- */
+let crossings = [];
+const crSprites = new Map();
+const barrierPic = x => { x.fillStyle = 'rgba(30,60,20,.3)'; x.fillRect(-6, .4, 14, 1.8);
+  x.fillStyle = '#ffffff'; rr(x, -6.5, -1, 14.5, 2, 1); x.fill(); x.fillStyle = '#e8483a'; for (let i = -4.5; i < 8; i += 4) x.fillRect(i, -1, 2, 2);
+  x.fillStyle = '#3a3d44'; x.beginPath(); x.arc(-7, 0, 1.6, 0, 7); x.fill(); };
+function layCrossings() {
+  const lines = (mainL ? [mainL] : []).concat(branches), found = [];
+  for (const r of roads) { const n = r.pts.length; let k = 0;
+    while (k < n) { if (tAt(r.pts[k][0], r.pts[k][1]) < 1) { let e = k; while (e + 1 < n && tAt(r.pts[e + 1][0], r.pts[e + 1][1]) < 1) e++;
+        const m = (k + e) >> 1, p = r.pts[m]; let best = null;
+        for (const L of lines) { const q = nearestS(L, p[0], p[1]); if (!best || q.d < best.d) best = { L, s: q.s, d: q.d, i: q.i }; }
+        if (best && best.d < 6 && !best.L.tun[best.i] && !best.L.br[best.i] && !r.br[m] && !zoneOf2(best.L, best.s))
+          found.push({ key: `${Math.round(p[0] / 12)},${Math.round(p[1] / 12)}`, x: p[0], y: p[1], r, rs: m * STEP, L: best.L, s: best.s, ra: tangent(r, m * STEP), ta: tangent(best.L, best.s), down: false });
+        k = e + 1; } else k++; } }
+  for (const cr of found) { let sp = crSprites.get(cr.key); if (sp) cr.down = sp.down;
+    if (!sp) { sp = { arms: [0, 1].map(() => { const el = sprite(16, 5, barrierPic); el.style.transformOrigin = '1px 2.5px'; el.style.transition = 'transform .9s ease-in-out'; return el; }), lights: [0, 1].map(j => { const d = document.createElement('div'); d.className = 'xl' + (j ? ' b' : ''); document.body.appendChild(d); return d; }), down: false }; crSprites.set(cr.key, sp); }
+    sp.seen = true; cr.sp = sp; setBarrier(cr, true); }
+  for (const [k, sp] of crSprites) { if (!sp.seen) { sp.arms.forEach(e => e.remove()); sp.lights.forEach(e => e.remove()); crSprites.delete(k); } else sp.seen = false; }
+  crossings = found;
+}
+const zoneOf2 = (L, s) => L === mainL && stations.some(st => st.ok && st.kind === 'main' && Math.abs(rel(mainL, s - st.s)) < LOOP_HALF + 20);
+function setBarrier(cr, snap) {
+  const rd = [Math.cos(cr.ra), Math.sin(cr.ra)], rn = [-rd[1], rd[0]];
+  cr.sp.arms.forEach((el, j) => { const along = j ? 1 : -1, edge = j ? 1 : -1, P = [cr.x + rd[0] * along * 10 + rn[0] * edge * 4.8, cr.y + rd[1] * along * 10 + rn[1] * edge * 4.8];
+    const down = Math.atan2(-rn[1] * edge, -rn[0] * edge), upA = Math.atan2(rd[1] * along, rd[0] * along), up = down + Math.atan2(Math.sin(upA - down), Math.cos(upA - down));
+    if (snap) el.style.transition = 'none';
+    el.style.transform = `translate3d(${(P[0] - 1).toFixed(1)}px,${(P[1] - 2.5).toFixed(1)}px,0) rotate(${(cr.down ? down : up).toFixed(3)}rad)`;
+    if (snap) { void el.offsetWidth; el.style.transition = 'transform .9s ease-in-out'; }
+    const lt = cr.sp.lights[j]; lt.style.transform = `translate3d(${(P[0] + rd[0] * along * 2).toFixed(1)}px,${(P[1] + rd[1] * along * 2).toFixed(1)}px,0)`; lt.classList.toggle('on', cr.down); lt.style.opacity = cr.down ? '' : 0; });
+  cr.sp.down = cr.down;
+}
+function stepCrossings() {
+  for (const cr of crossings) { const L = cr.L; let down = false;
+    for (const t of trains) { if (t.L !== L) continue; const len = trainLen(t.spec), dir = t.spec.kind === 'shuttle' ? t.dir : 1, d = L.closed ? rel(L, cr.s - (t.s - len)) : cr.s - (t.s - len);
+      if (d > (dir > 0 ? -16 : -110) && d < len + (dir > 0 ? 110 : 16)) { down = true; break; } }
+    if (down !== cr.down) { cr.down = down; setBarrier(cr, false); } }
+}
+
+/* ---------- cars on the country roads: village to village, waiting at closed crossings ---------- */
+let rcars = [];
+function stepRoadCars(dt) {
+  if (!rcars.length && roads.length) { const n = Math.min(14, roads.length + 2);
+    for (let i = 0; i < n; i++) { const r = roads[i % roads.length]; rcars.push({ r, s: h1(i * 3.3 + SEED) * r.len, dir: i % 2 ? 1 : -1, v: 0, vmax: 14 + 6 * h1(i + SEED), el: sprite(12, 8, carPic(CAR_COLORS[(i + 3) % CAR_COLORS.length])) }); } }
+  for (const c of rcars) {
+    let limit = 1e9;
+    for (const cr of crossings) if (cr.r === c.r && cr.down) { const d = (cr.rs - c.s) * c.dir - 15; if (d > -8) limit = Math.min(limit, Math.max(0, d)); }
+    for (const o of rcars) if (o !== c && o.r === c.r && o.dir === c.dir) { const d = (o.s - c.s) * c.dir - 13; if (d > -10) limit = Math.min(limit, Math.max(0, d)); }
+    const target = Math.min(c.vmax, Math.sqrt(2 * 26 * limit));
+    c.v += clamp(target - c.v, -40 * dt, 10 * dt); c.s += c.v * c.dir * dt;
+    if (c.s < 0 || c.s > c.r.len) {                                    // at a village (or the board's edge): take another road
+      const node = rnodes[c.s < 0 ? c.r.a : c.r.b], opts = node.kind === 'vil' ? node.roads.filter(r => r !== c.r) : [];
+      if (!opts.length) { c.dir = -c.dir; c.s = clamp(c.s, 0, c.r.len); }
+      else { const nr = opts[Math.floor(Math.random() * opts.length)], fromA = nr.a === node.i; c.r = nr; c.dir = fromA ? 1 : -1; c.s = fromA ? 0 : nr.len; } }
+    const p = at(c.r, c.s), a = tangent(c.r, c.s) + (c.dir < 0 ? Math.PI : 0), ex = Math.min(p[0], p[1], W - p[0], H - p[1]);
+    c.f = Math.min(1, (c.f || 0) + dt * 1.5); place(c.el, p[0] - Math.sin(a) * 2, p[1] + Math.cos(a) * 2, a, c.f * clamp((ex - 8) / 16, 0, 1) * clamp((twAt(p[0], p[1]) - OM + 2) / 6, 0, 1));
+  }
+}
+
+/* ---------- boats on the river ---------- */
+const boatPic = (hull, sail) => x => { x.scale(.85, .85);
+  x.strokeStyle = 'rgba(255,255,255,.55)'; x.lineWidth = .8; x.beginPath(); x.moveTo(-6, -2.5); x.lineTo(-13, -5.5); x.moveTo(-6, 2.5); x.lineTo(-13, 5.5); x.stroke();
+  x.fillStyle = 'rgba(10,60,70,.3)'; x.beginPath(); x.ellipse(1, 1.5, 7, 3.2, 0, 0, 7); x.fill();
+  x.fillStyle = hull; x.beginPath(); x.moveTo(7, 0); x.quadraticCurveTo(3, -3.4, -6, -2.8); x.lineTo(-6, 2.8); x.quadraticCurveTo(3, 3.4, 7, 0); x.fill();
+  x.fillStyle = '#c99a62'; x.beginPath(); x.moveTo(5, 0); x.quadraticCurveTo(2, -2.2, -4.8, -1.8); x.lineTo(-4.8, 1.8); x.quadraticCurveTo(2, 2.2, 5, 0); x.fill();
+  x.fillStyle = sail; x.beginPath(); x.moveTo(1, -.5); x.lineTo(-4, -6.5); x.lineTo(-4.5, -.5); x.closePath(); x.fill(); };
+let boats = [];
+function stepBoats(dt) {
+  if (!boats.length && rivers.length) boats = rivers.slice(0, 2).map((r, i) => ({ r, s: h1(SEED + i) * r.len, dir: i ? -1 : 1, v: 7 + 3 * i, el: sprite(26, 14, boatPic(i ? '#f2f2ee' : '#e2533d', i ? '#4a90d9' : '#fff8e8')) }));
+  for (const b of boats) {
+    b.s += b.v * b.dir * dt;
+    if (b.s < 0 || b.s > b.r.len) { b.dir = -b.dir; b.s = clamp(b.s, 0, b.r.len); }
+    const [x, y, a] = riverAt(b.r, b.s), o = clamp(Math.min(b.s, b.r.len - b.s) / 30, 0, 1);
+    place(b.el, x, y, a + (b.dir < 0 ? Math.PI : 0), o);
+  }
+}
+function clearMovers() { for (const b of boats) b.el.remove(); boats = []; for (const c of rcars) c.el.remove(); rcars = []; for (const [, sp] of crSprites) { sp.arms.forEach(e => e.remove()); sp.lights.forEach(e => e.remove()); } crSprites.clear(); crossings = []; }
+
+/* ---------- a balloon, now and then ---------- */
+const balPic = x => { x.scale(.85, .85);
+  const g = ['#e8483a', '#f8f3e6'];
+  for (let i = 0; i < 10; i++) { x.fillStyle = g[i % 2]; x.beginPath(); x.moveTo(0, -2); x.arc(0, -2, 15, i / 10 * 6.283, (i + 1) / 10 * 6.283); x.closePath(); x.fill(); }
+  const hl = x.createRadialGradient(-5, -8, 1, 0, -2, 15); hl.addColorStop(0, 'rgba(255,255,255,.55)'); hl.addColorStop(.5, 'rgba(255,255,255,0)'); hl.addColorStop(1, 'rgba(0,0,0,.22)');
+  x.fillStyle = hl; x.beginPath(); x.arc(0, -2, 15, 0, 7); x.fill();
+  x.fillStyle = '#f2c14e'; x.beginPath(); x.arc(0, -2, 3, 0, 7); x.fill();
+  x.strokeStyle = 'rgba(80,60,40,.7)'; x.lineWidth = .6; x.beginPath(); x.moveTo(-6, 11); x.lineTo(-2.5, 16); x.moveTo(6, 11); x.lineTo(2.5, 16); x.stroke();
+  x.fillStyle = '#9a6a3c'; rr(x, -3.2, 15, 6.4, 5, 1.2); x.fill(); };
+let balloon = null, nextBalloon = performance.now() + 45000;
+const balEl = sprite(32, 40, balPic), balSh = sprite(32, 18, x => { x.fillStyle = 'rgba(30,60,20,.22)'; x.beginPath(); x.ellipse(0, 0, 13, 7, 0, 0, 7); x.fill(); });
+balEl.style.opacity = balSh.style.opacity = 0; balEl._o = balSh._o = 0; balEl.style.zIndex = 4;
+function stepBalloon(dt, now) {
+  if (!balloon && now > nextBalloon) { const left = h1(now) < .5; balloon = { x: left ? -40 : W + 40, y: H * (.2 + .5 * h1(now + 1)), vx: left ? 13 : -13, vy: (h1(now + 2) - .5) * 4, t: 0 }; }
+  if (!balloon) return;
+  const b = balloon; b.t += dt; b.x += b.vx * dt; b.y += b.vy * dt;
+  place(balEl, b.x, b.y + Math.sin(b.t * .7) * 2.2, Math.sin(b.t * .3) * .05, 1); place(balSh, b.x + 46, b.y + 74, 0, 1);
+  if (b.x < -80 || b.x > W + 80) { balloon = null; place(balEl, -200, -200, 0, 0); place(balSh, -200, -200, 0, 0); nextBalloon = now + 150000 + h1(now) * 150000; }
+}
+
+/* ======================= the signal: rest your cursor beside a line ======================= */
+let cur = { x: -1e4, y: -1e4, on: false, t: 0 }, signal = null;
+const sigEl = sprite(12, 24, () => {});
+function drawSignal(red) {
+  const x = sigEl.getContext('2d'), k = K * 2; x.setTransform(k, 0, 0, k, 0, 0); x.clearRect(0, 0, 12, 24); x.translate(6, 12); x.scale(.85, .85);
+  x.fillStyle = 'rgba(30,60,20,.3)'; rr(x, -3, -9.5, 8, 21, 3); x.fill();
+  x.fillStyle = '#2e3138'; rr(x, -4, -11, 8, 20, 4); x.fill();
+  const lamp = (y, on, c, g) => { x.fillStyle = on ? c : '#4a4d55'; x.beginPath(); x.arc(0, y, 2.5, 0, 7); x.fill(); if (on) { x.fillStyle = g; x.beginPath(); x.arc(0, y, 4.2, 0, 7); x.fill(); x.fillStyle = 'rgba(255,255,255,.7)'; x.beginPath(); x.arc(-.8, y - .8, .8, 0, 7); x.fill(); } };
+  lamp(-5.5, red, '#ff4b3a', 'rgba(255,75,58,.35)'); lamp(1.5, !red, '#4ee08a', 'rgba(78,224,138,.35)');
+  x.fillStyle = '#6a6e78'; x.fillRect(-1, 9, 2, 4);
+}
+sigEl.style.opacity = 0; sigEl.style.transition = 'opacity .5s';
+function stepSignal() {
+  const now = performance.now();
+  if (!signal && cur.on && now - cur.t > 1200) {
+    let best = null; for (const L of (mainL ? [mainL] : []).concat(branches)) { const n = nearestS(L, cur.x, cur.y); if (n.d < 34 && !L.tun[n.i] && (!best || n.d < best.d)) best = { L, s: n.s, d: n.d }; }
+    if (best) { signal = { L: best.L, s: best.s, red: true, until: now + 7000, ax: cur.x, ay: cur.y }; drawSignal(true);
+      const p = at(best.L, best.s), a = tangent(best.L, best.s), side = ((cur.x - p[0]) * -Math.sin(a) + (cur.y - p[1]) * Math.cos(a)) > 0 ? 1 : -1;
+      sigEl.style.transform = `translate3d(${(p[0] - Math.sin(a) * side * 12 - 6).toFixed(1)}px,${(p[1] + Math.cos(a) * side * 12 - 12).toFixed(1)}px,0)`; sigEl.style.opacity = 1; }
+  }
+  if (signal) {
+    if (signal.red && now > signal.until) { signal.red = false; signal.until = now + 4000; drawSignal(false); }
+    else if (!signal.red && now > signal.until) { sigEl.style.opacity = 0; signal = null; }
+    if (signal && cur.on && Math.hypot(cur.x - signal.ax, cur.y - signal.ay) > 120 && signal.red) { signal.red = false; signal.until = now + 2500; drawSignal(false); }
+  }
+}
+
+/* ======================= loop: rebuild a few times a second at most, only while something changes ======================= */
+let FL = '', SL = {}, lastWork = 'idle', slow = 0, worst = 0, pendSince = 0, stage = 0, TM = '', running = false, lastT = 0, dirty = true, landMs = 0, needLand = true, needDraw = false, nLand = 0, nDraw = 0, first = true;
+function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
+function loop(now) { try { loop0(now); } catch (e) { running = false; post('JSERR loop ' + e.message + ' ' + (e.stack || '').split('\n')[0]); setTimeout(wake, 1000); } }
+function rebuild() {
+  rebuildGen++;
+  const t0 = performance.now();
+  const tm = [performance.now()]; buildFields(); tm.push(performance.now()); mainL = traceMain(); tm.push(performance.now()); layNetwork(); tm.push(performance.now()); buildDT(); layCrossings(); tm.push(performance.now()); layScenery(); tm.push(performance.now()); reassign(); tm.push(performance.now());
+  TM = tm.slice(1).map((t, i) => (t - tm[i]).toFixed(1)).join('/');
+  for (const s of slots) { s.kOld = s.k || null; s.kGen = rebuildGen; s.k = { x: s.x, y: s.y, w: s.w, h: s.h }; }
+  landMs = performance.now() - t0; nLand++;
+}
+function loop0(now) {
+  if (paused) { running = false; return; }
+  const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 30; lastT = now;
+  fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt; if (dt > .05) { slow++; SL[lastWork] = (SL[lastWork] || 0) + 1; } worst = Math.max(worst, dt); lastWork = 'idle';
+  if (stepLayout(dt) || dirty) { if (!pendSince) pendSince = now; lastMoveT = now; dirty = false; needLand = true; }
+  easeScenery(dt);
+  if (swDirty) { needDraw = true; swDirty = false; }
+  if (stage) { lastWork = 'draw'; present(!first); first = false; stage = 0; lastPresent = now; nDraw++; presentGen = rebuildGen; blendT0 = now; }
+  else if ((needLand || needDraw) && (first || now - lastPresent >= BLEND + 40) && (first || !needLand || now - lastMoveT >= 90 || now - pendSince >= 420)) {
+    if (needLand) { lastWork = 'rebuild'; rebuild(); needLand = false; pendSince = 0; }
+    needDraw = false; stage = 1;
+  }
+  else if (roadJob) { lastWork = 'roads'; if (roadJob.key !== layoutKey()) roadJob = null; else stepRoadJob(6); }
+  else if (!needLand && now - lastMoveT > 450 && H0 && layoutKey() !== roadKey) { startRoads(); if (!roads.length) while (roadJob && !stepRoadJob(1e9)); }
+  freeBack();
+  stepTrains(dt, false); stepCrossings(); stepCars(dt); stepRoadCars(dt); stepBoats(dt); stepBalloon(dt, now); stepSignal();
+  requestAnimationFrame(loop);
+}
+
+/* ======================= boot + host protocol ======================= */
+function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; cv.width = Math.round(W * K); cv.height = Math.round(H * K); prep(); clearMovers(); buildStatic(); first = true; dirty = true; wake(); }
+const handle = m => {
+  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'desk') { SEED = m.i | 0; prep(); clearMovers(); buildStatic(); VIS.clear(); dirty = true; wake(); return; }
+  if (m.t === 'cursor') { const x = m.x / K, y = m.y / K; if (Math.hypot(x - cur.x, y - cur.y) > 2) cur.t = performance.now(); cur.x = x; cur.y = y; cur.on = true; return; }
+  if (m.t === 'cursorOff') { cur.on = false; return; }
+  if (m.t === 'windows') setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) })));
+};
+build();
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { lastKey = ''; build(); }, 200); });
+window.__dbg = () => `worst=${(worst * 1000) | 0}ms slow=${slow}${JSON.stringify(SL)} ${(worst = 0, slow = 0, SL = {}, '')}job=${roadJob ? roadJob.k + '/' + roadJob.edges.length : '-'} vil=${villages.length} roads=${roads.length} xings=${crossings.length}${crossings.filter(c => c.down).length ? '(' + crossings.filter(c => c.down).length + ' down)' : ''} rcars=${rcars.length} TM=${TM} brd=${BRD.slice(-6).join(',')} nLand=${nLand} nDraw=${nDraw} main=${mainL ? (mainL.len | 0) + 't' + Math.round(100 * mainL.tun.filter(Boolean).length / mainL.pts.length) : '-'} br=${branches.map(b => (b.len | 0)).join(',')} st=${stations.filter(s => s.ok).map(s => s.kind[0]).join('')} scen=${scen.filter(o => o.ok).length}/${scen.length} marks=${scen.filter(o => o.ok && o.id[0] === 'm').length} fields=${fields.filter(f => f.ok).length} cars=${[...cars.values()].reduce((a, l) => a + l.length, 0)} trains=${trains.map(t => `${t.spec.kind[0]}@${t.s | 0}v${t.v.toFixed(0)}`).join(' ')} land=${landMs.toFixed(1)} draw=${fieldMs.toFixed(1)}`;
+window.__balloon = () => { nextBalloon = 0; };
+const host = window.chrome && window.chrome.webview;
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
+else { handle({ t: 'windows', r: [[W * .3 * K, H * .3 * K, W * .62 * K, H * .66 * K]], n: ['Slack'] }); addEventListener('mousemove', e => handle({ t: 'cursor', x: e.clientX * K, y: e.clientY * K })); }
+</script>
+</body>
+</html>
