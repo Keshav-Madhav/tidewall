@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Model Railway — a Driftland theme. Your desktop is a toy railway diorama: soft green baseboard in a timber frame,
+  Model Railway — a Tidewall theme. Your desktop is a toy railway diorama: soft green baseboard in a timber frame,
   hills built up in layers like cut foam (grass, then rock, then snow on the peaks), a sunken river with sandy banks,
   fields, forests and farms. Your windows are towns: a road round each (little cars drive it), two rows of toy houses.
 
@@ -972,7 +972,7 @@ function drawFrame() {
   for (let i = 0; i < 26; i++) { bx.strokeStyle = `rgba(${h1(i) > .5 ? '120,75,40' : '200,150,100'},.25)`; bx.lineWidth = .7; const y = 3 + h1(i * 3.1) * (f - 6);
     bx.beginPath(); bx.moveTo(0, y); bx.bezierCurveTo(W * .3, y + 2, W * .6, y - 2, W, y + 1); bx.stroke(); bx.beginPath(); bx.moveTo(0, H - f + y); bx.bezierCurveTo(W * .4, H - f + y - 1.5, W * .7, H - f + y + 2, W, H - f + y); bx.stroke(); }
   bx.strokeStyle = 'rgba(60,35,15,.45)'; bx.lineWidth = 2; bx.strokeRect(f + 1, f + 1, W - 2 * f - 2, H - 2 * f - 2);
-  const label = 'DRIFTLAND & DISTRICT RAILWAY', w = 200;
+  const label = 'TIDEWALL & DISTRICT RAILWAY', w = 200;
   bx.fillStyle = 'rgba(60,35,15,.3)'; bx.beginPath(); bx.roundRect(W / 2 - w / 2 + 1, H - f + 3, w, f - 5, 3.5); bx.fill();
   const g = bx.createLinearGradient(0, H - f + 2, 0, H - 2); g.addColorStop(0, '#f0d58a'); g.addColorStop(1, '#c9a24f');
   bx.fillStyle = g; bx.beginPath(); bx.roundRect(W / 2 - w / 2, H - f + 2, w, f - 5, 3.5); bx.fill();

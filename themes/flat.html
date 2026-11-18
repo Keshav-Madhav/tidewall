@@ -149,7 +149,7 @@
 <script src="beach-palms.js"></script>
 <script>
 'use strict';
-window.__noMask = true;      // Driftland: translucent windows show the wallpaper behind them, so draw everything
+window.__noMask = true;      // Tidewall: translucent windows show the wallpaper behind them, so draw everything
 
 /* ======================================================================
    参数
@@ -312,7 +312,7 @@ function computeField(rects) {
     const R = 5.5 * sig + Math.max(r.hw, r.hh) + wmax;
     const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
     const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
-    // Driftland: windows are big — put the cloud / sand edge just *outside* the window (+ margin), not inside it.
+    // Tidewall: windows are big — put the cloud / sand edge just *outside* the window (+ margin), not inside it.
     // The edge (f = 0.35) sits σ·1.025 beyond the core, so a core of (half-size − 0.8σ) lands it a little past the rect.
     const chw = Math.max(r.hw - 0.8 * sig, r.hw * 0.25), chh = Math.max(r.hh - 0.8 * sig, r.hh * 0.25);
     for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
@@ -349,7 +349,7 @@ void main() {
 
 const FS = `#version 300 es
 precision highp float;
-uniform sampler2D uNoise, uFA, uFB, uSand;   // Driftland: uSand = painted sand (generated for this theme), tiling
+uniform sampler2D uNoise, uFA, uFB, uSand;   // Tidewall: uSand = painted sand (generated for this theme), tiling
 uniform vec2 uRes, uGrid;
 uniform float uScale, uSeed, uStep, uMix, uTime, uSpeed, uRunup, uShallow, uShoal, uGrain, uDebug, uWave, uSigma, uSpacing, uWaves;
 uniform float uKayN;
@@ -569,7 +569,7 @@ void main() {
   } else {
     // ---------- 沙滩（干沙 + 靠水的一窄条常湿带）----------
     float wet = ss(-7.0 - 3.0 * shoreE, 1.0, s) * 0.2;
-    // Driftland: painted sand, sampled twice at different scales and angles and blended by slow noise (no visible tile),
+    // Tidewall: painted sand, sampled twice at different scales and angles and blended by slow noise (no visible tile),
     // softened toward the theme's own sand colour so it sits with the water's palette
     vec3 sA = texture(uSand, p / 700.0).rgb, sB = texture(uSand, mat2(0.92, 0.39, -0.39, 0.92) * p / 980.0 + 0.41).rgb;
     vec3 dry = mix(mix(sA, sB, ss(0.3, 0.7, N(p + 29.0, 1400.0).g)), sandRamp((g1 - 0.5) * 0.1 * gAmt), 0.35);
@@ -714,7 +714,7 @@ const palmPR = program(FS.slice(0, FS.indexOf('void main() {')) + BEACH_PALM_FS,
 gl.bindVertexArray(gl.createVertexArray());
 
 let noiseTex = null;
-// Driftland: the painted sand (a 1×1 sand colour until it loads)
+// Tidewall: the painted sand (a 1×1 sand colour until it loads)
 const sandTex = gl.createTexture();
 gl.bindTexture(gl.TEXTURE_2D, sandTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([246, 234, 222, 255]));
 { const im = new Image(); im.onload = () => { gl.bindTexture(gl.TEXTURE_2D, sandTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, im);
@@ -1077,7 +1077,7 @@ function draw(now) {
   birdBuf.fill(0);
   birds.forEach((b, i) => birdBuf.set([b.x, b.y, b.h, 0.68 + 0.32 * Math.cos(b.ph)], i * 4));
 
-  const measure = !!window.__measure && frameN % 20 === 0,   // Driftland: a GPU stall every 20 frames, only when profiling
+  const measure = !!window.__measure && frameN % 20 === 0,   // Tidewall: a GPU stall every 20 frames, only when profiling
     t0 = performance.now();
   configureBeachPass(now, PR);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -1292,6 +1292,5 @@ function startHostedMode() {
   host.postMessage('ready');
 }
 </script>
-<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
 </body>
 </html>

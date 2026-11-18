@@ -146,7 +146,7 @@
 
 <script>
 'use strict';
-window.__noMask = true;      // Driftland: translucent windows show the wallpaper behind them, so draw everything
+window.__noMask = true;      // Tidewall: translucent windows show the wallpaper behind them, so draw everything
 
 /* ======================================================================
    参数
@@ -305,7 +305,7 @@ function computeField(rects) {
     const R = 5.5 * sig + Math.max(r.hw, r.hh) + wmax;
     const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
     const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
-    // Driftland: windows are big — put the cloud / sand edge just *outside* the window (+ margin), not inside it.
+    // Tidewall: windows are big — put the cloud / sand edge just *outside* the window (+ margin), not inside it.
     // The edge (f = 0.35) sits σ·1.025 beyond the core, so a core of (half-size − 0.8σ) lands it a little past the rect.
     const chw = Math.max(r.hw - 0.8 * sig, r.hw * 0.25), chh = Math.max(r.hh - 0.8 * sig, r.hh * 0.25);
     for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
@@ -342,7 +342,7 @@ void main() {
 
 const FS = `#version 300 es
 precision highp float;
-uniform sampler2D uNoise, uFA, uFB, uGrass;   // Driftland: uGrass = a painted meadow (generated for this theme), tiling
+uniform sampler2D uNoise, uFA, uFB, uGrass;   // Tidewall: uGrass = a painted meadow (generated for this theme), tiling
 uniform vec2 uRes, uGrid;
 uniform float uScale, uSeed, uStep, uMix, uTime, uDebug, uEdge;
 #ifdef MEADOW_ACTOR
@@ -445,7 +445,7 @@ void main() {
   vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
 
   // ---------- 草地：黄绿和绿的大块水彩晕染，几片颜色深一点，左上（向阳）稍亮；纸的颗粒 ----------
-  // Driftland: the meadow is painted — two samplings of one gouache texture at different scales and angles, blended
+  // Tidewall: the meadow is painted — two samplings of one gouache texture at different scales and angles, blended
   // by large slow noise so the tile never repeats visibly; big soft washes of light and shade on top
   float w1 = N(p, 1900.0).b, w2 = N(p + 311.0, 650.0).g;
   vec3 gA = texture(uGrass, p / 820.0).rgb, gB = texture(uGrass, mat2(0.8, 0.6, -0.6, 0.8) * p / 1130.0 + 0.37).rgb;
@@ -485,7 +485,7 @@ void main() {
   //            只有朝光（左上）的外轮廓一道亮白，里面没有亮面；边缘干净 ----------
   vec4 fc = vec4(0.0, -1e9, 0.0, 0.0);
   float d = cloudDist(p, true, fc);
-  // Driftland: the clouds are painted with volume — each puff is lit from the upper left (brighter where its surface
+  // Tidewall: the clouds are painted with volume — each puff is lit from the upper left (brighter where its surface
   // faces the sun, a soft blue shade on the far side), its edge is billowy rather than a clean circle, and its body has
   // the cauliflower texture of real cumulus
   float bill = (N(p, 210.0).r - 0.5) * 22.0 + (N(p + 71.0, 90.0).g - 0.5) * 8.0;
@@ -535,7 +535,7 @@ let actorPR = null,catPR = null,catActorPR = null;
 gl.bindVertexArray(gl.createVertexArray());
 
 let noiseTex = null;
-// Driftland: the painted meadow texture (a 1×1 green until it loads)
+// Tidewall: the painted meadow texture (a 1×1 green until it loads)
 const grassTex = gl.createTexture();
 gl.bindTexture(gl.TEXTURE_2D, grassTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([150, 190, 90, 255]));
 { const im = new Image(); im.onload = () => { gl.bindTexture(gl.TEXTURE_2D, grassTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, im);
@@ -935,7 +935,7 @@ function frame(now) {
   if (++frameN % 10 === 0) updateStats();
 }
 function draw(now) {
-  const measure = !!window.__measure && frameN % 20 === 0,   // Driftland: a GPU stall every 20 frames, only when profiling
+  const measure = !!window.__measure && frameN % 20 === 0,   // Tidewall: a GPU stall every 20 frames, only when profiling
     t0 = performance.now();
   // 隐藏男孩时只保留路线状态，小猫仍能独立显示并避开男孩再次出现的路线。
   const boy=typeof prepareMeadowBoy==='function'?prepareMeadowBoy(now,P.showBoy===1):null;
@@ -1161,6 +1161,5 @@ function startHostedMode() {
 </script>
 <script src="meadow-boy.js"></script>
 <script src="meadow-cat.js"></script>
-<script src="share.js"></script>   <!-- 分享图片 / 分享动画（示例图标、名字是色块） -->
 </body>
 </html>

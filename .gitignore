@@ -1,5 +1,7 @@
 # build output (build from source: see README)
 /driftland
+/tidewall
+/build/
 /tools/mover
 /tools/minprobe
 .DS_Store

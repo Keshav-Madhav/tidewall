@@ -1,4 +1,4 @@
-// Driftland — a macOS host that runs Deskland's Beach / Meadow themes (GPL-3.0, github.com/BLEZZ0102/Deskland)
+// Tidewall — a live wallpaper for macOS that flows around your windows (GPL-3.0; began as a fork of github.com/BLEZZ0102/Deskland)
 // as a live wallpaper that reshapes around your *windows* (incl. Stage Manager strip + desktop widgets),
 // not desktop icons. Unofficial; not affiliated with or endorsed by the Deskland project.
 //
@@ -18,6 +18,15 @@ import Darwin
 
 enum Cfg {
   static let d = UserDefaults.standard
+  static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+  /// Tidewall was called Driftland: bring its choices along, once
+  static func migrate() {
+    guard !d.bool(forKey: "migrated.driftland"), let old = UserDefaults(suiteName: "driftland") else { return }
+    for (k, v) in old.dictionaryRepresentation() where ["theme", "margin", "fps", "seed", "restWhenIdle", "mask"].contains(k) || k.hasPrefix("theme.display.") || k.hasPrefix("variant.") {
+      if d.object(forKey: k) == nil { d.set(v, forKey: k) } }
+    d.set(true, forKey: "migrated.driftland")
+    if Bundle.main.bundleIdentifier != nil && !benchMode && FileManager.default.fileExists(atPath: LoginItem.oldPlist.path) { LoginItem.set(true) }   // Driftland opened at login: Tidewall does now
+  }
   static var themeOverride: String?       // --theme for tests: never saved over your choice
   static var theme: String { get { themeOverride ?? d.string(forKey: "theme") ?? "estate" } set { themeOverride = nil; d.set(newValue, forKey: "theme") } }
   /// a display can have its own theme (Displays ▸ …); otherwise it shows the main one
@@ -29,7 +38,38 @@ enum Cfg {
     ("inkmap", "Ink Map · very low"), ("garden", "Garden Plan · very low"), ("railway", "Model Railway · very low"), ("meadow", "Meadow · high"), ("beach", "Beach · medium")]
   /// each theme's own sub-choice (Wind Map's region, Lava Lamp's colours, …), declared in themes/variants.json
   static var variantOverride: String?
-  static func variant(_ t: String) -> String? { (t == theme ? variantOverride : nil) ?? d.string(forKey: "variant.\(t)") }
+  static func variant(_ t: String) -> String? { (t == theme ? variantOverride : nil) ?? d.string(forKey: "variant.\(t)") ?? (t == "wind" ? homeRegion : nil) }
+  /// where the user is, roughly: the city of their time zone, from the system's time-zone table (no location permission)
+  static let site: (name: String, lat: Double, lon: Double, tz: String, cc: String)? = {
+    let tz = TimeZone.current.identifier
+    guard let tab = try? String(contentsOfFile: "/usr/share/zoneinfo/zone.tab", encoding: .utf8) else { return nil }
+    for line in tab.split(separator: "\n") where !line.hasPrefix("#") {
+      let f = line.split(separator: "\t"); guard f.count >= 3, f[2] == tz else { continue }
+      // "+2232+08822" or "+404251-0740023": ±DDMM[SS] then ±DDDMM[SS]
+      let c = String(f[1]); guard let split = c.dropFirst().firstIndex(where: { $0 == "+" || $0 == "-" }) else { return nil }
+      func deg(_ s: Substring, _ dd: Int) -> Double {
+        let sign: Double = s.first == "-" ? -1 : 1, n = s.dropFirst(), d = Double(n.prefix(dd)) ?? 0, m = Double(n.dropFirst(dd).prefix(2)) ?? 0, sec = Double(n.dropFirst(dd + 2).prefix(2)) ?? 0
+        return sign * (d + m / 60 + sec / 3600) }
+      let name = tz.split(separator: "/").last.map { $0.replacingOccurrences(of: "_", with: " ") } ?? tz
+      return (name, deg(c[c.startIndex..<split], 2), deg(c[split...], 3), tz, String(f[0]))
+    }
+    return nil
+  }()
+  /// the site as URL parameters for a theme page
+  static var siteQuery: String {
+    guard let s = site else { return "" }
+    let e = { (v: String) in v.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "" }
+    return "&site=\(e(s.name))&lat=\(String(format: "%.3f", s.lat))&lon=\(String(format: "%.3f", s.lon))&tz=\(e(s.tz))"
+  }
+  /// Wind Map's default region: the user's own country, if the map has it
+  static let homeRegion: String? = {
+    guard let cc = site?.cc, let name = Locale(identifier: "en_US").localizedString(forRegionCode: cc),
+          let data = try? Data(contentsOf: themesRoot.appendingPathComponent("variants.json")),
+          let man = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let wind = man["wind"] as? [String: Any] else { return nil }
+    let opts = (wind["groups"] as? [[String: Any]] ?? []).flatMap { $0["options"] as? [[String: Any]] ?? [] }
+    func norm(_ s: String) -> String { s.lowercased().folding(options: .diacriticInsensitive, locale: nil).filter { $0.isLetter } }
+    return (opts.first { norm($0["name"] as? String ?? "") == norm(name) } ?? opts.first { norm($0["name"] as? String ?? "").hasPrefix(norm(name)) || norm(name).hasPrefix(norm($0["name"] as? String ?? "")) })?["id"] as? String
+  }()
   static func setVariant(_ t: String, _ v: String) { variantOverride = nil; d.set(v, forKey: "variant.\(t)") }
   /// how far (pt) the land / cloud bank reaches past each window edge
   static var margin: Double { get { d.object(forKey: "margin") as? Double ?? 140 } set { d.set(newValue, forKey: "margin") } }
@@ -54,11 +94,13 @@ if let v = argValue("--variant") { Cfg.variantOverride = v }
 if let v = argValue("--theme") { Cfg.themeOverride = v }
 if let v = argValue("--mask") { Cfg.mask = v == "1" }
 if let v = argValue("--margin") { Cfg.margin = Double(v)! }
+Cfg.migrate()
+if args.contains("--print-site") { print(Cfg.site.map { "\($0.name) \($0.lat),\($0.lon) \($0.cc)" } ?? "none", Cfg.homeRegion ?? "-"); exit(0) }   // dev
 if args.contains("--install-login-item") { LoginItem.set(true); print(LoginItem.plist.path); exit(0) }
 if stock { Cfg.mask = false }
 
 func log(_ s: String) { print(s); fflush(stdout) }
-// the LaunchAgent appends to ~/Library/Logs/driftland.log forever: start over once it passes 5 MB
+// the LaunchAgent appends to ~/Library/Logs/Tidewall.log forever: start over once it passes 5 MB
 if var st = Optional(stat()), fstat(STDOUT_FILENO, &st) == 0, st.st_size > 5_000_000, (st.st_mode & S_IFMT) == S_IFREG { ftruncate(STDOUT_FILENO, 0) }
 
 // MARK: - Theme pages over a private scheme (file:// gives opaque origins → tainted canvases)
@@ -209,7 +251,6 @@ final class StillWall {
 
 final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   let screenID: CGDirectDisplayID
-  static let pool = WKProcessPool()
   static weak var anyWeb: WKWebView?
   var cgFrame: CGRect                         // screen in CG global coords (top-left origin), points
   let window: NSWindow
@@ -225,9 +266,8 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     cgFrame = screen.cgFrame
     let cfg = WKWebViewConfiguration()
     // every screen's page in ONE web process: the engine, its libraries and caches are paid for once, not per display
-    cfg.processPool = Wallpaper.pool
     if let r = Wallpaper.anyWeb, cfg.responds(to: NSSelectorFromString("_setRelatedWebView:")) { cfg.perform(NSSelectorFromString("_setRelatedWebView:"), with: r) }
-    cfg.setURLSchemeHandler(SchemeHandler(), forURLScheme: "driftland")
+    cfg.setURLSchemeHandler(SchemeHandler(), forURLScheme: "tidewall")
     cfg.suppressesIncrementalRendering = true
     unlockHighRefresh(cfg.preferences)
 
@@ -264,7 +304,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     ready = false; paused = nil; lastIcons = ""; lastMask = ""; lastWins = ""; wantsCursor = true
     let page = ["beach": "flat", "meadow": "meadow", "inkmap": "inkmap", "celestial": "celestial", "snow": "snow", "reef": "reef", "wind": "wind", "lava": "lava", "tunnel": "tunnel", "gallery": "gallery", "garden": "garden", "railway": "railway"][Cfg.theme(for: screenID)] ?? "estate"
     let v = Cfg.variant(Cfg.theme(for: screenID)).flatMap { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) }.map { "&v=\($0)" } ?? ""
-    web.load(URLRequest(url: URL(string: "driftland://app/\(page).html?wallpaper=1\(v)")!))
+    web.load(URLRequest(url: URL(string: "tidewall://app/\(page).html?wallpaper=1\(v)\(Cfg.siteQuery)")!))
   }
 
   var wantsCursor = true                    // a theme that ignores the pointer says so ("nocursor"): no 120 Hz messages for it
@@ -304,7 +344,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     if s == "ready" { ready = true; sendDesk(); send("{\"t\":\"me\",\"seed\":\(Cfg.seed)}")
       if let p = pending { pending = nil; p() } else if let a = lastArgs { update(rects: a.0, owners: a.1, live: false, pause: a.3) }
       return }
-    if s.hasPrefix("JSERR") || s == "patched" || (s.hasPrefix("STAT") && ProcessInfo.processInfo.environment["DRIFTLAND_STAT"] != nil) { log("[\(screenID)] \(s)") }
+    if s.hasPrefix("JSERR") || s == "patched" || (s.hasPrefix("STAT") && ProcessInfo.processInfo.environment["TIDEWALL_STAT"] != nil) { log("[\(screenID)] \(s)") }
   }
   private var crashes: [Double] = []
   func webViewWebContentProcessDidTerminate(_ w: WKWebView) {
@@ -362,20 +402,20 @@ final class WeakHandler: NSObject, WKScriptMessageHandler {
 
 extension NSScreen {
   var displayID: CGDirectDisplayID { deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as! CGDirectDisplayID }
-  var cgFrame: CGRect { let h = NSScreen.screens[0].frame.height; return CGRect(x: frame.minX, y: h - frame.maxY, width: frame.width, height: frame.height) }
+  var cgFrame: CGRect { let h = NSScreen.screens.first?.frame.height ?? frame.maxY; return CGRect(x: frame.minX, y: h - frame.maxY, width: frame.width, height: frame.height) }
 }
 
 // MARK: - Window tracking (no permissions needed)
 
 struct Snapshot: Equatable { var rects: [CGRect] }
 
-/// Test hook (env DRIFTLAND_SIM=1): tools/mover broadcasts a fake cursor riding its title bar + "button held".
+/// Test hook (env TIDEWALL_SIM=1): tools/mover broadcasts a fake cursor riding its title bar + "button held".
 final class SimInput {
-  static let on = ProcessInfo.processInfo.environment["DRIFTLAND_SIM"] == "1"
+  static let on = ProcessInfo.processInfo.environment["TIDEWALL_SIM"] == "1"
   static var point: NSPoint?, pressed = false
   static func start() {
     guard on else { return }
-    DistributedNotificationCenter.default().addObserver(forName: .init("driftland.sim"), object: nil, queue: .main) { n in
+    DistributedNotificationCenter.default().addObserver(forName: .init("tidewall.sim"), object: nil, queue: .main) { n in
       let u = n.userInfo ?? [:]; point = NSPoint(x: u["x"] as? Double ?? 0, y: u["y"] as? Double ?? 0); pressed = (u["down"] as? Bool) ?? false
     }
   }
@@ -424,7 +464,7 @@ final class Tracker {
     let t = now()
     if t - lastCursorT >= 1.0 / 120 {           // cursor at display rate (the celestial cursor hole sits exactly on the pointer)
       let m = SimInput.point ?? NSEvent.mouseLocation
-      if m != lastCursor { lastCursor = m; lastCursorT = t; onCursor(CGPoint(x: m.x, y: NSScreen.screens[0].frame.height - m.y)) }
+      if m != lastCursor { lastCursor = m; lastCursorT = t; if let h = NSScreen.screens.first?.frame.height { onCursor(CGPoint(x: m.x, y: h - m.y)) } }
     }
     let dragging = NSEvent.pressedMouseButtons & 1 != 0 || SimInput.pressed
     let fast = dragging || t < burstUntil
@@ -491,7 +531,7 @@ func uncoveredArea(_ screen: CGRect, _ rects: [CGRect]) -> Double {
   return free
 }
 
-// MARK: - Usage meter (Driftland + every helper process macOS bills to it: WebKit page, GPU, network)
+// MARK: - Usage meter (Tidewall + every helper process macOS bills to it: WebKit page, GPU, network)
 
 final class Usage {
   typealias RespFn = @convention(c) (pid_t) -> pid_t
@@ -502,7 +542,7 @@ final class Usage {
   private let me = ProcessInfo.processInfo.processIdentifier
   private var lastCPU: [pid_t: UInt64] = [:], lastGPU: UInt64 = 0, lastT = 0.0
   private let tb: Double = { var i = mach_timebase_info_data_t(); mach_timebase_info(&i); return Double(i.numer) / Double(i.denom) }()
-  struct Sample { var cpu = 0.0, gpu = 0.0, memMB = 0.0, procs = 0 }
+  struct Sample { var cpu = 0.0, gpu = 0.0, memMB = 0.0, procs = 0, cpuBy: [pid_t: Double] = [:], memBy: [pid_t: Double] = [:] }
 
   func family() -> [pid_t] {
     var pids = [me]
@@ -541,8 +581,8 @@ final class Usage {
     var cpuNow: [pid_t: UInt64] = [:], dCPU: UInt64 = 0
     for p in pids { guard let r = rusage(p) else { continue }
       let c = r.ri_user_time + r.ri_system_time; cpuNow[p] = c
-      if let l = lastCPU[p], c >= l { dCPU += c - l }
-      s.memMB += Double(r.ri_phys_footprint) / 1_048_576 }
+      if let l = lastCPU[p], c >= l { dCPU += c - l; if t > lastT, lastT > 0 { s.cpuBy[p] = Double(c - l) * tb / 1e9 / (t - lastT) * 100 } }
+      let mb = Double(r.ri_phys_footprint) / 1_048_576; s.memMB += mb; s.memBy[p] = mb }
     let g = gpuNs(Set(pids)), dt = t - lastT
     if lastT > 0, dt > 0 { s.cpu = Double(dCPU) * tb / 1e9 / dt * 100; s.gpu = Double(g >= lastGPU ? g - lastGPU : 0) / 1e9 / dt * 100 }
     lastCPU = cpuNow; lastGPU = g; lastT = t
@@ -553,19 +593,201 @@ final class Usage {
 // MARK: - Start at login (a per-user LaunchAgent: starts at login, restarts after a crash, stays quit when you quit)
 
 enum LoginItem {
-  static let label = "local.driftland"
+  static let label = "app.tidewall"
+  static var oldPlist: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/local.driftland.plist") }
   static var plist: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(label).plist") }
   static var enabled: Bool { FileManager.default.fileExists(atPath: plist.path) }
-  static func set(_ on: Bool) {
-    if !on { try? FileManager.default.removeItem(at: plist); return }      // takes effect from the next login
+  /// the app was moved (say into /Applications) since the login item was made: point it at where the app is now
+  static func refresh() {
+    guard enabled, Bundle.main.bundleIdentifier != nil, let d = NSDictionary(contentsOf: plist), let a = d["ProgramArguments"] as? [String],
+          let first = a.first, first != URL(fileURLWithPath: CommandLine.arguments[0]).standardized.resolvingSymlinksInPath().path else { return }
+    set(true); log("login item: now opens \(CommandLine.arguments[0])")
+  }
+  /// returns why it couldn't, if it couldn't
+  @discardableResult static func set(_ on: Bool) -> String? {
+    try? FileManager.default.removeItem(at: oldPlist)                    // the agent from before the rename
+    if !on { try? FileManager.default.removeItem(at: plist); return nil } // takes effect from the next login
     let exe = URL(fileURLWithPath: CommandLine.arguments[0]).standardized.resolvingSymlinksInPath().path
-    let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/driftland.log").path
+    // opened straight from Downloads, macOS runs the app from a temporary copy that is gone by the next login
+    if exe.contains("/AppTranslocation/") { return "Move Tidewall to your Applications folder first, then turn this on." }
+    let log = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Tidewall.log").path
     let dict: [String: Any] = [
-      "Label": label, "ProgramArguments": [exe, "--themes", themesRoot.path], "RunAtLoad": true,
+      "Label": label, "ProgramArguments": argValue("--themes") != nil ? [exe, "--background", "--themes", themesRoot.path] : [exe, "--background"], "RunAtLoad": true,
       "KeepAlive": ["SuccessfulExit": false], "ProcessType": "Interactive", "StandardOutPath": log, "StandardErrorPath": log,
     ]
-    try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0).write(to: plist)
+    do {
+      try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0).write(to: plist)
+    } catch { return "Couldn't set up opening at login: \(error.localizedDescription)" }
+    return nil
   }
+}
+
+
+// MARK: - The app window: themes with a live preview, displays, settings (an HTML page in a native, translucent window)
+
+/// Runs in every frame of the app window. The preview frame (a real theme page) gets the host surface it expects, but
+/// its messages go to the page around it, which plays host: a pretend desktop with windows you can drag.
+let frameShim = """
+(() => {
+  if (window.top === window) return;
+  // the preview is shown small: render at the pixels it's shown at, not at the full desktop's retina size
+  const pd = parseFloat(new URLSearchParams(location.search).get('pdpr'));
+  if (pd > 0) try { Object.defineProperty(window, 'devicePixelRatio', { get: () => pd, configurable: true }); } catch (_) {}
+  const ls = [];
+  window.chrome = window.chrome || {};
+  window.chrome.webview = { postMessage: m => parent.postMessage({ __twFrom: typeof m === 'string' ? m : JSON.stringify(m) }, '*'),
+    addEventListener: (t, f) => { if (t === 'message') ls.push(f); }, removeEventListener: () => {} };
+  addEventListener('message', e => { if (e.source === parent && e.data && e.data.__tw !== undefined) for (const f of ls) f({ data: e.data.__tw }); });
+  window.__opaque = true;
+})();
+"""
+
+final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate {
+  func webViewWebContentProcessDidTerminate(_ w: WKWebView) { log("[ui] web process ended; reloading"); w.load(URLRequest(url: URL(string: "tidewall://app/ui/index.html")!)) }
+  weak var app: App?
+  var window: NSWindow?, web: WKWebView?, usageTimer: Timer?
+  init(app: App) { self.app = app }
+
+  func show(page: String? = nil) {
+    NSApp.setActivationPolicy(.regular)
+    if window == nil { build() }
+    window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    if let page { js("{\"t\":\"show\",\"page\":\"\(page)\"}") }
+  }
+  private func build() {
+    let cfg = WKWebViewConfiguration()           // its own web process: the preview can never stall the wallpapers, and it ends with the window
+    cfg.setURLSchemeHandler(SchemeHandler(), forURLScheme: "tidewall")
+    let ucc = cfg.userContentController
+    ucc.addUserScript(WKUserScript(source: frameShim, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+    ucc.add(WeakHandler(self), name: "ui"); ucc.add(WeakHandler(self), name: "host")
+    let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+    w.title = "Tidewall"; w.titlebarAppearsTransparent = true; w.titleVisibility = .hidden
+    w.toolbar = NSToolbar(identifier: "tidewall"); w.toolbarStyle = .unified
+    w.minSize = NSSize(width: 960, height: 640); w.isReleasedWhenClosed = false; w.delegate = self
+    w.center(); w.setFrameAutosaveName("TidewallWindow")
+    let vfx = NSVisualEffectView(); vfx.material = .sidebar; vfx.blendingMode = .behindWindow; vfx.state = .followsWindowActiveState
+    w.contentView = vfx
+    let wv = WKWebView(frame: vfx.bounds, configuration: cfg); wv.autoresizingMask = [.width, .height]; wv.navigationDelegate = self
+    wv.setValue(false, forKey: "drawsBackground")
+    vfx.addSubview(wv)
+    wv.load(URLRequest(url: URL(string: "tidewall://app/ui/index.html")!))
+    window = w; web = wv
+    _ = app?.usage.sample()
+    usageTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.pushUsage() }
+  }
+  func windowWillClose(_ n: Notification) {
+    usageTimer?.invalidate(); usageTimer = nil
+    DispatchQueue.main.async { [weak self] in              // the page, its live preview and all their memory go with the window
+      guard let self else { return }
+      self.web?.configuration.userContentController.removeAllScriptMessageHandlers()
+      self.web?.removeFromSuperview(); self.web = nil; self.window = nil
+      NSApp.setActivationPolicy(.accessory)
+      if args.contains("--ui-only") && !args.contains("--closetest") { NSApp.terminate(nil) }
+    }
+  }
+  func toast(_ s: String) { if let d = try? JSONSerialization.data(withJSONObject: ["t": "toast", "s": s]), let j = String(data: d, encoding: .utf8) { js(j) } }
+  func js(_ json: String) { web?.evaluateJavaScript("window.tw&&tw.receive(\(json));null", completionHandler: nil) }
+  /// what the wallpaper costs, and (apart) what this window costs while it's open
+  func pushUsage() {
+    guard let u = app?.usage.sample() else { return }
+    let ui = pid_t(web.map(webPid) ?? -1), uc = u.cpuBy[ui] ?? 0, um = u.memBy[ui] ?? 0
+    js(String(format: "{\"t\":\"usage\",\"cpu\":%.2f,\"gpu\":%.2f,\"mem\":%.1f,\"winCpu\":%.2f,\"winMem\":%.1f}", max(0, u.cpu - uc), u.gpu, max(0, u.memMB - um), uc, um))
+  }
+  /// the main display and what's on it now: the preview shows your own desktop
+  func desktopJSON() -> String {
+    guard let app, let scr = NSScreen.screens.first else { return "null" }
+    let f = scr.cgFrame
+    var wins: [[String: Any]] = []
+    for (i, r) in app.lastRects.enumerated() where r.intersects(f) {
+      let owner = i < app.lastOwners.count ? app.lastOwners[i] : ""
+      if ["Tidewall", "tidewall", "WindowManager", "Dock"].contains(owner) { continue }   // this window; Stage Manager's app-icon badges
+      wins.append(["x": r.minX - f.minX, "y": r.minY - f.minY, "w": r.width, "h": r.height, "name": owner,
+                   "sm": Tracker.stageRects.contains("\(r)"), "widget": owner == "Notification Centre" || owner == "WidgetKit Simulator"])
+    }
+    let d: [String: Any] = ["w": f.width, "h": f.height, "windows": wins]
+    return (try? JSONSerialization.data(withJSONObject: d)).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+  }
+  func pushState() {
+    guard let app, web != nil else { return }
+    let ds = NSScreen.screens.map { s -> [String: Any] in let f = s.cgFrame, id = s.displayID
+      return ["id": Int(id), "name": s.localizedName, "x": f.minX, "y": f.minY, "w": f.width, "h": f.height, "theme": Cfg.theme(for: id),
+              "own": Cfg.d.string(forKey: "theme.display.\(id)") != nil, "main": s == NSScreen.screens.first] }
+    var vars: [String: String] = [:]; for (t, _) in Cfg.themes { if let v = Cfg.variant(t) { vars[t] = v } }
+    let st: [String: Any] = ["t": "state", "current": Cfg.theme, "displays": ds, "variants": vars, "seed": Cfg.seed, "version": Cfg.version, "siteQuery": Cfg.siteQuery,
+      "settings": ["login": LoginItem.enabled, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin]]
+    if let d = try? JSONSerialization.data(withJSONObject: st), let s = String(data: d, encoding: .utf8) { js(s) }
+  }
+  func userContentController(_ u: WKUserContentController, didReceive m: WKScriptMessage) {
+    if m.name == "host" { let s = "\(m.body)"; if s.hasPrefix("JSERR") { log("[preview] \(s)") }; return }
+    guard m.frameInfo.isMainFrame, let app, let str = m.body as? String, let d = str.data(using: .utf8),
+          let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let t = o["t"] as? String else { return }
+    switch t {
+    case "hello": pushState(); pushUsage(); js("{\"t\":\"desktop\",\"d\":\(desktopJSON())}"); return
+    case "desktop": js("{\"t\":\"desktop\",\"d\":\(desktopJSON())}"); return
+    case "open": if let s = o["url"] as? String, let url = URL(string: s), ["https", "http"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }; return
+    case "log": log("[ui] \(o["s"] as? String ?? "")"); return
+    case "apply": if let id = o["theme"] as? String, Cfg.themes.contains(where: { $0.0 == id }) { Cfg.clearDisplayThemes(); Cfg.theme = id; app.reloadAll() }
+    case "applyDisplay":
+      let th = o["theme"] as? String
+      if let did = o["display"] as? Int, let id = CGDirectDisplayID(exactly: did), NSScreen.screens.contains(where: { $0.displayID == id }),
+         th == nil || Cfg.themes.contains(where: { $0.0 == th }) { Cfg.setTheme(th, for: id); app.reloadWall(id) }
+    case "variant": if let th = o["theme"] as? String, let v = o["id"] as? String {
+        Cfg.setVariant(th, v); for s in NSScreen.screens where Cfg.theme(for: s.displayID) == th { app.reloadWall(s.displayID) } }
+    case "set":
+      let v = o["value"]
+      switch o["key"] as? String ?? "" {
+      case "login": if let why = LoginItem.set(v as? Bool ?? false) { toast(why) }
+      case "restWhenIdle": Cfg.restWhenIdle = v as? Bool ?? true
+      case "paused": app.userPaused = v as? Bool ?? false; app.dispatch(live: false)
+      case "fps": Cfg.fps = (v as? NSNumber)?.doubleValue ?? 0; app.reloadAll()
+      case "margin": Cfg.margin = (v as? NSNumber)?.doubleValue ?? 140; app.tracker.forceResend()
+      default: break }
+    case "reload": app.reloadAll()
+    case "quit": NSApp.terminate(nil)
+    default: break
+    }
+    pushState(); app.buildMenu()
+  }
+}
+
+/// The menu-bar glyph: a little window riding a wave (a template image, so it follows the menu bar's colour)
+func menuGlyph() -> NSImage {
+  let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+    NSColor.black.set()
+    let win = NSBezierPath(roundedRect: NSRect(x: 5.2, y: 8.2, width: 9.6, height: 7.2), xRadius: 1.8, yRadius: 1.8); win.lineWidth = 1.35; win.stroke()
+    NSBezierPath(rect: NSRect(x: 5.2, y: 13.1, width: 9.6, height: 1.2)).fill()
+    let w1 = NSBezierPath(); w1.move(to: NSPoint(x: 1, y: 6.2))
+    w1.curve(to: NSPoint(x: 6.3, y: 6.2), controlPoint1: NSPoint(x: 2.6, y: 8.6), controlPoint2: NSPoint(x: 4.7, y: 8.6))
+    w1.curve(to: NSPoint(x: 11.7, y: 6.2), controlPoint1: NSPoint(x: 7.9, y: 3.8), controlPoint2: NSPoint(x: 10.1, y: 3.8))
+    w1.curve(to: NSPoint(x: 17, y: 6.2), controlPoint1: NSPoint(x: 13.3, y: 8.6), controlPoint2: NSPoint(x: 15.4, y: 8.6))
+    w1.lineWidth = 1.5; w1.lineCapStyle = .round; w1.stroke()
+    let w2 = NSBezierPath(); w2.move(to: NSPoint(x: 1, y: 2.4))
+    w2.curve(to: NSPoint(x: 6.3, y: 2.4), controlPoint1: NSPoint(x: 2.6, y: 4.6), controlPoint2: NSPoint(x: 4.7, y: 4.6))
+    w2.curve(to: NSPoint(x: 11.7, y: 2.4), controlPoint1: NSPoint(x: 7.9, y: 0.2), controlPoint2: NSPoint(x: 10.1, y: 0.2))
+    w2.curve(to: NSPoint(x: 17, y: 2.4), controlPoint1: NSPoint(x: 13.3, y: 4.6), controlPoint2: NSPoint(x: 15.4, y: 4.6))
+    w2.lineWidth = 1.2; w2.lineCapStyle = .round; NSColor.black.withAlphaComponent(0.55).set(); w2.stroke()
+    return true
+  }
+  img.isTemplate = true; return img
+}
+
+/// The app's own menu (shown while the window is open and Tidewall is in the Dock)
+func buildMainMenu(_ open: @escaping () -> Void) {
+  let main = NSMenu(), appItem = NSMenuItem(); main.addItem(appItem)
+  let am = NSMenu()
+  am.addItem(ClosureItem("About Tidewall") { open() })
+  am.addItem(.separator())
+  let hide = NSMenuItem(title: "Hide Tidewall", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"); am.addItem(hide)
+  am.addItem(.separator())
+  am.addItem(NSMenuItem(title: "Quit Tidewall", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+  appItem.submenu = am
+  let winItem = NSMenuItem(); main.addItem(winItem)
+  let wm = NSMenu(title: "Window")
+  wm.addItem(NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+  wm.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+  winItem.submenu = wm
+  NSApp.mainMenu = main
 }
 
 // MARK: - App
@@ -595,8 +817,19 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var lastRects: [CGRect] = []
   var lastOwners: [String] = []
   weak var cursorWall: Wallpaper?
+  lazy var appWindow = AppWindow(app: self)
+  func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows f: Bool) -> Bool { if !benchMode { appWindow.show() }; return false }
 
   func applicationDidFinishLaunching(_ n: Notification) {
+    if let a = argValue("--appearance") { NSApp.appearance = NSAppearance(named: a == "light" ? .aqua : .darkAqua) }
+    if args.contains("--ui-only") {           // dev: just the app window (no wallpapers), to work on the interface
+      tracker.onUpdate = { [weak self] r, _ in self?.lastRects = r; self?.lastOwners = self?.tracker.owners ?? [] }; tracker.start()
+      buildMainMenu { [weak self] in self?.appWindow.show(page: "about") }; appWindow.show()
+      if let c = argValue("--closetest"), let t = Double(c) { DispatchQueue.main.asyncAfter(deadline: .now() + t) { self.appWindow.window?.performClose(nil) } }   // dev: is it all freed?
+      if let m = argValue("--mode") { DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.appWindow.js("{\"t\":\"mode\",\"m\":\"\(m == "sample" ? "sample" : "mine")\"}") } }   // dev
+      if let t = argValue("--select") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.appWindow.js("{\"t\":\"select\",\"id\":\"\(t)\"}") } }   // dev
+      if let p = argValue("--page") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.appWindow.show(page: p) } }
+      return }
     SimInput.start()
     buildWalls()
     tracker.onUpdate = { [weak self] r, live in self?.lastRects = r; self?.lastOwners = self?.tracker.owners ?? []; self?.dispatch(live: live) }
@@ -632,7 +865,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let dnc = DistributedNotificationCenter.default()
     dnc.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in self?.locked = true; self?.dispatch(live: false) }
     dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in self?.locked = false; self?.dispatch(live: false) }
-    if !benchMode { buildMenu() } else { Bench.start(self) }
+    if !benchMode {
+      LoginItem.refresh()
+      DistributedNotificationCenter.default().addObserver(forName: .init("app.tidewall.show"), object: nil, queue: .main) { [weak self] _ in self?.appWindow.show() }
+      buildMenu()
+      if Bundle.main.bundleIdentifier == nil, let i = NSImage(contentsOf: themesRoot.appendingPathComponent("ui/icon.png")) { NSApp.applicationIconImage = i }
+      buildMainMenu { [weak self] in self?.appWindow.show(page: "about") }
+      // opened by hand (not at login): show the window
+      if !args.contains("--background") || !Cfg.d.bool(forKey: "welcomed") { Cfg.d.set(true, forKey: "welcomed"); appWindow.show() }
+    } else { Bench.start(self) }
     if args.contains("--usage") {           // log what the menu shows, every 2 s
       _ = usage.sample()
       Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -670,7 +911,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if releasedAway { return }                                     // away: the pages come back when you do
     let ids = Set(NSScreen.screens.map { $0.displayID })
     for (id, w) in walls where !ids.contains(id) { w.close(); walls[id] = nil }
-    for s in NSScreen.screens where (!benchMode || s == NSScreen.screens[0]) && !dormant.contains(s.displayID) {
+    for s in NSScreen.screens where (!benchMode || s == NSScreen.screens.first) && !dormant.contains(s.displayID) {
       if let w = walls[s.displayID] { w.cgFrame = s.cgFrame; w.window.setFrame(s.frame, display: true); w.sendDesk() }
       else { let id = s.displayID, still = stills[id]; let w = Wallpaper(screen: s, hidden: still != nil); walls[id] = w
         if let still { w.onShown = { [weak self] in still.close(); if self?.stills[id] === still { self?.stills[id] = nil } }
@@ -691,7 +932,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       if covered { if coveredSince[id] == nil { coveredSince[id] = now } } else { coveredSince[id] = nil }
       if covered, let since = coveredSince[id], now - since > 15, let w = walls[id] {          // nobody can see it: free it
         w.close(); walls[id] = nil; dormant.insert(id); log("screen \(id) fully covered: released its page")
-      } else if !covered, dormant.contains(id) {                                               // a sliver is visible again
+      } else if !covered, dormant.contains(id), !releasedAway {                                               // a sliver is visible again
         dormant.remove(id); walls[id] = Wallpaper(screen: s); log("screen \(id) uncovered: page restored")
       }
     }
@@ -724,7 +965,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func buildMenu() {
     if status == nil {
       status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-      status.button?.image = NSImage(systemSymbolName: "water.waves", accessibilityDescription: "Driftland")
+      status.button?.image = menuGlyph(); status.button?.toolTip = "Tidewall"
     }
     let m = NSMenu(); m.delegate = self
     let mono = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -733,6 +974,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       it.attributedTitle = NSAttributedString(string: title, attributes: [.font: mono]); m.addItem(it)
     }
     m.addItem(.separator())
+    let open = ClosureItem("Open Tidewall…") { [weak self] in self?.appWindow.show() }; open.keyEquivalent = ","
+    open.attributedTitle = NSAttributedString(string: "Open Tidewall…", attributes: [.font: NSFont.menuFont(ofSize: 0).withWeight(.semibold)])
+    m.addItem(open); m.addItem(.separator())
     func sub(_ title: String, _ items: [(String, Bool, () -> Void)]) {
       let it = NSMenuItem(title: title, action: nil, keyEquivalent: ""); let s = NSMenu()
       for (t, on, f) in items {
@@ -748,66 +992,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       it.submenu = s; m.addItem(it)
     }
     // the main theme: every display (choosing it clears any per-display themes)
-    sub("Theme", Cfg.themes.map { (id, label) in (label, Cfg.theme == id, { Cfg.clearDisplayThemes(); Cfg.theme = id; self.reloadAll(); self.buildMenu() }) })
-    // several displays: each can show its own theme
-    if NSScreen.screens.count > 1 {
-      let it = NSMenuItem(title: "Displays", action: nil, keyEquivalent: ""), dm = NSMenu()
-      for scr in NSScreen.screens {
-        let id = scr.displayID, own = Cfg.d.string(forKey: "theme.display.\(id)"), cur = Cfg.theme(for: id)
-        let name = Cfg.themes.first { $0.0 == cur }?.1.components(separatedBy: " · ").first ?? cur
-        let si = NSMenuItem(title: scr.localizedName, action: nil, keyEquivalent: ""), sm = NSMenu()
-        let a = NSMutableAttributedString(string: scr.localizedName, attributes: [.font: NSFont.menuFont(ofSize: 0)])
-        a.append(NSAttributedString(string: "   " + name, attributes: [.font: NSFont.menuFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
-        si.attributedTitle = a
-        let same = ClosureItem("Same as the main theme") { Cfg.setTheme(nil, for: id); self.reloadWall(id); self.buildMenu() }; same.state = own == nil ? .on : .off; sm.addItem(same)
-        sm.addItem(.separator())
-        for (tid, label) in Cfg.themes { let i = ClosureItem(label.components(separatedBy: " · ").first ?? label) { Cfg.setTheme(tid, for: id); self.reloadWall(id); self.buildMenu() }
-          i.state = own == tid ? .on : .off; sm.addItem(i) }
-        si.submenu = sm; dm.addItem(si)
-      }
-      it.submenu = dm; m.addItem(it)
-    }
-    // the current theme's variants, from the manifest: a flat list, or groups (Region ▸ Asia ▸ India)
-    if let data = try? Data(contentsOf: themesRoot.appendingPathComponent("variants.json")),
-       let man = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let spec = man[Cfg.theme] as? [String: Any] {
-      let theme = Cfg.theme, current = Cfg.variant(theme) ?? (spec["default"] as? String ?? "")
-      let pick: (String) -> Void = { [weak self] id in Cfg.setVariant(theme, id); self?.reloadAll(); self?.buildMenu() }
-      func items(_ opts: [[String: Any]]) -> NSMenu {
-        let s = NSMenu()
-        for o in opts { guard let id = o["id"] as? String, let name = o["name"] as? String else { continue }
-          let i = ClosureItem(name) { pick(id) }; i.state = id == current ? .on : .off; s.addItem(i) }
-        return s
-      }
-      var currentName = ""
-      let it = NSMenuItem(title: spec["label"] as? String ?? "Variant", action: nil, keyEquivalent: "")
-      if let groups = spec["groups"] as? [[String: Any]] {
-        let s = NSMenu()
-        for g in groups { let opts = g["options"] as? [[String: Any]] ?? []
-          let gi = NSMenuItem(title: g["name"] as? String ?? "", action: nil, keyEquivalent: ""); gi.submenu = items(opts)
-          if opts.contains(where: { $0["id"] as? String == current }) { gi.state = .mixed; currentName = opts.first { $0["id"] as? String == current }?["name"] as? String ?? "" }
-          s.addItem(gi) }
-        it.submenu = s
-      } else if let opts = spec["options"] as? [[String: Any]] {
-        it.submenu = items(opts); currentName = opts.first { $0["id"] as? String == current }?["name"] as? String ?? ""
-      }
-      if !currentName.isEmpty {                   // "Region   India": the current choice in quiet grey
-        let a = NSMutableAttributedString(string: it.title, attributes: [.font: NSFont.menuFont(ofSize: 0)])
-        a.append(NSAttributedString(string: "   " + currentName, attributes: [.font: NSFont.menuFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]))
-        it.attributedTitle = a
-      }
-      m.addItem(it)
-    }
-    sub("Margin around windows", [60.0, 100, 140, 200].map { v in ("\(Int(v)) pt", Cfg.margin == v, { Cfg.margin = v; self.tracker.forceResend(); self.buildMenu() }) })
-    sub("Frame rate", [0.0, 15, 20, 30].map { v in (v == 0 ? "Uncapped" : "\(Int(v)) fps", Cfg.fps == v, { Cfg.fps = v; self.reloadAll(); self.buildMenu() }) })
+    sub("Theme", Cfg.themes.map { (id, label) in (label, Cfg.theme == id, { Cfg.clearDisplayThemes(); Cfg.theme = id; self.reloadAll(); self.buildMenu(); self.appWindow.pushState() }) })
     m.addItem(.separator())
-    let ri = ClosureItem("Rest when idle") { Cfg.restWhenIdle.toggle(); self.buildMenu() }; ri.state = Cfg.restWhenIdle ? .on : .off
-    let p = ClosureItem("Pause") { self.userPaused.toggle(); self.dispatch(live: false); self.buildMenu() }
+    let ri = ClosureItem("Rest when idle") { Cfg.restWhenIdle.toggle(); self.buildMenu(); self.appWindow.pushState() }; ri.state = Cfg.restWhenIdle ? .on : .off
+    let p = ClosureItem("Pause") { self.userPaused.toggle(); self.dispatch(live: false); self.buildMenu(); self.appWindow.pushState() }
     p.state = userPaused ? .on : .off; m.addItem(p); m.addItem(ri)
-    m.addItem(ClosureItem("Reload") { self.reloadAll() })
-    let li = ClosureItem("Start at login") { LoginItem.set(!LoginItem.enabled); self.buildMenu() }
+    let li = ClosureItem("Open at login") { if let why = LoginItem.set(!LoginItem.enabled) { let a = NSAlert(); a.messageText = why; a.runModal() }; self.buildMenu(); self.appWindow.pushState() }
     li.state = LoginItem.enabled ? .on : .off; m.addItem(li)
     m.addItem(.separator())
-    m.addItem(ClosureItem("Quit Driftland") { NSApp.terminate(nil) })
+    m.addItem(ClosureItem("Quit Tidewall") { NSApp.terminate(nil) })
     status.menu = m
   }
 }
@@ -849,6 +1042,7 @@ enum Bench {
               (R(236, 146, 979, 676), "WhatsApp", false), (R(1324, 794, 180, 180), "Notification Centre", false)],
       "slack": [(R(16, 193, 100, 130), "WhatsApp", true), (R(16, 337, 118, 149), "Google Chrome", true), (R(16, 512, 118, 155), "Electron", true), (R(16, 675, 118, 147), "Claude", true),
                 (R(231, 140, 1155, 670), "Slack", false), (R(1324, 794, 180, 180), "Notification Centre", false)],
+      "showcase": [(R(250, 190, 620, 410), "Safari", false), (R(840, 430, 470, 320), "Notes", false)],
       "empty": []]
     var owners0 = ["Slack", "WhatsApp", "Notes", "Electron", "Claude", "Notification Centre"], rects0 = fixed, stage0: [CGRect] = []
     if let name = argValue("--layout"), let l = layouts[name] { rects0 = l.map { $0.0 }; owners0 = l.map { $0.1 }; stage0 = l.filter { $0.2 }.map { $0.0 } }
@@ -876,7 +1070,7 @@ enum Bench {
     Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
       for w in app.walls.values where w.cgFrame.origin == .zero {
         w.web.evaluateJavaScript("[(window.__prof?('JSms/frame='+(__prof.ms/Math.max(1,__prof.n)).toFixed(2)+' frames/s='+(__prof.n/((performance.now()-__prof.t0)/1000)).toFixed(1)):''),(typeof window.__dbg==='function'?__dbg():''), (typeof icons!=='undefined'?'icon0='+JSON.stringify(icons[0]&&{x:icons[0].x|0,y:icons[0].y|0,w:icons[0].w|0,h:icons[0].h|0})+' s@c='+(typeof curS==='function'&&icons[0]?curS(icons[0].x+icons[0].w/2,icons[0].y+icons[0].h/2).toFixed(0):'-')+' frames='+(typeof frameN!=='undefined'?frameN:'-')+' icons='+icons.length+' mix='+(typeof curMix!=='undefined'?curMix.toFixed(2):'-')+' from/to='+(typeof fromI!=='undefined'?fromI+'/'+toI:'-')+' morphT0='+(typeof morphT0!=='undefined'?(morphT0|0):'-')+' FB='+(typeof FB!=='undefined'&&!!FB)+' iconsSeen='+(typeof iconsSeen!=='undefined'?iconsSeen:'-'):''), devicePixelRatio, cv.width+'x'+cv.height, cv._scale, P.quality, Math.round(fpsEMA), fieldMs.toFixed(1), (window.__gl?window.__gl.drawingBufferWidth:0)+'x'+(window.__gl?window.__gl.drawingBufferHeight:0), paused].join(' ')") { r, _ in
-          let pid = (w.web.value(forKey: "_webProcessIdentifier") as? Int) ?? 0
+          let pid = webPid(w.web)
           log("bench fps/fieldMs/buffer/paused: \(r ?? "nil")  webpid=\(pid)  polls=\(app.tracker.polls) avgPollMs=\(String(format: "%.2f", app.tracker.pollMs / Double(max(app.tracker.polls, 1))))")
         }
       }
@@ -912,8 +1106,19 @@ enum Bench {
   }
 }
 
+// one Tidewall at a time: opening a second copy shows the running one's window instead
+if !benchMode && !args.contains("--ui-only"), let id = Bundle.main.bundleIdentifier,
+   NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { $0.processIdentifier != getpid() }) {
+  DistributedNotificationCenter.default().postNotificationName(.init("app.tidewall.show"), object: nil, userInfo: nil, deliverImmediately: true)
+  exit(0)
+}
 let app = NSApplication.shared
 let delegate = App()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()
+
+extension NSFont { func withWeight(_ w: NSFont.Weight) -> NSFont { NSFont.systemFont(ofSize: pointSize, weight: w) } }
+
+/// a web view's content process id (private, guarded: -1 if it ever goes away)
+func webPid(_ w: WKWebView) -> Int { w.responds(to: NSSelectorFromString("_webProcessIdentifier")) ? (w.value(forKey: "_webProcessIdentifier") as? Int) ?? -1 : -1 }

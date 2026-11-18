@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Celestial Atlas — a Driftland theme. An antique star chart in gold on deep navy, and every window is a
+  Celestial Atlas — a Tidewall theme. An antique star chart in gold on deep navy, and every window is a
   black hole: the sky is gravitationally lensed around it (stars smeared into arcs along an Einstein ring,
   light from behind wrapped into view), with a dark horizon, a thin photon ring and a lopsided accretion glow.
   Your cursor is a tiny black hole too, exactly where the pointer is.
@@ -34,9 +34,12 @@ function vnoise(x, y) { const ix = Math.floor(x), iy = Math.floor(y), fx = x - i
 const fbm = (x, y) => { let v = 0, a = .5; for (let i = 0; i < 5; i++) { v += a * vnoise(x, y); x = x * 2.03 + 7; y = y * 2.03 + 3; a *= .5; } return v; };
 let seed = 1;
 
-/* ---------- the real sky over India, right now ---------- */
+/* ---------- the real sky over you, right now ---------- */
 // Star, constellation and Milky Way data: d3-celestial by Olaf Frohn (BSD-3-Clause), see sky/LICENSE-d3-celestial.
-const SITE = { name: 'New Delhi', lat: 28.6139, lon: 77.2090 };
+// where you are: the host passes the city of your time zone (from the system's time-zone table; no location permission)
+const SQ = new URLSearchParams(location.search);
+const SITE = { name: SQ.get('site') || 'Greenwich', lat: parseFloat(SQ.get('lat')) || 51.48, lon: parseFloat(SQ.get('lon')) || 0,
+  tz: SQ.get('tz') || Intl.DateTimeFormat().resolvedOptions().timeZone };
 const D2R = Math.PI / 180;
 let SKY = null;
 async function loadSky() {
@@ -276,11 +279,13 @@ function paintSky(date = new Date()) {
   x.fillStyle = 'rgba(10,20,42,.85)'; x.fillRect(tx - 150, ty - 40, 300, 80);
   x.strokeStyle = GOLD + '.55)'; x.lineWidth = .9; x.strokeRect(tx - 150, ty - 40, 300, 80); x.strokeRect(tx - 145, ty - 35, 290, 70);
   x.fillStyle = GOLD + '.85)'; x.font = `600 15px ${SERIF}`; x.textAlign = 'center'; x.textBaseline = 'middle';
-  const title = 'CAELUM SUPRA INDIAM'; let tw = -2.5; for (const ch of title) tw += x.measureText(ch).width + 2.5; let px2 = tx - tw / 2;
+  const title = 'CAELUM HODIERNUM'; let tw = -2.5; for (const ch of title) tw += x.measureText(ch).width + 2.5; let px2 = tx - tw / 2;
   for (const ch of title) { const w2 = x.measureText(ch).width; x.fillText(ch, px2 + w2 / 2, ty - 13); px2 += w2 + 2.5; }
-  const when = date.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const fmt = o => { try { return date.toLocaleString('en-GB', Object.assign({ timeZone: SITE.tz }, o)); } catch (_) { return date.toLocaleString('en-GB', o); } };
+  const when = `${fmt({ day: 'numeric', month: 'short', year: 'numeric' })} · ${fmt({ hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }).replace(/GMT\+0$/, 'GMT')}`;
+  const deg = (v, p, n) => `${Math.abs(v).toFixed(1)}°${v >= 0 ? p : n}`;
   x.font = `italic 11px ${SERIF}`; x.fillStyle = GOLD + '.65)';
-  x.fillText(`${SITE.name} · ${SITE.lat.toFixed(1)}°N ${SITE.lon.toFixed(1)}°E`, tx, ty + 6); x.fillText(`${when} IST`, tx, ty + 22);
+  x.fillText(`${SITE.name} · ${deg(SITE.lat, 'N', 'S')} ${deg(SITE.lon, 'E', 'W')}`, tx, ty + 6); x.fillText(when, tx, ty + 22);
   }
   return c;
 }

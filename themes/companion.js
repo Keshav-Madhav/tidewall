@@ -1,4 +1,4 @@
-// Driftland companions, shared by the themes (load in <head>, before the page's own scripts).
+// Tidewall companions, shared by the themes (load in <head>, before the page's own scripts).
 //  · DLWake: a continuous wake — two lines streaming from the stern that spread and fade with age.
 //    Points are only laid while the boat really travels, so a resting boat leaves no wake.
 //  · Beach / Meadow: window changes glide. Each window rect eases toward where it really is and the page

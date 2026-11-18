@@ -47,5 +47,10 @@ three.js r169 (core module, GLTFLoader, DRACOLoader, RoomEnvironment, BufferGeom
 ## Model Railway (themes/railway/)
 
 The building and tree atlases (`houses.webp`, `trees.webp`, `atlas.json`) are original stylized toy-model renders generated
-for Driftland with Google Gemini (gemini-3-pro-image), then keyed and cut out by hand. No third-party artwork or trademarks
+for Tidewall with Google Gemini (gemini-3-pro-image), then keyed and cut out by hand. No third-party artwork or trademarks
 are reproduced. Everything else on the board (land, water, track, trains, cars, boats, balloon) is drawn in code.
+
+## Tidewall app icon and interface (assets/, themes/ui/)
+
+The app icon artwork was generated for Tidewall with Google Gemini (gemini-3-pro-image) and shaped into the macOS icon
+grid by hand. The theme thumbnails in themes/ui/thumbs are renders of Tidewall's own themes.

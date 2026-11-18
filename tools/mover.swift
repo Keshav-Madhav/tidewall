@@ -9,7 +9,7 @@ func make(_ x: CGFloat, _ y: CGFloat, _ title: String) -> NSWindow {
 let a = make(260, 300, "drag me"), b = make(820, 120, "minimise me")
 a.setContentSize(NSSize(width: 1070, height: 820))      // Slack-sized, like real use
 func sim(_ down: Bool) {                                   // a fake cursor on the title bar, button held while moving
-  let f = a.frame; DistributedNotificationCenter.default().postNotificationName(.init("driftland.sim"), object: nil,
+  let f = a.frame; DistributedNotificationCenter.default().postNotificationName(.init("tidewall.sim"), object: nil,
     userInfo: ["x": Double(f.midX - 200), "y": Double(f.maxY - 12), "down": down], deliverImmediately: true)
 }
 var rnd = SystemRandomNumberGenerator()

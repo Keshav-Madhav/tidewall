@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  Wind Map — a Driftland theme. The real surface wind over India, live.
+  Wind Map — a Tidewall theme. The real surface wind over your country (or any other), live.
   Hourly 10 m wind from Open-Meteo (free, no key; only a fixed grid of lat/lon points over the region is sent)
   is traced by ~32k particles as fine fading streaks, exactly as the data says. The base map is a quiet chart:
   Natural Earth coastlines, hand-inked relief from a real elevation grid (contours, mountain marks, range names),
@@ -102,10 +102,10 @@ async function fetchWind() {
   return { g, key: gridKey(g), times, u, v, fetched: Date.now(), tz: { off: arr[best].utc_offset_seconds || 0, abbr: arr[best].timezone_abbreviation || '' } };
 }
 function loadCache() {
-  try { const c = JSON.parse(localStorage.getItem('driftland-wind-' + VARIANT) || 'null'); if (c && c.key === gridKey(gridSpec())) return c; } catch (_) { }
+  try { const c = JSON.parse(localStorage.getItem('tidewall-wind-' + VARIANT) || 'null'); if (c && c.key === gridKey(gridSpec())) return c; } catch (_) { }
   return null;
 }
-function saveCache(d) { try { localStorage.setItem('driftland-wind-' + VARIANT, JSON.stringify(d)); } catch (_) { } }
+function saveCache(d) { try { localStorage.setItem('tidewall-wind-' + VARIANT, JSON.stringify(d)); } catch (_) { } }
 // the free API's daily allowance resets at midnight UTC: once it's spent, wait for that instead of asking again and again
 const untilTomorrow = () => { const d = new Date(); d.setUTCHours(24, 5, 0, 0); return d.getTime(); };
 async function maybeFetch() {
