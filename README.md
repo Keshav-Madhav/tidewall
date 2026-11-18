@@ -5,8 +5,8 @@
 <p align="center">A live wallpaper for macOS that flows around your windows.<br>
 Move a window and the world grows, parts and settles around it.</p>
 
-<p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/download/v1.0.1/tidewall-promo.mp4"><img src="docs/promo-poster.png" width="860" alt="Watch the 25-second film"></a><br>
-<sub><a href="https://github.com/Keshav-Madhav/tidewall/releases/download/v1.0.1/tidewall-promo.mp4">▶ Watch the 25-second film</a> · <a href="https://github.com/Keshav-Madhav/tidewall/releases/latest">Download Tidewall</a></sub></p>
+<p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/download/v1.0.1/tidewall-promo.mp4"><img src="docs/promo-poster.png" width="860" alt="Watch the 38-second film"></a><br>
+<sub><a href="https://github.com/Keshav-Madhav/tidewall/releases/download/v1.0.1/tidewall-promo.mp4">▶ Watch the 38-second film</a> · <a href="https://github.com/Keshav-Madhav/tidewall/releases/latest">Download Tidewall</a></sub></p>
 
 <p align="center"><img src="docs/app.png" width="860" alt="The Tidewall window: a live preview of Model Railway on your own desktop, with the theme gallery below"></p>
 
@@ -42,7 +42,8 @@ can have its own theme.
 2. Move **Tidewall.app** to your Applications folder.
 3. Open it. The first time, macOS will say it can't check the app for malicious software, because Tidewall isn't
    signed with a paid Apple developer certificate. Open **System Settings ▸ Privacy & Security**, scroll down and
-   click **Open Anyway** (or right-click the app and choose **Open**). You only need to do this once.
+   click **Open Anyway**, then confirm. You only need to do this once. (On macOS 14 you can also right-click the app
+   and choose **Open**; macOS 15 and later removed that shortcut.)
 
 Requires macOS 14 Sonoma or later, on Apple silicon or Intel.
 

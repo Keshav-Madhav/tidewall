@@ -159,6 +159,21 @@ func earlyScript(fps: Double, opaque: Bool) -> String { """
 })();
 """ }
 
+/// Filming in slow motion (--timescale k): the page's clocks all run k× slower, so frames can be taken at a pace that
+/// plays back smooth at real speed
+func timescaleScript(_ k: Double) -> String { """
+(() => {
+  const k = \(k), pn = performance.now.bind(performance), t0 = pn();
+  performance.now = () => t0 + (pn() - t0) * k;
+  const dn = Date.now, d0 = dn(); Date.now = () => d0 + (dn() - d0) * k;
+  const raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = cb => raf(t => cb(t0 + (t - t0) * k));
+  const st = window.setTimeout.bind(window), si = window.setInterval.bind(window);
+  window.setTimeout = (f, d, ...a) => st(f, (d || 0) / k, ...a); window.setInterval = (f, d, ...a) => si(f, (d || 0) / k, ...a);
+  const slow = () => { try { for (const a of document.getAnimations()) if (a.playbackRate !== k) a.playbackRate = k; } catch (_) {} raf(slow); }; raf(slow);
+})();
+""" }
+
 /// Runs after the page's own scripts (globals FA/FB/commit/refresh/icons exist).
 let lateScript = """
 (() => {
@@ -272,6 +287,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     unlockHighRefresh(cfg.preferences)
 
     let ucc = cfg.userContentController
+    if let k = argValue("--timescale").flatMap(Double.init), k != 1 { ucc.addUserScript(WKUserScript(source: timescaleScript(k), injectionTime: .atDocumentStart, forMainFrameOnly: true)) }
     ucc.addUserScript(WKUserScript(source: earlyScript(fps: stock ? 0 : Cfg.fps, opaque: !stock && !args.contains("--no-opaque")), injectionTime: .atDocumentStart, forMainFrameOnly: true))
     ucc.addUserScript(WKUserScript(source: lateScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
     window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -1044,7 +1060,10 @@ enum Bench {
       "showcase": [(R(250, 190, 620, 410), "Safari", false), (R(840, 430, 470, 320), "Notes", false)],
       "empty": []]
     var owners0 = ["Slack", "WhatsApp", "Notes", "Electron", "Claude", "Notification Centre"], rects0 = fixed, stage0: [CGRect] = []
-    if let name = argValue("--layout"), let l = layouts[name] { rects0 = l.map { $0.0 }; owners0 = l.map { $0.1 }; stage0 = l.filter { $0.2 }.map { $0.0 } }
+    let choreo = argValue("--choreo").flatMap { Choreo(path: $0) }
+    if let c = choreo { let a = c.at(0); rects0 = a.0; owners0 = a.1; stage0 = zip(a.0, a.2).filter { $0.1 }.map { $0.0 }
+      c.pinCursor(0) }                                     // the real mouse must not reach the page while filming
+    else if let name = argValue("--layout"), let l = layouts[name] { rects0 = l.map { $0.0 }; owners0 = l.map { $0.1 }; stage0 = l.filter { $0.2 }.map { $0.0 } }
     if !sweep { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
       for r in stage0 { Tracker.stageRects.insert("\(r)") }
       app.lastRects = rects0; app.lastOwners = owners0; app.dispatch(live: false) } }
@@ -1084,6 +1103,18 @@ enum Bench {
       let enc = DispatchQueue(label: "film", qos: .userInitiated, attributes: .concurrent)
       DispatchQueue.main.asyncAfter(deadline: .now() + start) {
         t0 = ProcessInfo.processInfo.systemUptime
+        let k = Double(argValue("--timescale") ?? "1") ?? 1
+        if let c = choreo {                                  // scripted: windows, Stage Manager cards, widgets, the cursor
+          var prev: [CGRect] = []
+          Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { tm in
+            let t = (ProcessInfo.processInfo.systemUptime - t0) * k, (r, o, sm) = c.at(t)
+            Tracker.stageRects = Set(zip(r, sm).filter { $0.1 }.map { "\($0.0)" })
+            app.lastRects = r; app.lastOwners = o; app.dispatch(live: r != prev && r.count == prev.count); prev = r
+            c.pinCursor(t)
+            if let p = c.cursor(t), let w = app.walls.values.first(where: { $0.cgFrame.origin == .zero }) { w.cursor(p) }
+            if t > dur { tm.invalidate(); app.dispatch(live: false) }
+          }
+        } else {
         Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { tm in
           let t = ProcessInfo.processInfo.systemUptime - t0, a = 0.35, b = dur - 0.7
           let u = max(0, min(1, (t - a) / (b - a))), e = u * u * u * (u * (u * 6 - 15) + 10)       // smootherstep
@@ -1091,8 +1122,9 @@ enum Bench {
           app.dispatch(live: t > a && t < b)
           if t > dur { tm.invalidate(); app.dispatch(live: false) }
         }
+        }
         func shoot() {
-          let t = ProcessInfo.processInfo.systemUptime - t0
+          let t = (ProcessInfo.processInfo.systemUptime - t0) * k
           guard t <= dur, let w = app.walls.values.first(where: { $0.cgFrame.origin == .zero }) else { return }
           let cfg = WKSnapshotConfiguration(); cfg.snapshotWidth = NSNumber(value: width / 2)   // in points: ×2 on a retina screen
           w.web.takeSnapshot(with: cfg) { img, _ in
@@ -1151,3 +1183,37 @@ extension NSFont { func withWeight(_ w: NSFont.Weight) -> NSFont { NSFont.system
 
 /// a web view's content process id (private, guarded: -1 if it ever goes away)
 func webPid(_ w: WKWebView) -> Int { w.responds(to: NSSelectorFromString("_webProcessIdentifier")) ? (w.value(forKey: "_webProcessIdentifier") as? Int) ?? -1 : -1 }
+
+/// A scripted desktop for filming (--choreo file.json): windows with keyframes [[t, x, y, w, h], …] (eased between),
+/// optional "from"/"until" times, Stage Manager cards ("sm": true), and a cursor path [[t, x, y], …]. Points, scene seconds.
+struct Choreo {
+  struct Win { let name: String; let keys: [[Double]]; let from: Double; let until: Double; let sm: Bool }
+  let wins: [Win]; let cur: [[Double]]
+  init?(path: String) {
+    guard let d = try? Data(contentsOf: URL(fileURLWithPath: path)), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+    wins = (o["windows"] as? [[String: Any]] ?? []).map { w in Win(name: w["name"] as? String ?? "", keys: w["keys"] as? [[Double]] ?? [], from: w["from"] as? Double ?? -1e9,
+                                                                   until: w["until"] as? Double ?? 1e9, sm: w["sm"] as? Bool ?? false) }
+    cur = o["cursor"] as? [[Double]] ?? []
+  }
+  static func ease(_ keys: [[Double]], _ t: Double) -> [Double] {
+    guard let f = keys.first else { return [] }
+    if t <= f[0] { return Array(f.dropFirst()) }
+    for (a, b) in zip(keys, keys.dropFirst()) where t <= b[0] {
+      let u = (t - a[0]) / max(1e-6, b[0] - a[0]), e = u * u * u * (u * (u * 6 - 15) + 10)
+      return zip(a.dropFirst(), b.dropFirst()).map { $0 + ($1 - $0) * e } }
+    return Array(keys.last!.dropFirst())
+  }
+  func at(_ t: Double) -> ([CGRect], [String], [Bool]) {
+    var r: [CGRect] = [], o: [String] = [], sm: [Bool] = []
+    for w in wins where t >= w.from && t < w.until { let v = Choreo.ease(w.keys, t); guard v.count == 4 else { continue }
+      r.append(CGRect(x: v[0], y: v[1], width: v[2], height: v[3])); o.append(w.name); sm.append(w.sm) }
+    return (r, o, sm)
+  }
+  func cursor(_ t: Double) -> CGPoint? { let v = Choreo.ease(cur, t); return v.count == 2 ? CGPoint(x: v[0], y: v[1]) : nil }
+  /// Routes the scripted cursor through the tracker's simulated-input path, so the Mac's real mouse (still polled by the
+  /// tracker) can't send competing positions mid-take. No scripted cursor: parked far off screen.
+  func pinCursor(_ t: Double) {
+    let h = NSScreen.screens.first?.frame.height ?? 0, p = cursor(t) ?? CGPoint(x: -4000, y: -4000)
+    SimInput.point = NSPoint(x: p.x, y: h - p.y)
+  }
+}

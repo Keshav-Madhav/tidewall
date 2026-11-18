@@ -34,6 +34,8 @@ tools/check-pages.sh                        # syntax-check every page's scripts 
 tools/thumbs.sh <theme>                     # regenerate a gallery thumbnail
 tools/mem.sh <theme> [--small]              # memory footprint of a theme's page
 ./tidewall --bench … --film DIR --film-start S --film-dur S --film-move dx,dy   # promo footage: timestamped 1920 px frames while a window glides
+./tidewall --bench … --film DIR --choreo shot.json --timescale 0.4   # scripted desktop (keyframed windows, Stage Manager cards, cursor path)
+                                                                       # in slow motion: the page's clocks run 0.4×, so frames play back smooth
 ./tidewall --ui-only --demo …               # the app window plays a scripted demo (a cursor drags the preview's window)
 ```
 
