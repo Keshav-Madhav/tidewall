@@ -62,6 +62,9 @@ from source, or two wallpapers stack.
 - `Mover` (end of main.swift): opened outside an Applications folder, the app offers once to move itself there
   (resolves App Translocation, never downgrades an installed copy). Release builds only; test it in a dev build with
   `TIDEWALL_UPDATE_MOVE_TEST=1 TIDEWALL_UPDATE_MOVE_DEST=/some/dir`.
+- The app window's page fills the title-bar strip and WebKit ignores `-webkit-app-region`, so native `TitlebarDrag`
+  strips (top 28 pt, sidebar top 52 pt) move the window. `./tidewall --ui-only --themes "$PWD/themes" --hittest` prints
+  which view a click lands on across the top (the traffic lights must stay `_NSTheme…Widget`).
 - `log` is a shell function on the maintainer's Mac: read the system log with `/usr/bin/log show …`.
 - `Updater.publicKeys` = [CI key, offline backup key]. CI verifies against the first. If you ever sign with the backup,
   change that `sed` in release.yml.

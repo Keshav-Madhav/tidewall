@@ -190,6 +190,7 @@
 
   /* about */
   .about { display: flex; flex-direction: column; align-items: center; text-align: center; padding-top: 40px; }
+  .about-upd { width: 100%; max-width: 520px; margin-top: 22px; text-align: left; }
   .about img { width: 150px; height: 150px; filter: drop-shadow(0 10px 24px rgba(0,0,0,.2)); }
   .about h1 { font-size: 34px; margin-top: 10px; }
   .about .sub { max-width: 440px; margin-bottom: 14px; }
@@ -273,14 +274,9 @@
     <div class="head"><div><h1>Settings</h1><div class="sub">Tidewall is built to stay out of your way, and off your battery.</div></div></div>
     <div class="group-t">General</div>
     <div class="group">
-      <div class="rowx"><div class="tx"><b>Open at login</b><span>Start Tidewall when you log in.</span></div><div class="sw" data-k="login" role="switch" tabindex="0"></div></div>
-      <div class="rowx"><div class="tx"><b>Rest when idle</b><span>Pause after 3 minutes without input; let go of memory after 10.</span></div><div class="sw" data-k="restWhenIdle" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b>Open at login</b><span id="loginNote">Start Tidewall when you log in.</span></div><div class="sw" data-k="login" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b>Rest when idle</b><span>Pause after 3 minutes without input, and let go of memory 10 minutes after that.</span></div><div class="sw" data-k="restWhenIdle" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>Pause wallpaper</b><span>Freeze the scene where it is.</span></div><div class="sw" data-k="paused" role="switch" tabindex="0"></div></div>
-    </div>
-    <div class="group-t">Updates</div>
-    <div class="group">
-      <div class="rowx"><div class="tx"><b>Update automatically</b><span>Download new versions and install them while your screen is locked.</span></div><div class="sw" data-k="autoUpdate" role="switch" tabindex="0"></div></div>
-      <div class="rowx"><div class="tx"><b id="updT">Version 1.0</b><span id="updS">Checks GitHub for new versions.</span></div><button class="btn" id="updBtn">Check now</button></div>
     </div>
     <div class="group-t">Performance</div>
     <div class="group">
@@ -289,7 +285,7 @@
     </div>
     <div class="group-t">The wallpaper, right now</div>
     <div class="group"><div class="big3"><div><b id="uCpu">–</b><span>CPU</span></div><div><b id="uGpu">–</b><span>GPU</span></div><div><b id="uMem">–</b><span>Memory</span></div></div>
-      <div class="foot-note" id="winNote">This window and its live preview are counted apart, and freed when you close it.</div></div>
+      <div class="foot-note" id="winNote">This window and its live preview are counted apart (and freed when you close it), except GPU, which includes the preview while it's open.</div></div>
     <div style="display:flex; gap:8px"><button class="btn" id="reloadBtn">Reload wallpapers</button><button class="btn" id="quitBtn">Quit Tidewall</button></div>
   </section>
 
@@ -299,6 +295,12 @@
       <h1>Tidewall</h1>
       <div class="sub">A live wallpaper for macOS that flows around your windows. Move a window and the world grows, parts and settles around it.</div>
       <div class="tags"><span class="tag" id="ver">Version 1.0</span><span class="tag">macOS 14+</span><span class="tag">GPL-3.0</span></div>
+      <div class="about-upd">
+        <div class="group">
+          <div class="rowx"><div class="tx"><b id="updT">Software update</b><span id="updS">Checks GitHub for new versions.</span></div><button class="btn" id="updBtn">Check now</button></div>
+          <div class="rowx"><div class="tx"><b>Update automatically</b><span>Download new versions and install them while your screen is locked.</span></div><div class="sw" data-k="autoUpdate" role="switch" tabindex="0"></div></div>
+        </div>
+      </div>
       <div class="credits">Tidewall began as a fork of <a href="#" data-url="https://github.com/BLEZZ0102/Deskland">Deskland</a>. Data, models, paintings and libraries keep their own licences: Natural Earth, Open-Meteo, d3-celestial, three.js, the Smithsonian, NASA, Poly Haven, Khronos and The Met. Some textures and models were generated for Tidewall.</div>
     </div>
   </section>
@@ -316,7 +318,7 @@ const THEMES = [
   { id: 'inkmap', name: 'Ink Map', page: 'inkmap', cost: 1, f: ['low', 'play'], desc: 'A pen-and-ink archipelago. Your windows are islands, and a little boat sails to your cursor.', tags: ['A boat follows you'] },
   { id: 'celestial', name: 'Celestial Atlas', page: 'celestial', cost: 0, f: ['low', 'live', 'span'], desc: 'The real sky overhead right now, drawn as an antique star chart. Windows are black holes.', tags: ['Tonight’s real sky'] },
   { id: 'snow', name: 'Snowfall', page: 'snow', cost: 2, f: ['low', 'span'], desc: 'A painted moonlit valley. Snow drifts down and settles on the tops of your windows.', tags: ['Painted panorama'] },
-  { id: 'lava', name: 'Lava Lamp', page: 'lava', cost: 2, f: [], desc: 'Soft-body wax with real buoyancy, heat and coalescence, in nine colourways.', tags: ['Real physics'] },
+  { id: 'lava', name: 'Lava Lamp', page: 'lava', cost: 2, f: ['low'], desc: 'Soft-body wax with real buoyancy, heat and coalescence, in nine colourways.', tags: ['Real physics'] },
   { id: 'wind', name: 'Wind Map', page: 'wind', cost: 3, f: ['live', 'span'], desc: 'Live surface wind over any country, on hand-inked relief, following day and night.', tags: ['Live weather'] },
   { id: 'reef', name: 'Koi Reef', page: 'reef', cost: 3, f: ['play'], desc: 'A sunlit lagoon that grows and recedes around your windows; koi and reef fish under rippling caustics.', tags: ['Fish follow you'] },
   { id: 'tunnel', name: 'Wind Tunnel', page: 'tunnel', cost: 4, f: ['play'], desc: 'A real fluid simulation: smoke streams past museum-scanned models, and around your windows and your cursor.', tags: ['GPU fluid simulation'] },
@@ -346,16 +348,23 @@ $('#nowCard').addEventListener('click', () => { go('themes'); select(mainTheme()
 /* ======================= gallery ======================= */
 const costTag = c => `<span class="c" style="background:${COST[c][1]}"></span>${COST[c][0]}`;
 const mainDisp = () => S.displays.find(d => d.main) || S.displays[0];
+/* a display's name, with its size (or its place, left to right) when two share a name */
+function dname(d) {
+  const same = S.displays.filter(x => x.name === d.name); if (same.length < 2) return d.name;
+  const size = `${Math.round(d.w)}×${Math.round(d.h)}`, sameSize = same.filter(x => Math.round(x.w) === Math.round(d.w) && Math.round(x.h) === Math.round(d.h));
+  return sameSize.length < 2 ? `${d.name} (${size})` : `${d.name} (${sameSize.sort((a, b) => a.x - b.x).indexOf(d) + 1})`;
+}
 const mainTheme = () => (mainDisp() || {}).theme || S.current;
 const inUse = id => S.displays.length ? S.displays.some(d => d.theme === id) : S.current === id;
 const shown = () => THEMES.filter(t => filter === 'all' || t.f.includes(filter));
 function drawGrid() {
   const list = shown();
-  $('#grid').innerHTML = list.length ? list.map(t => `<div class="card${t.id === sel ? ' sel' : ''}" data-id="${t.id}" tabindex="0">
+  $('#grid').innerHTML = list.length ? list.map(t => `<div class="card${t.id === sel ? ' sel' : ''}" data-id="${t.id}" tabindex="0" role="button" aria-label="${t.name}${inUse(t.id) ? ', in use' : ''}">
       <div class="th" style="background-image:url(thumbs/${t.id}.jpg)">${inUse(t.id) ? '<span class="badge"><span class="dot"></span>In use</span>' : ''}</div>
       <div class="meta"><b>${t.name}</b><span><span class="c dot" style="width:6px;height:6px;box-shadow:none;background:${COST[t.cost][1]}"></span>${SHORT[t.cost]}</span></div></div>`).join('')
     : '<div class="empty">No themes match.</div>';
-  $$('.card').forEach(c => { c.addEventListener('click', () => select(c.dataset.id)); c.addEventListener('dblclick', apply); });
+  $$('.card').forEach(c => { c.addEventListener('click', () => select(c.dataset.id)); c.addEventListener('dblclick', apply);
+    c.addEventListener('focus', () => { if (c.dataset.id !== sel) select(c.dataset.id); }); });   // Tab lands on a card: that's the one Return applies
 }
 $$('.chip').forEach(c => c.addEventListener('click', () => { filter = c.dataset.f; $$('.chip').forEach(x => x.classList.toggle('on', x === c)); drawGrid(); }));
 function drawNow() {
@@ -372,7 +381,7 @@ function select(id, keepPreview) {
   const multi = S.displays.length > 1;
   $('#dispBox').style.display = multi ? '' : 'none';
   if (multi) { const keep = $('#dispSel').value;
-    $('#dispSel').innerHTML = `<option value="all">All displays</option>` + S.displays.map(d => `<option value="${d.id}">${esc(d.name)}${d.main ? ' (main)' : ''}</option>`).join('');
+    $('#dispSel').innerHTML = `<option value="all">All displays</option>` + S.displays.map(d => `<option value="${d.id}">${esc(dname(d))}${d.main ? ' (main)' : ''}</option>`).join('');
     if ([...$('#dispSel').options].some(o => o.value === keep)) $('#dispSel').value = keep; }
   updateStatus();
   if (!keepPreview) loadPreview();
@@ -397,7 +406,7 @@ function where() { return S.displays.length > 1 ? $('#dispSel').value : 'all'; }
 function updateStatus() {
   const on = S.displays.filter(d => d.theme === sel), w = where();
   const all = S.displays.length && on.length === S.displays.length;
-  $('#dStatus').innerHTML = on.length ? `<span class="dot"></span>${all ? (S.displays.length > 1 ? 'On all your displays' : 'This is your wallpaper') : 'On ' + on.map(d => esc(d.name)).join(', ')}` : '';
+  $('#dStatus').innerHTML = on.length ? `<span class="dot"></span>${all ? (S.displays.length > 1 ? 'On all your displays' : 'This is your wallpaper') : 'On ' + on.map(d => esc(dname(d))).join(', ')}` : '';
   const done = w === 'all' ? all : on.some(d => String(d.id) === w);
   const b = $('#applyBtn'); b.classList.toggle('done', !!done);
   b.innerHTML = done ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>In use' : 'Set as Wallpaper';
@@ -406,7 +415,7 @@ function apply() {
   if (!sel || $('#applyBtn').classList.contains('done')) return;
   const w = where();
   if (w === 'all') send({ t: 'apply', theme: sel }); else send({ t: 'applyDisplay', display: +w, theme: sel });
-  toast(`${byId[sel].name} is now your wallpaper${w === 'all' ? '' : ' on ' + (S.displays.find(d => String(d.id) === w) || {}).name}`, sel);
+  toast(`${byId[sel].name} is now your wallpaper${w === 'all' ? '' : ' on ' + dname(S.displays.find(d => String(d.id) === w) || { name: 'that display' })}`, sel);
 }
 $('#applyBtn').addEventListener('click', apply);
 $('#dispSel').addEventListener('change', updateStatus);
@@ -416,14 +425,15 @@ function toast(txt, id) { $('#toastTxt').textContent = txt; $('#toastImg').src =
 addEventListener('keydown', e => {
   if (!$('#themes').classList.contains('on') || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target !== document.body && !(e.target.classList && e.target.classList.contains('card'))) return;   // a focused button, link or menu keeps its own keys
-  const list = shown().map(t => t.id), i = list.indexOf(sel), cols = Math.max(1, Math.round($('#grid').clientWidth / 216));
+  const list = shown().map(t => t.id), i = list.indexOf(sel), cols = Math.max(1, getComputedStyle($('#grid')).gridTemplateColumns.split(' ').length);
   const d = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols, ArrowUp: -cols }[e.key];
-  if (d) { e.preventDefault(); const n = list[clamp(i + d, 0, list.length - 1)]; select(n); const c = $(`.card[data-id="${n}"]`); c && c.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+  if (d) { e.preventDefault(); const n = list[clamp(i + d, 0, list.length - 1)]; select(n); const c = $(`.card[data-id="${n}"]`);
+    if (c) { if (document.activeElement && document.activeElement.classList.contains('card')) c.focus({ preventScroll: true }); c.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } }
   else if (e.key === 'Enter') { e.preventDefault(); apply(); }
 });
 
 /* ======================= live preview ======================= */
-let DESK = null, mode = 'mine', VW = 1512, VH = 982, wins = [], pvReady = false, pvKey = null, pvTimer = 0;
+let DESK = null, mode = 'mine', VW = 1512, VH = 982, wins = [], pvReady = false, pvKey = null, pvTimer = 0, pvShowT = 0, pvGen = 0;
 const MARGIN = () => S.settings.margin || 140;
 const pv = $('#pv'), screenEl = $('#screen'), stageEl = $('#stage');
 const SAMPLE = () => [{ x: Math.round(VW * .15), y: Math.round(VH * .17), w: Math.round(VW * .43), h: Math.round(VH * .45), name: 'Safari' },
@@ -463,10 +473,10 @@ function loadPreview() {
   const key = [sel, v, VW, VH, k].join('|');
   if (pvKey === key && pv.getAttribute('src')) return;
   pvKey = key; pvReady = false; pv.classList.remove('shown'); $('#loading').style.display = '';
-  clearTimeout(pvTimer);
-  pvTimer = setTimeout(() => { pv.src = `../${t.page}.html?wallpaper=1&pdpr=${k}${v ? '&v=' + encodeURIComponent(v) : ''}${S.siteQuery || ''}`; }, 140);
+  clearTimeout(pvTimer); clearTimeout(pvShowT); const gen = ++pvGen;
+  pvTimer = setTimeout(() => { if (gen !== pvGen) return; pv.dataset.gen = gen; pv.src = `../${t.page}.html?wallpaper=1&pdpr=${k}${v ? '&v=' + encodeURIComponent(v) : ''}${S.siteQuery || ''}`; }, 140);
 }
-function unloadPreview() { clearTimeout(pvTimer); pv.src = 'about:blank'; pvKey = null; pvReady = false; }
+function unloadPreview() { clearTimeout(pvTimer); clearTimeout(pvShowT); pvGen++; pv.src = 'about:blank'; pvKey = null; pvReady = false; }
 const toFrame = s => pv.contentWindow && pv.contentWindow.postMessage({ __tw: s }, '*');
 function sendWins(live) {
   if (!pvReady) return; const k = pdpr(), m = MARGIN(), R = r => r.map(v => Math.round(v * k));
@@ -475,12 +485,13 @@ function sendWins(live) {
 }
 addEventListener('message', e => {
   if (e.source !== pv.contentWindow || !e.data || e.data.__twFrom === undefined) return;
-  if (String(e.data.__twFrom) !== 'ready') return;
+  if (String(e.data.__twFrom) !== 'ready' || +pv.dataset.gen !== pvGen) return;   // an earlier preview, still finishing
   pvReady = true; send({ t: 'log', s: 'preview ready ' + sel });
   toFrame(JSON.stringify({ t: 'desk', x: 0, y: 0, w: VW, h: VH, uw: VW, uh: VH, i: 0, n: 1, mx: VW / 2, my: VH / 2, mw: VW, mh: VH }));
   toFrame(JSON.stringify({ t: 'me', seed: S.seed }));
   sendWins(false);
-  setTimeout(() => { pv.classList.add('shown'); $('#loading').style.display = 'none'; }, 700);
+  const gen = pvGen; clearTimeout(pvShowT);
+  pvShowT = setTimeout(() => { if (gen !== pvGen) return; pv.classList.add('shown'); $('#loading').style.display = 'none'; }, 700);
 });
 let drag = null, raf = 0;
 function down(e) {
@@ -511,20 +522,23 @@ function drawDesk() {
   const bw = box.clientWidth - 60, bh = box.clientHeight - 60, k = Math.min(bw / (x1 - x0), bh / (y1 - y0)), ox = (box.clientWidth - (x1 - x0) * k) / 2, oy = (box.clientHeight - (y1 - y0) * k) / 2;
   if (selDisp == null || !ds.some(d => d.id === selDisp)) selDisp = (mainDisp() || ds[0]).id;
   box.innerHTML = ds.map(d => `<div class="disp${d.id === selDisp ? ' sel' : ''}" data-id="${d.id}" style="left:${ox + (d.x - x0) * k + 3}px;top:${oy + (d.y - y0) * k + 3}px;width:${d.w * k - 6}px;height:${d.h * k - 6}px;background-image:url(thumbs/${esc(d.theme)}.jpg)">
-    ${d.main ? '<div class="menu-notch"></div>' : ''}<div class="lbl"><b>${esc(d.name)}</b> · ${byId[d.theme] ? byId[d.theme].name : esc(d.theme)}</div></div>`).join('');
+    ${d.main ? '<div class="menu-notch"></div>' : ''}<div class="lbl" title="${esc(dname(d))} · ${byId[d.theme] ? byId[d.theme].name : esc(d.theme)}"><b>${esc(dname(d))}</b> · ${byId[d.theme] ? byId[d.theme].name : esc(d.theme)}</div></div>`).join('');
   $$('.disp').forEach(el => el.addEventListener('click', () => { selDisp = +el.dataset.id; drawDesk(); }));
   const d = ds.find(x => x.id === selDisp);
-  $('#dispPanel').innerHTML = `<div class="rowx"><div class="tx"><b>${esc(d.name)}${d.main ? ' · main' : ''}</b><span>${d.own ? 'Has its own theme' : 'Shows the main theme'} · ${Math.round(d.w)}×${Math.round(d.h)} pt</span></div>
-    <select id="dTheme" style="width:230px;margin:0"><option value="">Same as main (${byId[S.current] ? byId[S.current].name : esc(S.current)})</option>${THEMES.map(t => `<option value="${t.id}"${d.own && d.theme === t.id ? ' selected' : ''}>${t.name}</option>`).join('')}</select></div>`;
-  $('#dTheme').addEventListener('change', e => { send({ t: 'applyDisplay', display: d.id, theme: e.target.value || null }); toast(`${d.name}: ${e.target.value ? byId[e.target.value].name : 'same as main'}`, e.target.value || S.current); });
+  $('#dispPanel').innerHTML = `<div class="rowx"><div class="tx"><b>${esc(dname(d))}${d.main ? ' · main' : ''}</b><span>${d.own ? 'Has its own theme' : (d.main ? 'Shows the default theme' : 'Shows the main theme')} · ${Math.round(d.w)}×${Math.round(d.h)} pt</span></div>
+    <select id="dTheme" style="width:230px;margin:0"><option value="">${d.main ? 'Default' : 'Same as main'} (${byId[S.current] ? byId[S.current].name : esc(S.current)})</option>${THEMES.map(t => `<option value="${t.id}"${d.own && d.theme === t.id ? ' selected' : ''}>${t.name}</option>`).join('')}</select></div>`;
+  $('#dTheme').addEventListener('change', e => { send({ t: 'applyDisplay', display: d.id, theme: e.target.value || null }); toast(`${dname(d)}: ${e.target.value ? byId[e.target.value].name : (d.main ? 'the default theme' : 'same as main')}`, e.target.value || S.current); });
 }
 
 /* ======================= settings ======================= */
-function toggle(el) { const k = el.dataset.k, v = !el.classList.contains('on'); el.classList.toggle('on', v); S.settings[k] = v; send({ t: 'set', key: k, value: v }); drawLive(); }
+function toggle(el) { const k = el.dataset.k, v = !el.classList.contains('on'); el.classList.toggle('on', v); el.setAttribute('aria-checked', String(v)); S.settings[k] = v; send({ t: 'set', key: k, value: v }); drawLive(); }
 $$('.sw').forEach(el => { el.addEventListener('click', () => toggle(el)); el.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(el); } }); });
 $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { const k = seg.dataset.k, v = +b.dataset.v; S.settings[k] = v; drawSettings(); send({ t: 'set', key: k, value: v }); if (k === 'margin') sendWins(false); })));
 function drawSettings() {
-  $$('.sw').forEach(el => el.classList.toggle('on', !!S.settings[el.dataset.k]));
+  // on, but switched off for Tidewall in System Settings ▸ Login Items: show it off, say where; the switch opens that pane
+  const blocked = !!S.settings.loginBlocked; if (blocked) S.settings.login = false;
+  $('#loginNote').textContent = blocked ? 'Switched off in System Settings ▸ General ▸ Login Items. Turn this on to allow it there.' : 'Start Tidewall when you log in.';
+  $$('.sw').forEach(el => { el.classList.toggle('on', !!S.settings[el.dataset.k]); el.setAttribute('aria-checked', String(!!S.settings[el.dataset.k])); });
   $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.v === S.settings[seg.dataset.k])));
   drawLive();
 }
@@ -534,7 +548,6 @@ $('#reloadBtn').addEventListener('click', () => send({ t: 'reload' }));
 /* updates: the host sends S.update = { s: idle|checking|downloading|ready|current|failed, v, err, blocked, checked } */
 function drawUpdate() {
   const u = S.update || {}, b = $('#updBtn'), ago = u.checked ? new Date(u.checked * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
-  $('#updT').textContent = 'Version ' + S.version;
   const say = { checking: 'Checking for updates…', downloading: `Downloading Tidewall ${u.v}…`, current: `You're up to date${ago ? ' · checked ' + ago : ''}.`,
     failed: `Couldn't check: ${u.err || 'unknown error'}.`, off: u.err || 'Updates are off.',
     skipped: `Tidewall ${u.v} didn't start properly last time, so it won't install by itself. Check now to try it again.`, idle: 'Checks GitHub for new versions.',

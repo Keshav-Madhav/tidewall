@@ -11,6 +11,7 @@
 //   5. Per-screen pause when a screen is (almost) fully covered; all screens pause on sleep / lock.
 import Cocoa
 import CryptoKit
+import ServiceManagement
 import WebKit
 import IOKit
 import Darwin
@@ -384,8 +385,16 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   func update(rects: [CGRect], owners: [String], live: Bool, pause: Bool) {
     lastArgs = (rects, owners, live, pause)
     guard ready else { pending = { [weak self] in self?.update(rects: rects, owners: owners, live: live, pause: pause) }; return }
-    if pause != paused { paused = pause; send("{\"t\":\"pause\",\"v\":\(pause)}") }
-    if pause { return }
+    // a page that's paused before it ever laid out (relaunched while paused, or a theme changed while paused) lays out
+    // around your windows once, draws, and only then pauses: otherwise it would freeze a scene that ignores them
+    let firstLayout = lastWins.isEmpty
+    if pause && !firstLayout { if paused != true { paused = true; send("{\"t\":\"pause\",\"v\":true}") }; return }
+    if !pause && paused != false { paused = false; send("{\"t\":\"pause\",\"v\":false}") }
+    if pause && firstLayout {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+        guard let self, self.lastArgs?.3 == true, self.paused != true else { return }
+        self.paused = true; self.send("{\"t\":\"pause\",\"v\":true}") }
+    }
     let k = window.backingScaleFactor, m = Cfg.margin, o = cgFrame.origin
     let local = rects.map { $0.offsetBy(dx: -o.x, dy: -o.y) }
     let icons = local.map { r -> String in
@@ -513,8 +522,14 @@ final class Tracker {
   static var idle = false                      // paused by the user, asleep or locked: nothing needs tracking
 
   static var stageRects = Set<String>()        // Stage Manager thumbnails / badges seen in the last read (drawn tilted by macOS)
+  static var widgetRects = Set<String>()       // desktop widgets seen in the last read
+  private static var widgetPid: [pid_t: Bool] = [:]
+  static func isWidgetOwner(_ pid: pid_t) -> Bool {
+    if let v = widgetPid[pid] { return v }
+    let v = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.notificationcenterui"; widgetPid[pid] = v; return v
+  }
   static func read(excluding me: pid_t) -> [(CGRect, String)] {
-    stageRects.removeAll()
+    stageRects.removeAll(); widgetRects.removeAll()
     guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
     var out: [(CGRect, String)] = []
     for w in list {
@@ -525,11 +540,12 @@ final class Tracker {
       let owner = w[kCGWindowOwnerName as String] as? String ?? ""
       let alpha = w[kCGWindowAlpha as String] as? Double ?? 1
       // normal windows + Stage Manager strip (layer 0); desktop widgets live on a desktop-ish layer
-      let widget = layer < 0 && (owner == "Notification Centre" || owner == "Notification Center")
+      let widget = layer < 0 && (isWidgetOwner(pid) || owner == "Notification Centre" || owner == "Notification Center")
       guard (layer == 0 || widget), alpha > 0.05, r.width >= 40, r.height >= 40 else { continue }
       // Stage Manager thumbnails + their app proxies share a rect: keep one, named after the app
       if let i = out.firstIndex(where: { $0.0 == r }) { if out[i].1 == "WindowManager" { out[i].1 = owner }; stageRects.insert("\(r)") } else { out.append((r, owner)) }
       if owner == "WindowManager" { stageRects.insert("\(r)") }
+      if widget { widgetRects.insert("\(r)") }
     }
     return out
   }
@@ -621,6 +637,8 @@ enum LoginItem {
   static var oldPlist: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/local.driftland.plist") }
   static var plist: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(label).plist") }
   static var enabled: Bool { FileManager.default.fileExists(atPath: plist.path) }
+  /// on, but switched off for Tidewall in System Settings ▸ General ▸ Login Items
+  static var blocked: Bool { enabled && SMAppService.statusForLegacyPlist(at: plist) == .requiresApproval }
   /// the app was moved (say into /Applications) since the login item was made: point it at where the app is now
   static func refresh() {
     guard enabled, Bundle.main.bundleIdentifier != nil, let d = NSDictionary(contentsOf: plist), let a = d["ProgramArguments"] as? [String],
@@ -695,6 +713,12 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
     let wv = WKWebView(frame: vfx.bounds, configuration: cfg); wv.autoresizingMask = [.width, .height]; wv.navigationDelegate = self
     wv.setValue(false, forKey: "drawsBackground")
     vfx.addSubview(wv)
+    // the page fills the window, title-bar strip included, and WebKit ignores -webkit-app-region (an Electron-only
+    // feature): without these strips the window can't be dragged. Top 28 pt across, and the sidebar's empty top.
+    for (x, w0, h) in [(0.0, vfx.bounds.width, 28.0), (0.0, 222.0, 52.0)] {
+      let d = TitlebarDrag(frame: NSRect(x: x, y: vfx.bounds.height - h, width: w0, height: h))
+      d.autoresizingMask = w0 == 222 ? [.minYMargin] : [.width, .minYMargin]; vfx.addSubview(d)
+    }
     wv.load(URLRequest(url: URL(string: "tidewall://app/ui/index.html")!))
     window = w; web = wv
     _ = app?.usage.sample()
@@ -712,6 +736,7 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       if args.contains("--ui-only") && !args.contains("--closetest") { NSApp.terminate(nil) }
     }
   }
+  func pushDesktop() { guard web != nil else { return }; js("{\"t\":\"desktop\",\"d\":\(desktopJSON())}") }
   func toast(_ s: String) { if let d = try? JSONSerialization.data(withJSONObject: ["t": "toast", "s": s]), let j = String(data: d, encoding: .utf8) { js(j) } }
   func js(_ json: String) { web?.evaluateJavaScript("window.tw&&tw.receive(\(json));null", completionHandler: nil) }
   /// what the wallpaper costs, and (apart) what this window costs while it's open
@@ -729,7 +754,7 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       let owner = i < app.lastOwners.count ? app.lastOwners[i] : ""
       if ["Tidewall", "tidewall", "WindowManager", "Dock"].contains(owner) { continue }   // this window; Stage Manager's app-icon badges
       wins.append(["x": r.minX - f.minX, "y": r.minY - f.minY, "w": r.width, "h": r.height, "name": owner,
-                   "sm": Tracker.stageRects.contains("\(r)"), "widget": owner == "Notification Centre" || owner == "WidgetKit Simulator"])
+                   "sm": Tracker.stageRects.contains("\(r)"), "widget": Tracker.widgetRects.contains("\(r)") || owner == "Notification Centre" || owner == "Notification Center" || owner == "WidgetKit Simulator"])
     }
     let d: [String: Any] = ["w": f.width, "h": f.height, "windows": wins]
     return (try? JSONSerialization.data(withJSONObject: d)).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
@@ -741,7 +766,7 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
               "own": Cfg.d.string(forKey: "theme.display.\(id)") != nil, "main": s == NSScreen.screens.first] }
     var vars: [String: String] = [:]; for (t, _) in Cfg.themes { if let v = Cfg.variant(t) { vars[t] = v } }
     let st: [String: Any] = ["t": "state", "current": Cfg.theme, "displays": ds, "variants": vars, "seed": Cfg.seed, "version": Cfg.version, "siteQuery": Cfg.siteQuery,
-      "settings": ["login": LoginItem.enabled, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin, "autoUpdate": Cfg.autoUpdate],
+      "settings": ["login": LoginItem.enabled, "loginBlocked": LoginItem.blocked, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin, "autoUpdate": Cfg.autoUpdate],
       "update": app.updater.status]
     if let d = try? JSONSerialization.data(withJSONObject: st), let s = String(data: d, encoding: .utf8) { js(s) }
   }
@@ -759,12 +784,16 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       let th = o["theme"] as? String
       if let did = o["display"] as? Int, let id = CGDirectDisplayID(exactly: did), NSScreen.screens.contains(where: { $0.displayID == id }),
          th == nil || Cfg.themes.contains(where: { $0.0 == th }) { Cfg.setTheme(th, for: id); app.reloadWall(id) }
+      else { toast("That display isn't connected any more.") }
     case "variant": if let th = o["theme"] as? String, let v = o["id"] as? String {
         Cfg.setVariant(th, v); for s in NSScreen.screens where Cfg.theme(for: s.displayID) == th { app.reloadWall(s.displayID) } }
     case "set":
       let v = o["value"]
       switch o["key"] as? String ?? "" {
-      case "login": if let why = LoginItem.set(v as? Bool ?? false) { toast(why) }
+      case "login":
+        if args.contains("--ui-only") { toast("Development window: the login item isn't changed."); break }
+        if LoginItem.blocked && (v as? Bool ?? false) { SMAppService.openSystemSettingsLoginItems(); break }
+        if let why = LoginItem.set(v as? Bool ?? false) { toast(why) }
       case "restWhenIdle": Cfg.restWhenIdle = v as? Bool ?? true
       case "autoUpdate": Cfg.autoUpdate = v as? Bool ?? true; if Cfg.autoUpdate { app.updater.check(manual: false) }
       case "paused": app.userPaused = v as? Bool ?? false; app.dispatch(live: false)
@@ -835,7 +864,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let mono = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
     let ui = pid_t(appWindow.web.map(webPid) ?? -1), wc = s.cpuBy[ui] ?? 0, wm = s.memBy[ui] ?? 0
     let lines = first ? ["CPU     measuring…", "GPU     measuring…", "Memory  measuring…", ""]
-      : [String(format: "CPU     %.1f%%", max(0, s.cpu - wc)), String(format: "GPU     %.1f%%", s.gpu), String(format: "Memory  %.0f MB", max(0, s.memMB - wm)),
+      : [String(format: "CPU     %.1f%%", max(0, s.cpu - wc)), String(format: "GPU     %.1f%%", s.gpu) + (wm > 0 ? "  incl. window" : ""), String(format: "Memory  %.0f MB", max(0, s.memMB - wm)),
          wm > 0 ? String(format: "+ window %.0f MB, freed on close", wm) : ""]
     for (i, l) in lines.enumerated() { guard let it = menu.item(withTag: 900 + i) else { continue }
       it.isHidden = l.isEmpty; it.attributedTitle = NSAttributedString(string: l, attributes: [.font: mono]) }
@@ -843,7 +872,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var walls: [CGDirectDisplayID: Wallpaper] = [:]
   let tracker = Tracker()
   var status: NSStatusItem!
-  var userPaused = false, locked = false, displaysAsleep = false, awayTimer: Timer?, releasedAway = false, idleRest = false, idleTimer: Timer?, testPauseArmed = false
+  var userPaused = benchMode ? args.contains("--paused") : Cfg.d.bool(forKey: "paused") { didSet { if !benchMode { Cfg.d.set(userPaused, forKey: "paused") } } }
+  var locked = false, displaysAsleep = false, awayTimer: Timer?, releasedAway = false, idleRest = false, idleTimer: Timer?, testPauseArmed = false
   var asleep: Bool { locked || displaysAsleep }
   var lastRects: [CGRect] = []
   var lastOwners: [String] = []
@@ -863,6 +893,20 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       if let m = argValue("--mode") { DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.appWindow.js("{\"t\":\"mode\",\"m\":\"\(m == "sample" ? "sample" : "mine")\"}") } }   // dev
       if let t = argValue("--select") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.appWindow.js("{\"t\":\"select\",\"id\":\"\(t)\"}") } }   // dev
       if let p = argValue("--page") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.appWindow.show(page: p) } }
+      if args.contains("--hittest") { DispatchQueue.main.asyncAfter(deadline: .now() + 2) {   // dev: which view gets a click where
+        guard let w = self.appWindow.window, let frame = w.contentView?.superview else { return }
+        let h = w.frame.height
+        for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+          if let btn = w.standardWindowButton(b), let sv = btn.superview {
+            let c = frame.convert(sv.convert(NSPoint(x: btn.frame.midX, y: btn.frame.midY), to: nil), from: nil)
+            log("hit \(b == .closeButton ? "close" : b == .miniaturizeButton ? "minimise" : "zoom") button: \(frame.hitTest(c).map { String(describing: type(of: $0)) } ?? "nothing")") }
+        }
+        for (name, x, y) in [("left of the buttons", 4.0, h - 14), ("top strip, middle", 600.0, h - 14), ("top strip, right", w.frame.width - 60, h - 10),
+                             ("sidebar top", 110.0, h - 40), ("main below strip", 600.0, h - 40), ("sidebar nav", 110.0, h - 120)] {
+          let v = frame.hitTest(frame.convert(NSPoint(x: x, y: y), from: nil))
+          log("hit \(name): \(v.map { String(describing: type(of: $0)) } ?? "nothing")\(v?.mouseDownCanMoveWindow == true ? " (moves window)" : "")")
+        }
+        NSApp.terminate(nil) } }
       return }
     SimInput.start()
     buildWalls()
@@ -888,11 +932,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if rest != self.idleRest { self.idleRest = rest; log(rest ? "idle: resting" : "input: awake"); self.dispatch(live: false) }
       }
     }
+    if let t = argValue("--reload-at").flatMap(Double.init) { DispatchQueue.main.asyncAfter(deadline: .now() + t) { log("bench: reloadAll"); self.reloadAll() } }   // dev
     if let t = argValue("--testpause"), let a = Double(t), !testPauseArmed {   /* bench: pause at a, resume at a + 8 */
       testPauseArmed = true
       DispatchQueue.main.asyncAfter(deadline: .now() + a) { self.userPaused = true; self.dispatch(live: false) }
       DispatchQueue.main.asyncAfter(deadline: .now() + a + 8) { self.userPaused = false; self.dispatch(live: false) } }
-    NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.buildWalls() }
+    NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+      self?.buildWalls(); self?.appWindow.pushState(); self?.appWindow.pushDesktop() }
     let wnc = NSWorkspace.shared.notificationCenter
     wnc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.displaysAsleep = true; self?.dispatch(live: false); self?.updater.away() }
     wnc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.displaysAsleep = false; self?.dispatch(live: false) }
@@ -950,8 +996,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     log("away: released every page (still pictures on show)")
   }
   func buildWalls() {
-    if releasedAway { return }                                     // away: the pages come back when you do
+    if args.contains("--ui-only") { return }                       // dev: the window alone, no wallpapers
     let ids = Set(NSScreen.screens.map { $0.displayID })
+    for (id, st) in stills where !ids.contains(id) { st.close(); stills[id] = nil }   // a display unplugged while away
+    if releasedAway { return }                                     // away: the pages come back when you do
     for (id, w) in walls where !ids.contains(id) { w.close(); walls[id] = nil }
     for s in NSScreen.screens where (!benchMode || s == NSScreen.screens.first) && !dormant.contains(s.displayID) {
       if let w = walls[s.displayID] { w.cgFrame = s.cgFrame; w.window.setFrame(s.frame, display: true); w.sendDesk() }
@@ -962,8 +1010,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     tracker.forceResend()
   }
 
-  func reloadAll() { walls.values.forEach { $0.close() }; walls = [:]; buildWalls() }
-  func reloadWall(_ id: CGDirectDisplayID) { walls[id]?.close(); walls[id] = nil; buildWalls() }
+  func reloadAll() { walls.values.forEach { $0.close() }; walls = [:]; comeBackIfAway(); buildWalls() }
+  func reloadWall(_ id: CGDirectDisplayID) { walls[id]?.close(); walls[id] = nil; comeBackIfAway(); buildWalls() }
+  /// while the pages are let go (paused or away) a new theme or setting must still show: bring the pages back (the
+  /// stills stay up until each new page has drawn), and let the away timer let them go again later
+  private func comeBackIfAway() {
+    guard releasedAway else { return }
+    releasedAway = false; awayTimer?.invalidate(); awayTimer = nil
+    DispatchQueue.main.async { [weak self] in self?.dispatch(live: false) }
+  }
 
   var coveredSince: [CGDirectDisplayID: Double] = [:], dormant: Set<CGDirectDisplayID> = []
   func dispatch(live: Bool) {
@@ -1045,13 +1100,17 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       it.submenu = s; m.addItem(it)
     }
     // the main theme: every display (choosing it clears any per-display themes)
-    sub("Theme", Cfg.themes.map { (id, label) in (label, Cfg.theme == id, { Cfg.clearDisplayThemes(); Cfg.theme = id; self.reloadAll(); self.buildMenu(); self.appWindow.pushState() }) })
+    let showing = Set(NSScreen.screens.map { Cfg.theme(for: $0.displayID) })
+    sub("Theme", Cfg.themes.map { (id, label) in (label, showing.contains(id), { Cfg.clearDisplayThemes(); Cfg.theme = id; self.reloadAll(); self.buildMenu(); self.appWindow.pushState() }) })
     m.addItem(.separator())
     let ri = ClosureItem("Rest when idle") { Cfg.restWhenIdle.toggle(); self.buildMenu(); self.appWindow.pushState() }; ri.state = Cfg.restWhenIdle ? .on : .off
     let p = ClosureItem("Pause") { self.userPaused.toggle(); self.dispatch(live: false); self.buildMenu(); self.appWindow.pushState() }
     p.state = userPaused ? .on : .off; m.addItem(p); m.addItem(ri)
-    let li = ClosureItem("Open at login") { if let why = LoginItem.set(!LoginItem.enabled) { let a = NSAlert(); a.messageText = why; a.runModal() }; self.buildMenu(); self.appWindow.pushState() }
-    li.state = LoginItem.enabled ? .on : .off; m.addItem(li)
+    let li = ClosureItem(LoginItem.blocked ? "Open at login (allow in System Settings…)" : "Open at login") {
+      if LoginItem.blocked { SMAppService.openSystemSettingsLoginItems(); return }
+      if let why = LoginItem.set(!LoginItem.enabled) { NSApp.activate(ignoringOtherApps: true); let a = NSAlert(); a.messageText = why; a.runModal() }
+      self.buildMenu(); self.appWindow.pushState() }
+    li.state = LoginItem.enabled && !LoginItem.blocked ? .on : .off; m.addItem(li)
     m.addItem(.separator())
     m.addItem(ClosureItem("Check for Updates…") { [weak self] in self?.updater.check(manual: true) })
     m.addItem(ClosureItem("Quit Tidewall") { NSApp.terminate(nil) })
@@ -1626,5 +1685,22 @@ enum Mover {
     unquarantine(dest)          // you've opened it once already (Gatekeeper is done with it): no second translocation
     try? fm.trashItem(at: src, resultingItemURL: nil)                 // the copy in Downloads
     log("[move] moved to \(dest.path)"); return relaunch(dest)
+  }
+}
+
+/// A see-through strip over the page's title-bar area that behaves like a title bar: drag moves the window,
+/// double-click does what System Settings ▸ Desktop & Dock says (zoom, minimise or nothing).
+final class TitlebarDrag: NSView {
+  override var mouseDownCanMoveWindow: Bool { true }
+  override func mouseDown(with e: NSEvent) {
+    guard let w = window else { return }
+    if e.clickCount == 2 {
+      switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize" {
+      case "Minimize": w.performMiniaturize(nil)
+      case "None": break
+      default: w.performZoom(nil) }
+      return
+    }
+    w.performDrag(with: e)
   }
 }

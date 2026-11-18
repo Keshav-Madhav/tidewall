@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.3]
+
+- **The Tidewall window can be moved again**: drag it by its top edge or the empty top of the sidebar (double-click
+  there to zoom, as in any Mac app).
+- **Updates live in About** now, next to the version: Check now, Restart to Update, and the Update automatically switch.
+- **Pause is remembered** across restarts (including an update installed while the screen is locked), and a wallpaper
+  that starts paused still lays itself out around your windows before it freezes.
+- **Changing the theme while paused** now shows the new theme straight away (it used to wait until you resumed).
+- In the gallery, **Return applies the card you've tabbed to**, and the arrow keys move exactly one row at any width.
+- **Plugging a display in or out** updates the open Tidewall window at once.
+- The menu bar ticks **every theme that's on a display**; a main display with its own theme reads "Default (…)".
+- **Desktop widgets are recognised on every Mac** (by Notification Center's bundle id, not its localised name), so
+  they're no longer drawn as ordinary windows in the preview.
+- **Open at login** shows when macOS has switched Tidewall off in System Settings ▸ Login Items, and takes you there.
+- Two identical monitors are told apart; long display names have a tooltip; the preview can't show a stale frame while
+  you browse quickly; switches and theme cards work with VoiceOver; Lava Lamp counts as battery friendly; clearer
+  wording for Rest when idle and for the GPU meter while the window is open.
+
 ## [1.0.2]
 
 - **Tidewall now updates itself.** It checks GitHub for new versions (at launch and every 6 hours), downloads them in
