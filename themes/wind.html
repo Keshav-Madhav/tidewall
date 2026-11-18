@@ -50,7 +50,8 @@ function project() {
   const lonSpan = Math.min(359, UW / UH * latSpan / Math.cos(clamp(latC, -70, 70) * D2R));
   // the country is centred on the main desk (the middle screen of three), not on the gap between screens
   const midX = DESK.n > 1 ? (DESK.mx ?? UW / 2) : UW / 2, lon0 = lonC - midX / UW * lonSpan;
-  const midY = DESK.n > 1 ? (DESK.my ?? UH / 2) : UH / 2, lat1 = latC + midY / UH * latSpan;
+  const midY = DESK.n > 1 ? (DESK.my ?? UH / 2) : UH / 2;
+  const lat1 = clamp(latC + midY / UH * latSpan, -84 + latSpan, 84);   // several displays: the desk's map stays inside the poles
   PJU = { lon0, lon1: lon0 + lonSpan, lat0: lat1 - latSpan, lat1 };
   PJ = { lon0: PJU.lon0 + DESK.x / UW * lonSpan, lon1: PJU.lon0 + (DESK.x + W) / UW * lonSpan,
          lat1: PJU.lat1 - DESK.y / UH * latSpan, lat0: PJU.lat1 - (DESK.y + H) / UH * latSpan };
@@ -70,7 +71,7 @@ let DATA = null, dataNote = 'waiting for live wind…', fetching = false, nextFe
 function gridSpec(gs) {
   const GS = gs || GS_cur();
   const lo0 = Math.floor((PJU.lon0 - 1) / GS) * GS, lo1 = Math.ceil((PJU.lon1 + 1) / GS) * GS;
-  const la0 = Math.floor((PJU.lat0 - 1) / GS) * GS, la1 = Math.ceil((PJU.lat1 + 1) / GS) * GS;
+  const la0 = Math.max(-90, Math.floor((PJU.lat0 - 1) / GS) * GS), la1 = Math.min(90, Math.ceil((PJU.lat1 + 1) / GS) * GS);
   return { lo0, la0, gs: GS, nx: Math.round((lo1 - lo0) / GS) + 1, ny: Math.round((la1 - la0) / GS) + 1 };
 }
 const gridKey = g => `${g.lo0},${g.la0},${g.gs},${g.nx},${g.ny}`;
@@ -111,14 +112,15 @@ const untilTomorrow = () => { const d = new Date(); d.setUTCHours(24, 5, 0, 0); 
 async function maybeFetch() {
   const now = Date.now();
   if (fetching || now < nextFetchAt) return;
-  if (DESK.i > 0) { const c = loadCache(); if (c && (!DATA || c.fetched > DATA.fetched)) { DATA = c; buildTarget(); drawCaption(); }   // another screen fetched it
-    if (now < bootAt + DESK.i * 45e3) return; }                     // let the first screen fetch for everyone
+  { const c = loadCache(); if (c && (!DATA || c.fetched > DATA.fetched)) { DATA = c; buildTarget(); drawCaption(); } }   // another screen (or an earlier run) fetched it
+  if (DESK.i > 0 && now < bootAt + DESK.i * 45e3) return;           // let the first screen fetch for everyone
   const end = DATA ? DATA.times[DATA.times.length - 1] * 1000 : 0;
   const stale = !DATA || now - DATA.fetched > 6 * 3600e3 || now > end - 2 * 3600e3;   // every 6 h: ~2,200 of the free API's 10,000 daily locations
   if (!stale) return;
   fetching = true;
   try { DATA = await fetchWind(); saveCache(DATA); nextFetchAt = now + 20 * 60e3; buildTarget(); drawCaption(); }
-  catch (e) { nextFetchAt = /daily/i.test(e.message) ? untilTomorrow() : now + (DATA ? 10 * 60e3 : 65e3 + Math.random() * 20e3);   // no wind yet (e.g. the API's per-minute limit): try again in about a minute
+  catch (e) { const permanent = /HTTP 4(?!29)\d\d/.test(e.message);   // a request the API rejects outright: asking again won't help
+    nextFetchAt = /daily/i.test(e.message) ? untilTomorrow() : permanent ? now + 6 * 3600e3 : now + (DATA ? 10 * 60e3 : 65e3 + Math.random() * 20e3);   // no wind yet (e.g. the API's per-minute limit): try again in about a minute
     post('JSERR wind fetch ' + e.message); dataNote = DATA ? 'offline · showing the last forecast' : 'offline · waiting for live wind'; drawCaption(); }
   fetching = false;
 }

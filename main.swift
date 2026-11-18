@@ -80,6 +80,15 @@ enum Cfg {
   static var seed: Int { if let v = d.object(forKey: "seed") as? Int { return v }; let v = Int.random(in: 1..<Int(Int32.max)); d.set(v, forKey: "seed"); return v }
   /// pause the animation when nobody has touched the mouse or keyboard for a while; any input brings it straight back
   /// check for, download and install updates on its own (installs while the screen is locked); off = only "Check for Updates…"
+  /// the newest version whose What's New you've seen (nil: none yet; a fresh install starts at its own version)
+  static var notesSeen: String? { get { d.string(forKey: "notesSeen") } set { d.set(newValue, forKey: "notesSeen") } }
+  static var hasNewNotes: Bool { notesSeen.map { Updater.newer(version, than: $0) } ?? true }
+  /// the release notes: CHANGELOG.md, bundled beside the themes (or the repo's, in a development build)
+  static var changelog: String {
+    let cands = [Bundle.main.resourceURL?.appendingPathComponent("CHANGELOG.md"), themesRoot.deletingLastPathComponent().appendingPathComponent("CHANGELOG.md")]
+    for c in cands.compactMap({ $0 }) { if let t = try? String(contentsOf: c, encoding: .utf8) { return t } }
+    return ""
+  }
   static var autoUpdate: Bool { get { d.object(forKey: "autoUpdate") as? Bool ?? true } set { d.set(newValue, forKey: "autoUpdate") } }
   static var restWhenIdle: Bool { get { d.object(forKey: "restWhenIdle") as? Bool ?? true } set { d.set(newValue, forKey: "restWhenIdle") } }
   static var mask: Bool { get { d.object(forKey: "mask") as? Bool ?? false }   /* every theme opts out of the mask now */ set { d.set(newValue, forKey: "mask") } }
@@ -130,6 +139,30 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
 func earlyScript(fps: Double, opaque: Bool) -> String { """
 (() => {
   const post = m => webkit.messageHandlers.host.postMessage(m);
+  // A WebGL page whose GPU context is lost (displays sleeping and waking, external monitors reconnecting, a GPU
+  // switch) is left showing only its CSS background, for good. Watch every WebGL canvas on the page: when one is
+  // lost, tell the host and reload, unless the context comes back by itself first (then reload at once: its
+  // textures and buffers are gone either way). Only canvases in the document count; contexts are held weakly.
+  (() => {
+    const gc = HTMLCanvasElement.prototype.getContext, all = [];
+    let t = 0;
+    const lost = () => {
+      try { webkit.messageHandlers.host.postMessage('JSERR webgl context lost; reloading the page'); } catch (_) {}
+      clearTimeout(t); t = setTimeout(() => location.reload(), 2500);
+    };
+    HTMLCanvasElement.prototype.getContext = function (type, ...a) {
+      const ctx = gc.call(this, type, ...a);
+      if (ctx && String(type).indexOf('webgl') === 0 && !this.__twWatched) {
+        this.__twWatched = true; all.push(new WeakRef(this));
+        this.addEventListener('webglcontextlost', e => { if (!this.isConnected) return; e.preventDefault(); lost(); });
+        this.addEventListener('webglcontextrestored', () => { if (!this.isConnected) return; clearTimeout(t); location.reload(); });
+      }
+      return ctx;
+    };
+    // the host asks after the displays wake: is any visible WebGL canvas without its context?
+    window.__twGLLost = () => all.some(r => { const c = r.deref(); if (!c || !c.isConnected) return false;
+      const g = gc.call(c, 'webgl2') || gc.call(c, 'webgl'); return !!(g && g.isContextLost()); });
+  })();
   // WebView2 surface the pages expect
   const ls = [];
   window.chrome = window.chrome || {};
@@ -361,7 +394,8 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in guard let self else { return }
         NSAnimationContext.runAnimationGroup { c in c.duration = 0.35; self.window.animator().alphaValue = 1 } completionHandler: { self.onShown?(); self.onShown = nil } }
     }
-    if s == "ready" { ready = true; sendDesk(); send("{\"t\":\"me\",\"seed\":\(Cfg.seed)}")
+    if s == "ready" { ready = true; lastWins = ""; lastIcons = ""; lastMask = ""; paused = nil   // a reloaded page has none of it
+      sendDesk(); send("{\"t\":\"me\",\"seed\":\(Cfg.seed)}")
       if let p = pending { pending = nil; p() } else if let a = lastArgs { update(rects: a.0, owners: a.1, live: false, pause: a.3) }
       return }
     if s.hasPrefix("JSERR") || s == "patched" || (s.hasPrefix("STAT") && ProcessInfo.processInfo.environment["TIDEWALL_STAT"] != nil) { log("[\(screenID)] \(s)") }
@@ -380,6 +414,16 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     web.evaluateJavaScript("window.__live=\(live);window.__hostSend(\(lit)[0]);window.__live=false;null", completionHandler: nil)
   }
 
+  /// A paused page whose screen changed size has had its canvas cleared by the resize and won't draw until it's
+  /// resumed (a black or half-blank screen, which the away still could then capture): let it run for a moment to
+  /// redraw at the new size, then pause it again.
+  func redrawIfPaused() {
+    guard paused == true else { return }
+    paused = false; send("{\"t\":\"pause\",\"v\":false}")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+      guard let self, self.lastArgs?.3 == true, self.paused == false else { return }
+      self.paused = true; self.send("{\"t\":\"pause\",\"v\":true}") }
+  }
   /// rects: windows on this screen in CG global points
   private var lastArgs: ([CGRect], [String], Bool, Bool)?
   func update(rects: [CGRect], owners: [String], live: Bool, pause: Bool) {
@@ -403,7 +447,10 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     }.joined(separator: ",")
     // raw window rects + app names (themes that draw *around* the real window edge, e.g. Estate)
     let raw = local.map { "[\(Int($0.minX * k)),\(Int($0.minY * k)),\(Int($0.maxX * k)),\(Int($0.maxY * k))]" }.joined(separator: ",")
-    let names = String(data: try! JSONSerialization.data(withJSONObject: owners), encoding: .utf8)!
+    // desktop widgets reach the themes under one name, whatever this Mac's language calls Notification Center
+    // (themes look for "Notification Centre"; on US-English and other Macs the owner is spelt differently)
+    let named = owners.enumerated().map { i, o in i < rects.count && Tracker.widgetRects.contains("\(rects[i])") ? "Notification Centre" : o }
+    let names = String(data: try! JSONSerialization.data(withJSONObject: named), encoding: .utf8)!
     let sm = rects.map { Tracker.stageRects.contains("\($0)") ? "1" : "0" }.joined(separator: ",")
     let wins = "{\"t\":\"windows\",\"live\":\(live),\"r\":[\(raw)],\"n\":\(names),\"sm\":[\(sm)]}"
     if wins != lastWins { lastWins = wins; send(wins, live: live) }
@@ -691,11 +738,13 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
   var window: NSWindow?, web: WKWebView?, usageTimer: Timer?
   init(app: App) { self.app = app }
 
+  private var pendingPage: String?
   func show(page: String? = nil) {
     NSApp.setActivationPolicy(.regular)
-    if window == nil { build() }
+    let fresh = window == nil
+    if fresh { build() }
     window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-    if let page { js("{\"t\":\"show\",\"page\":\"\(page)\"}") }
+    if let page { if fresh { pendingPage = page } else { js("{\"t\":\"show\",\"page\":\"\(page)\"}") } }   // a new window: once it says hello
   }
   private func build() {
     let cfg = WKWebViewConfiguration()           // its own web process: the preview can never stall the wallpapers, and it ends with the window
@@ -767,7 +816,7 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
     var vars: [String: String] = [:]; for (t, _) in Cfg.themes { if let v = Cfg.variant(t) { vars[t] = v } }
     let st: [String: Any] = ["t": "state", "current": Cfg.theme, "displays": ds, "variants": vars, "seed": Cfg.seed, "version": Cfg.version, "siteQuery": Cfg.siteQuery,
       "settings": ["login": LoginItem.enabled, "loginBlocked": LoginItem.blocked, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin, "autoUpdate": Cfg.autoUpdate],
-      "update": app.updater.status]
+      "update": app.updater.status, "newNotes": Cfg.hasNewNotes, "notesSeen": Cfg.notesSeen ?? ""]
     if let d = try? JSONSerialization.data(withJSONObject: st), let s = String(data: d, encoding: .utf8) { js(s) }
   }
   func userContentController(_ u: WKUserContentController, didReceive m: WKScriptMessage) {
@@ -775,7 +824,12 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
     guard m.frameInfo.isMainFrame, let app, let str = m.body as? String, let d = str.data(using: .utf8),
           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let t = o["t"] as? String else { return }
     switch t {
-    case "hello": pushState(); pushUsage(); js("{\"t\":\"desktop\",\"d\":\(desktopJSON())}"); return
+    case "hello":
+      pushState(); pushUsage(); js("{\"t\":\"desktop\",\"d\":\(desktopJSON())}")
+      if let d = try? JSONSerialization.data(withJSONObject: ["t": "notes", "md": Cfg.changelog]), let j = String(data: d, encoding: .utf8) { js(j) }
+      if let p = pendingPage { pendingPage = nil; js("{\"t\":\"show\",\"page\":\"\(p)\"}") }
+      return
+    case "notesSeen": Cfg.notesSeen = Cfg.version; app.buildMenu()
     case "desktop": js("{\"t\":\"desktop\",\"d\":\(desktopJSON())}"); return
     case "open": if let s = o["url"] as? String, let url = URL(string: s), ["https", "http"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }; return
     case "log": log("[ui] \(o["s"] as? String ?? "")"); return
@@ -932,19 +986,34 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if rest != self.idleRest { self.idleRest = rest; log(rest ? "idle: resting" : "input: awake"); self.dispatch(live: false) }
       }
     }
+    if let t = argValue("--lose-gl-at").flatMap(Double.init) { DispatchQueue.main.asyncAfter(deadline: .now() + t) {   // dev: force a WebGL context loss
+      log("bench: losing every WebGL context")
+      for w in self.walls.values { w.web.evaluateJavaScript("document.querySelectorAll('canvas').forEach(c => { const g = c.getContext('webgl2') || c.getContext('webgl'); const x = g && g.getExtension('WEBGL_lose_context'); x && x.loseContext(); }); null", completionHandler: nil) } } }
+    for flag in ["--resize-at", "--resize-raw-at"] { if let t = argValue(flag).flatMap(Double.init) {   // dev: the screen changes size (while paused, say)
+      DispatchQueue.main.asyncAfter(deadline: .now() + t) {
+        for w in self.walls.values { var f = w.window.frame; f.size.width -= 200; w.window.setFrame(f, display: true) }
+        log("bench: resized (\(flag))")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+          if flag == "--resize-at" { self.buildWalls() }        // the real path: the screen's own size comes back
+          else { for (id, w) in self.walls { if let s = NSScreen.screens.first(where: { $0.displayID == id }) { w.window.setFrame(s.frame, display: true) } } }
+        } } } }
+    if let t = argValue("--cycle").flatMap(Double.init) {   // dev: switch through every theme, t seconds each (memory soak)
+      var i = 0
+      Timer.scheduledTimer(withTimeInterval: t, repeats: true) { _ in
+        i += 1; let id = Cfg.themes[i % Cfg.themes.count].0; Cfg.themeOverride = id; log("bench: theme \(i) \(id)"); self.reloadAll() } }
     if let t = argValue("--reload-at").flatMap(Double.init) { DispatchQueue.main.asyncAfter(deadline: .now() + t) { log("bench: reloadAll"); self.reloadAll() } }   // dev
     if let t = argValue("--testpause"), let a = Double(t), !testPauseArmed {   /* bench: pause at a, resume at a + 8 */
       testPauseArmed = true
       DispatchQueue.main.asyncAfter(deadline: .now() + a) { self.userPaused = true; self.dispatch(live: false) }
       DispatchQueue.main.asyncAfter(deadline: .now() + a + 8) { self.userPaused = false; self.dispatch(live: false) } }
     NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-      self?.buildWalls(); self?.appWindow.pushState(); self?.appWindow.pushDesktop() }
+      self?.buildWalls(); self?.appWindow.pushState(); self?.appWindow.pushDesktop(); self?.checkGPUContexts() }
     let wnc = NSWorkspace.shared.notificationCenter
     wnc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.displaysAsleep = true; self?.dispatch(live: false); self?.updater.away() }
-    wnc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.displaysAsleep = false; self?.dispatch(live: false) }
+    wnc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.displaysAsleep = false; self?.dispatch(live: false); self?.checkGPUContexts() }
     let dnc = DistributedNotificationCenter.default()
     dnc.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in self?.locked = true; self?.dispatch(live: false); self?.updater.away() }
-    dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in self?.locked = false; self?.dispatch(live: false) }
+    dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in self?.locked = false; self?.dispatch(live: false); self?.checkGPUContexts() }
     if !benchMode {
       LoginItem.refresh()
       // relaunched by an update while the screen is locked: start out knowing it (the lock notification came before us)
@@ -952,6 +1021,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       updater.onChange = { [weak self] in self?.buildMenu(); self?.appWindow.pushState() }
       updater.isAway = { [weak self] in self?.asleep ?? false }
       updater.start()
+      if Cfg.notesSeen == nil && !updater.justUpdated { Cfg.notesSeen = Cfg.version }   // a fresh install: nothing to announce
       DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.updater.cameUp() }
       if let from = argValue("--updated-from") { log("[update] updated from \(from) to \(Cfg.version)") }
       DistributedNotificationCenter.default().addObserver(forName: .init("app.tidewall.show"), object: nil, queue: .main) { [weak self] _ in self?.appWindow.show() }
@@ -1002,7 +1072,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if releasedAway { return }                                     // away: the pages come back when you do
     for (id, w) in walls where !ids.contains(id) { w.close(); walls[id] = nil }
     for s in NSScreen.screens where (!benchMode || s == NSScreen.screens.first) && !dormant.contains(s.displayID) {
-      if let w = walls[s.displayID] { w.cgFrame = s.cgFrame; w.window.setFrame(s.frame, display: true); w.sendDesk() }
+      if let w = walls[s.displayID] {
+        let resized = w.window.frame.size != s.frame.size
+        w.cgFrame = s.cgFrame; w.window.setFrame(s.frame, display: true); w.sendDesk()
+        if resized { w.redrawIfPaused() } }
       else { let id = s.displayID, still = stills[id]; let w = Wallpaper(screen: s, hidden: still != nil); walls[id] = w
         if let still { w.onShown = { [weak self] in still.close(); if self?.stills[id] === still { self?.stills[id] = nil } }
           DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in if self?.stills[id] === still { w.window.alphaValue = 1; still.close(); self?.stills[id] = nil } } } }   // never leave a stale still up
@@ -1010,6 +1083,17 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     tracker.forceResend()
   }
 
+  /// a few seconds after the displays wake (external monitors take a moment to come back): any wallpaper left
+  /// without its WebGL context is reloaded (the page usually notices by itself; this is the safety net)
+  func checkGPUContexts(after delay: Double = 4) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+      guard let self, !self.releasedAway else { return }
+      for (id, w) in self.walls {
+        w.web.evaluateJavaScript("!!(window.__twGLLost && window.__twGLLost())") { [weak self] r, _ in
+          if (r as? Bool) == true { log("[\(id)] lost its GPU context: reloading"); self?.reloadWall(id) } }
+      }
+    }
+  }
   func reloadAll() { walls.values.forEach { $0.close() }; walls = [:]; comeBackIfAway(); buildWalls() }
   func reloadWall(_ id: CGDirectDisplayID) { walls[id]?.close(); walls[id] = nil; comeBackIfAway(); buildWalls() }
   /// while the pages are let go (paused or away) a new theme or setting must still show: bring the pages back (the
@@ -1066,6 +1150,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     let m = NSMenu(); m.delegate = self
     let mono = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+    if Cfg.hasNewNotes {
+      let wn = ClosureItem("What’s New in Tidewall \(Cfg.version)…") { [weak self] in self?.appWindow.show(page: "whatsnew") }
+      wn.attributedTitle = NSAttributedString(string: "What’s New in Tidewall \(Cfg.version)…", attributes: [.font: NSFont.menuFont(ofSize: 0).withWeight(.semibold)])
+      m.addItem(wn); m.addItem(.separator())
+    }
     switch updater.state {
     case .ready(let v):
       let u = ClosureItem("Restart to Update to \(v)") { [weak self] in self?.updater.install() }
@@ -1361,6 +1450,8 @@ final class Updater {
   var onChange: (() -> Void)?
   var isAway: () -> Bool = { false }
   private var staged: URL?, stagedHash = "", lastCheck: Date?, timer: Timer?, notes = ""
+  /// this launch is the first after an update installed
+  private(set) var justUpdated = args.contains("--updated-from")
   private let fm = FileManager.default
   /// downloads (Caches) and the helper's notes to the next launch
   private let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("app.tidewall")
@@ -1387,7 +1478,7 @@ final class Updater {
     if let r = try? String(contentsOf: result, encoding: .utf8) {
       let parts = r.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ").map(String.init)
       if parts.count == 2, parts[0] != "ok" { failed(parts[1]); log("[update] installing \(parts[1]) didn't work (\(parts[0])); keeping \(Cfg.version)") }
-      else if parts.count == 2 { log("[update] \(parts[1]) installed") }
+      else if parts.count == 2 { log("[update] \(parts[1]) installed"); justUpdated = true }
       try? fm.removeItem(at: result)
     }
     // leftovers from an earlier update, cleared before the first check (45 s) and after any helper is done with them
@@ -1422,8 +1513,8 @@ final class Updater {
     case .idle: o["s"] = "idle"
     case .checking: o["s"] = "checking"
     case .downloading(let v): o["s"] = "downloading"; o["v"] = v
-    case .ready(let v): o["s"] = "ready"; o["v"] = v
-    case .blocked(let v, let why): o["s"] = "ready"; o["v"] = v; o["blocked"] = why
+    case .ready(let v): o["s"] = "ready"; o["v"] = v; o["notes"] = notes
+    case .blocked(let v, let why): o["s"] = "ready"; o["v"] = v; o["blocked"] = why; o["notes"] = notes
     case .upToDate: o["s"] = "current"
     case .skipped(let v): o["s"] = "skipped"; o["v"] = v
     case .failed(let e): o["s"] = "failed"; o["err"] = e
@@ -1469,6 +1560,7 @@ final class Updater {
       guard !Self.newer(minOS, than: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)") else {
         self.state = .failed("Tidewall \(v) needs macOS \(minOS)"); if manual { self.tell("Tidewall \(v) needs macOS \(minOS)", "This Mac stays on \(Cfg.version).") }; return }
       guard url.scheme == "https" || Self.env["TIDEWALL_UPDATE_FEED"] != nil else { self.state = .failed("insecure update URL"); return }
+      self.notes = notes
       if let why = self.cantInstall {        // don't fetch what can't be installed: point at the download instead
         self.state = .blocked(v, why); if manual { self.tell("Tidewall \(v) is available", "\(why) You can download it from GitHub.") }; return }
       if !manual && !fromWindow && self.hasFailed(v) { log("[update] \(v) failed to install before; waiting for a newer one (or Check for Updates…)"); self.state = .skipped(v); return }

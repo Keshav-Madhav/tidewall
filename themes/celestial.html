@@ -129,7 +129,9 @@ function bvColor(bv) {
   return t[t.length - 1][1].join(',');
 }
 let paperCache = null;
+let paintedMin = -1, deskKey = '';
 function paintSky(date = new Date()) {
+  paintedMin = Math.floor(date.getTime() / 60000);
   const c = document.createElement('canvas'); c.width = Math.round(W * K); c.height = Math.round(H * K);
   const x = c.getContext('2d'); x.scale(K, K);
   const P = projector(date), on = (px, py, m = 40) => px > -m && py > -m && px < W + m && py < H + m;
@@ -447,9 +449,12 @@ loadSky().then(() => { const t0 = performance.now(); const c = paintSky(); field
 setTimeout(function tickMinute() { if (!paused && SKY) uploadSky(paintSky(), true); setTimeout(tickMinute, 60000 - Date.now() % 60000 + 50); }, 60000 - Date.now() % 60000 + 50);
 let FB = null; function commit() { } function refresh() { }
 const handle = m => {
-  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'pause') { paused = !!m.v;
+    if (!paused) { if (SKY && Math.floor(Date.now() / 60000) !== paintedMin) uploadSky(paintSky(), true); wake(); }
+    return; }
   if (m.t === 'me') return;
-  if (m.t === 'desk') { DESK = m; if (SKY) uploadSky(paintSky(), false); return; }
+  if (m.t === 'desk') { const k = [m.x, m.y, m.w, m.h, m.uw, m.uh, m.i, m.n].join('|'); if (k === deskKey) return; deskKey = k;
+    DESK = m; if (SKY) { uploadSky(paintSky(), false); dirty = true; wake(); } return; }
   if (m.t === 'cursor') { curs.x = m.x / K; curs.y = m.y / K; curs.here = true; curs.lastMove = performance.now(); dirty = true; wake(); return; }
   if (m.t === 'cursorOff') { curs.here = false; wake(); return; }        // the pointer went to another screen
   // black holes only for the small things: Stage Manager thumbnails and desktop widgets (and the cursor); not your main windows

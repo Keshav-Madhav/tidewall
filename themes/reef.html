@@ -1183,13 +1183,13 @@ function render() {
 /* ======================= loop ======================= */
 let running = false, lastT = 0, DT = 1 / 60;
 function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
-function loop(now) { try { loop0(now); } catch (e) { post('JSERR loop ' + e.message + ' ' + (e.stack || '').split('\n')[0]); running = false; } }
+function loop(now) { try { loop0(now); } catch (e) { post('JSERR loop ' + e.message + ' ' + (e.stack || '').split('\n')[0]); running = false; setTimeout(wake, 1000); } }   // one bad frame mustn't freeze the reef
 function loop0(now) {
   if (paused) { running = false; return; }
   if (lastT && now - lastT < 15.5) { requestAnimationFrame(loop); return; }
   const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now;
   fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
-  T += dt; TG = (TG + dt) % 2048;
+  T += dt; TG = (TG + dt) % 16384;   // wraps once every ~4.5 h (it was every 34 min, jumping caustics, swell and sway at once); float32 still ~0.002 rad at the top
   const t0 = performance.now();
   DT = dt; stepWins(dt); stepSites(dt); stepWater(dt); stepKoi(dt, now); stepReef(dt, now);
   gatherCorals(); buildFish(); render();

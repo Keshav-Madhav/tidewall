@@ -17,6 +17,7 @@ lipo -create build/tidewall-arm64 build/tidewall-x86_64 -output tidewall; rm bui
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp tidewall "$APP/Contents/MacOS/Tidewall"
 cp assets/Tidewall.icns "$APP/Contents/Resources/Tidewall.icns"
+cp CHANGELOG.md "$APP/Contents/Resources/CHANGELOG.md"            # the app's What's New page reads it
 # the themes
 rsync -a --delete --exclude .DS_Store themes/ "$APP/Contents/Resources/themes/"
 cat > "$APP/Contents/Info.plist" <<PL

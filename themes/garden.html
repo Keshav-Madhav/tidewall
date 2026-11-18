@@ -665,13 +665,15 @@ function loop0(now) {
 function build() {
   W = innerWidth; H = innerHeight; K = devicePixelRatio; cv.width = Math.round(W * K); cv.height = Math.round(H * K);
   plan(); wake(); clearTimeout(blockT); blockT = setTimeout(placeBlock, 200);
+  if (lastWinMsg) handle(lastWinMsg);                                  // the screen's scale may have changed
 }
+let lastWinMsg = null;
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
   if (m.t === 'desk') { SEED = m.i | 0; dirty = true; wake(); return; }                  // each display grows its own garden
   if (m.t === 'cursor') { const x = m.x / K, y = m.y / K; if (Math.hypot(x - cur.x, y - cur.y) > 2) cur.t = performance.now(); cur.x = x; cur.y = y; cur.on = true; return; }
   if (m.t === 'cursorOff') { cur.on = false; return; }
-  if (m.t === 'windows') {
+  if (m.t === 'windows') { lastWinMsg = m; const K = devicePixelRatio;   // the scale as it is now
     setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) })));
     clearTimeout(blockT); blockT = setTimeout(placeBlock, m.live ? 1500 : 600);
   }

@@ -99,7 +99,8 @@ if (send0) {
 /* ---------------- cursor companions ---------------- */
 let cursor = null, started = false;
 function companionCursor(m) {
-  const k = devicePixelRatio || 1; cursor = { x: m.x / k, y: m.y / k };
+  const k = devicePixelRatio || 1, x = m.x / k, y = m.y / k, moved = !cursor || Math.hypot(x - cursor.x, y - cursor.y) > 2;
+  cursor = { x, y, t: moved ? performance.now() : cursor.t };
   if (!started && document.readyState !== 'loading') start();
 }
 function sprite(w, h) {
@@ -133,10 +134,10 @@ function kayak() {
     x.restore();
   };
   let last = 0, rest = 0;
+  const later = () => setTimeout(() => requestAnimationFrame(tick), 300);   // nothing to draw: look in again shortly
   const tick = now => {
-    requestAnimationFrame(tick);
     const dt = last ? Math.min((now - last) / 1000, .05) : 1 / 60; last = now;
-    if (typeof FB === 'undefined' || !FB || (typeof paused !== 'undefined' && paused)) return;
+    if (typeof FB === 'undefined' || !FB || (typeof paused !== 'undefined' && paused)) { last = 0; return later(); }
     if (!B.on) { [B.x, B.y] = toWater(W * .5, H * .75, 120); B.on = true; S.c.style.opacity = 1; }
     const [tx, ty] = cursor ? toWater(cursor.x, cursor.y, 60) : [B.x, B.y];
     const dx = tx - B.x, dy = ty - B.y, d = Math.hypot(dx, dy), maxV = 140;
@@ -148,12 +149,13 @@ function kayak() {
     B.vx += ex; B.vy += ey; B.x += B.vx * dt; B.y += B.vy * dt;
     const sp = Math.hypot(B.vx, B.vy);
     if (sp > 6) { let da = Math.atan2(B.vy, B.vx) - B.a; da = Math.atan2(Math.sin(da), Math.cos(da)); B.a += da * Math.min(1, dt * 5); }
-    if (sp < .3 && d < 12) { if (rest++ > 2) return; } else rest = 0;          // at rest: last frame already shows it
+    if (sp < .3 && d < 12) { if (rest++ > 2) return later(); } else rest = 0;   // at rest: last frame already shows it
     B.ph += dt * (2 + sp / 30);
     draw(Math.sin(B.ph * 2.2) * .55 * Math.min(1, sp / 40 + .15));
     S.c.style.transform = `translate3d(${(B.x - 28).toFixed(1)}px,${(B.y - 15).toFixed(1)}px,0) rotate(${B.a.toFixed(3)}rad)`;
     if (sp > 22) wake.feed(B.x - Math.cos(B.a) * 20, B.y - Math.sin(B.a) * 20, B.a, now); else wake.reset();
     wake.draw(now);
+    requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
 }
@@ -179,12 +181,17 @@ function butterfly() {
       x.strokeStyle = '#3d2a1b'; x.lineWidth = .6; x.beginPath(); x.moveTo(0, -6); x.quadraticCurveTo(-2, -10, -3.5, -11); x.moveTo(0, -6); x.quadraticCurveTo(2, -10, 3.5, -11); x.stroke(); }
     x.restore();
   };
-  let last = 0;
+  let last = 0, landed = false;
   S.c.style.opacity = 1; sh.c.style.opacity = 1;
+  const later = () => setTimeout(() => requestAnimationFrame(tick), 300);
   const tick = now => {
-    requestAnimationFrame(tick);
     const dt = last ? Math.min((now - last) / 1000, .05) : 1 / 60; last = now;
-    if (typeof paused !== 'undefined' && paused) return;
+    if (typeof paused !== 'undefined' && paused) { last = 0; return later(); }
+    // your cursor has been still for a while: it settles, wings folded, and stops drawing until the cursor moves
+    const quiet = !cursor || now - (cursor.t || 0) > 20000;
+    if (quiet && landed) { last = 0; return later(); }
+    if (quiet && Math.hypot(B.vx, B.vy) < 40) { landed = true; wings(S.x, Math.PI / 2, false); wings(sh.x, Math.PI / 2, true); return later(); }
+    landed = false;
     B.t += dt;
     // aim a little off the cursor, drifting round it, so it hovers rather than sitting on the pointer
     const orbit = 26 + 10 * Math.sin(B.t * .7);
@@ -199,6 +206,7 @@ function butterfly() {
     const tilt = Math.max(-.6, Math.min(.6, B.a));
     S.c.style.transform = `translate3d(${(B.x - 17).toFixed(1)}px,${(B.y - 15).toFixed(1)}px,0) rotate(${B.a.toFixed(3)}rad)`;
     sh.c.style.transform = `translate3d(${(B.x - 17 + 22).toFixed(1)}px,${(B.y - 15 + 28).toFixed(1)}px,0) rotate(${B.a.toFixed(3)}rad) scale(.85)`;
+    requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
 }

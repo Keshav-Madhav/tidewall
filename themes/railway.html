@@ -706,8 +706,12 @@ function layScenery() {
   }
   scen = out;
 }
+let visOf = [null, null, null];
 function easeScenery(dt) {
-  for (const o of scen.concat(fields, stations)) VIS.set(o.id, o.ok ? 1 : 0);
+  if (visOf[0] !== scen || visOf[1] !== fields || visOf[2] !== stations) {
+    visOf = [scen, fields, stations]; VIS.clear();
+    for (const a of visOf) for (const o of a) VIS.set(o.id, o.ok ? 1 : 0);
+  }
   for (const L of branches) L.vis = 1;
   ghosts = []; roadFade = 1; oldRoads = [];
   return false;
@@ -1118,7 +1122,7 @@ function placeCars(t) {
   t.els.forEach((el, i) => { const sc = s - spec.len[i] / 2; let [x, y, a] = posOf(t, sc);
     if (O && f < 1) { const s0 = O.s + trav - (t.s - sc), p0 = at(O.L, s0), a0 = tangent(O.L, s0); x = p0[0] + (x - p0[0]) * f; y = p0[1] + (y - p0[1]) * f; a = a0 + Math.atan2(Math.sin(a - a0), Math.cos(a - a0)) * f; }
     const o = vis * clamp(1 - (L.depth[idxOf(L, sc)] - 2) / 12, 0, 1); place(el, x, y, a, o); s -= spec.len[i] + 2; });
-  if (spec.steam && L.depth[idxOf(L, t.s - 5)] === 0 && vis > .5) { t.puffT -= 1 / 30; if (t.puffT <= 0) { const [x, y, a] = posOf(t, t.s - 5); puff(x, y, a, t.v > 18); t.puffT = t.v > 2 ? clamp(14 / (t.v + 6), .22, .7) : 1.5; } }
+  if (spec.steam && L.depth[idxOf(L, t.s - 5)] === 0 && vis > .5) { t.puffT -= frameDT; if (t.puffT <= 0) { const [x, y, a] = posOf(t, t.s - 5); puff(x, y, a, t.v > 18); t.puffT = t.v > 2 ? clamp(14 / (t.v + 6), .22, .7) : 1.5; } }
 }
 // a branch shuttle: runs to the buffers at the terminus, waits, propels back to the junction, waits, and so on
 function stepShuttle(t, dt, now, layoutMoving) {
@@ -1306,7 +1310,7 @@ function rebuild() {
 }
 function loop0(now) {
   if (paused) { running = false; return; }
-  const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 30; lastT = now;
+  const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 30; lastT = now; frameDT = dt;
   fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt; if (dt > .05) { slow++; SL[lastWork] = (SL[lastWork] || 0) + 1; } worst = Math.max(worst, dt); lastWork = 'idle';
   if (stepLayout(dt) || dirty) { if (!pendSince) pendSince = now; lastMoveT = now; dirty = false; needLand = true; }
   easeScenery(dt);
@@ -1324,13 +1328,17 @@ function loop0(now) {
 }
 
 /* ======================= boot + host protocol ======================= */
-function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; cv.width = Math.round(W * K); cv.height = Math.round(H * K); prep(); clearMovers(); buildStatic(); first = true; dirty = true; wake(); }
+let lastWinMsg = null, frameDT = 1 / 30;               // frameDT: the real frame time (steam puffs used a fixed 1/30 s, so their rate followed the frame rate)
+function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; cv.width = Math.round(W * K); cv.height = Math.round(H * K); prep(); clearMovers(); buildStatic(); first = true; dirty = true; wake();
+  if (lastWinMsg) handle(lastWinMsg); }                                // the screen's scale may have changed
+let deskKey = '';
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
-  if (m.t === 'desk') { SEED = m.i | 0; prep(); clearMovers(); buildStatic(); VIS.clear(); dirty = true; wake(); return; }
+  if (m.t === 'desk') { const k = [m.i, m.n, m.w, m.h].join('|'); if (k === deskKey) return; deskKey = k;
+    SEED = m.i | 0; prep(); clearMovers(); buildStatic(); VIS.clear(); visOf = [null, null, null]; dirty = true; wake(); return; }
   if (m.t === 'cursor') { const x = m.x / K, y = m.y / K; if (Math.hypot(x - cur.x, y - cur.y) > 2) cur.t = performance.now(); cur.x = x; cur.y = y; cur.on = true; return; }
   if (m.t === 'cursorOff') { cur.on = false; return; }
-  if (m.t === 'windows') setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) })));
+  if (m.t === 'windows') { lastWinMsg = m; const K = devicePixelRatio; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
 };
 build();
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { lastKey = ''; build(); }, 200); });

@@ -332,7 +332,9 @@ function freeAll() {
   [maskGrid, maskDisp, smokeT, smokeF].forEach(del);
 }
 let ready = false;
+let buildGen = 0;
 async function build() {
+  const gen = ++buildGen;                                              // a newer build (another resize) makes this one stop
   ready = false;
   W = innerWidth; H = innerHeight; K = devicePixelRatio; freeAll();
   cv.width = Math.round(W * K); cv.height = Math.round(H * K);
@@ -343,6 +345,7 @@ async function build() {
   const mcx = W * .3, mcy = H * .5;
   const dw = cv.width, dh = cv.height;
   const art = MODEL.glb ? await renderModel(dw, dh, mcx * K, mcy * K, H * K) : null;   // a real model: rendered once, its picture is its shape
+  if (gen !== buildGen) return;                                        // overtaken while the model loaded: the newer build owns the GPU now
   const g = document.createElement('canvas'); g.width = NX; g.height = NY; const gx = g.getContext('2d');
   if (art) { gx.imageSmoothingEnabled = true; gx.drawImage(art, 0, 0, dw, dh, 0, 0, W / CELL, H / CELL); } else drawModel(gx, mcx / CELL, mcy / CELL, H / CELL);
   // threshold to a hard mask so the physics sees a clean wall
@@ -450,6 +453,7 @@ function loop(now) { try { loop0(now); } catch (e) { running = false; post('JSER
 function loop0(now) {
   if (paused) { running = false; return; }
   if (!ready) { requestAnimationFrame(loop); return; }                 // the model is still loading
+  if (simT > 36 * 3600) { ready = false; buildRetrying(); requestAnimationFrame(loop); return; }   // never paused for a day and a half: refresh the clock
   if (lastT && now - lastT < 15.5) { requestAnimationFrame(loop); return; }
   const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 60; lastT = now;
   fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
@@ -463,14 +467,19 @@ function loop0(now) {
 
 /* ======================= boot + host protocol ======================= */
 const handle = m => {
-  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'pause') { paused = !!m.v;
+    if (!paused && ready && simT > 6 * 3600) { buildRetrying(); }      // a fresh sim clock while nobody was watching
+    if (!paused) wake(); return; }
   if (m.t === 'cursor') { cur.x = m.x / K; cur.y = m.y / K; cur.on = true; return; }
   if (m.t === 'cursorOff') { cur.on = false; return; }
 };
 function setTargets() { }                                             // windows don't touch the air
-build().catch(e => post('JSERR boot ' + e.message + ' ' + (e.stack || '').split('\n')[0]));
+function buildRetrying(tries = 0) {
+  build().catch(e => { post('JSERR build ' + e.message + ' ' + (e.stack || '').split('\n')[0]); if (tries < 3) setTimeout(() => buildRetrying(tries + 1), 4000 * (tries + 1)); });
+}
+buildRetrying();
 wake();
-let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => build().catch(e => post('JSERR build ' + e.message)), 250); });
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => buildRetrying(), 250); });
 let gpuNote = '';
 function gpuTime() {                                                   // a one-off timing of the GPU work, for the bench
   const px = new Float32Array(4), sync = () => { gl.bindFramebuffer(gl.FRAMEBUFFER, lb[lbCur].f); gl.readBuffer(gl.COLOR_ATTACHMENT2); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, px); };

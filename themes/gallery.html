@@ -295,7 +295,7 @@ function bestSpot(art, obstacles) {
 function order() {                                                     // which works are on show: a different selection each day
   const d = new Date(), seed = d.getFullYear() * 400 + d.getMonth() * 32 + d.getDate();
   const o = ART.slice().sort((a, b) => ((a.id * 9301 + seed * 49297) % 233280) - ((b.id * 9301 + seed * 49297) % 233280));
-  const k = (DESK.i * 4) % Math.max(1, o.length); return o.slice(k).concat(o.slice(0, k));   // each display hangs different works
+  const k = Math.floor(DESK.i * o.length / Math.max(1, DESK.n)) % Math.max(1, o.length); return o.slice(k).concat(o.slice(0, k));   // each display starts at its own share of the collection (with 3+ displays, (i*4)%10 hung the same works twice)
 }
 function hangCollection() {
   if (!ART.length || !FRAMES) return;

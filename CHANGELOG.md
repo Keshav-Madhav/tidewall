@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.4]
+
+- **No more blank screens after sleep.** When displays sleep and wake (external monitors reconnecting after you
+  unlock, say), macOS can take a page's GPU drawing surface away, and the wallpaper was left showing a plain
+  background (on a spanning theme like Celestial Atlas, a navy screen without its stars). Every theme now notices and
+  redraws itself, and Tidewall double-checks each display a few seconds after they wake, unlock or change.
+- **What's New**: the Tidewall window has a page of release notes, and after an update the menu bar offers
+  "What's New in Tidewall …" until you've looked. When an update is waiting, its notes are shown with
+  **Restart to Update**.
+- A wallpaper page that reloads (after a GPU reset or a crash) gets your windows again straight away; it used to keep
+  ignoring them until one moved.
+- **Wind Map works with any arrangement of displays.** With a monitor above your laptop, the map reached past the North
+  Pole, the weather service refused it, and the wind stayed "offline" (retrying every minute). Requests the service
+  rejects outright now wait hours before trying again, and every display reuses a forecast another one fetched.
+- **Changing a display while the wallpaper is paused or resting** no longer leaves it black or half drawn (Koi Reef,
+  Lava Lamp, Beach, Wind Tunnel, Ink Map): it redraws at the new size, then pauses again.
+- **Model Railway and Garden Plan** stay put when a display switches between HiDPI and native, and Railway no longer
+  rebuilds its whole board (roads blinking, trains jumping) on every display change. Its memory use no longer grows
+  over days, and it does far less work every frame.
+- **Lighter while paused**: Beach and Meadow stop drawing entirely (≈5% CPU → 0.2%); Meadow's butterfly settles when
+  your cursor has been still for a while, and the kayak naps between strokes.
+- **Celestial Atlas** lines up across displays straight after a change and shows the right minute as soon as it resumes.
+- **Desktop widgets** are recognised by every theme on every Mac (Celestial and Model Railway only knew the British
+  spelling of Notification Centre).
+- Smoother over long uptimes: Koi Reef's caustics no longer jump every 34 minutes, Lava Lamp's light shaft no longer
+  snaps every 17, and the Wind Tunnel refreshes its simulation clock while you're away (it degraded after ~2 days).
+  The Wind Tunnel also no longer leaks GPU memory when the screen resizes as it loads, and retries a failed start.
+- Gallery spreads the collection across 3+ displays instead of hanging the same works twice; Koi Reef recovers from a
+  bad frame instead of freezing; Railway's steam puffs keep time at any frame rate.
+
 ## [1.0.3]
 
 - **The Tidewall window can be moved again**: drag it by its top edge or the empty top of the sidebar (double-click

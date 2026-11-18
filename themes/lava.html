@@ -437,7 +437,7 @@ function render() {
   // the lamp
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height);
   gl.useProgram(COMP); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, fT); gl.uniform1i(COMP.u.uF, 0);
-  gl.uniform2f(COMP.u.uRes, W, H); gl.uniform2f(COMP.u.uTex, 1 / fw, 1 / fh); gl.uniform1f(COMP.u.uTh, TH); gl.uniform1f(COMP.u.uBowl, BOWL()); gl.uniform1f(COMP.u.uCoil, coilX()); gl.uniform1f(COMP.u.uT, (performance.now() / 1000) % 1000);
+  gl.uniform2f(COMP.u.uRes, W, H); gl.uniform2f(COMP.u.uTex, 1 / fw, 1 / fh); gl.uniform1f(COMP.u.uTh, TH); gl.uniform1f(COMP.u.uBowl, BOWL()); gl.uniform1f(COMP.u.uCoil, coilX()); gl.uniform1f(COMP.u.uT, (performance.now() / 1000) % (8 * Math.PI * 125));
   for (const k of ['OilHi', 'OilLo', 'OilDeep', 'Bulb', 'Wax', 'Rim']) gl.uniform3fv(COMP.u['u' + k], PAL[k]);
   gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
   // bubbles and specks

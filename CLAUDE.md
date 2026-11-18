@@ -65,6 +65,13 @@ from source, or two wallpapers stack.
 - The app window's page fills the title-bar strip and WebKit ignores `-webkit-app-region`, so native `TitlebarDrag`
   strips (top 28 pt, sidebar top 52 pt) move the window. `./tidewall --ui-only --themes "$PWD/themes" --hittest` prints
   which view a click lands on across the top (the traffic lights must stay `_NSTheme…Widget`).
+- WebGL themes can lose their GPU context when displays sleep/wake or reconnect; they'd then show only their CSS
+  background. `earlyScript` wraps `getContext` in every page: a lost context reports and reloads the page, and
+  `checkGPUContexts()` re-checks after wake/unlock/display changes. Test with `--bench … --lose-gl-at 6`.
+  (Bench switches for checks like this: `--paused`, `--testpause T`, `--reload-at T`, `--lose-gl-at T`,
+  `--resize-at T` (the real display-change path) vs `--resize-raw-at T` (the old behaviour), `--cycle S` (every theme,
+  S seconds each: a memory soak), `--fakedesk i --stacked`. Theme ids are the menu's, not file names: Beach is `beach`
+  (flat.html). Paused pages are nudged to redraw after a resize: `Wallpaper.redrawIfPaused()`.)
 - `log` is a shell function on the maintainer's Mac: read the system log with `/usr/bin/log show …`.
 - `Updater.publicKeys` = [CI key, offline backup key]. CI verifies against the first. If you ever sign with the backup,
   change that `sed` in release.yml.
