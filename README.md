@@ -5,8 +5,9 @@
 <p align="center">A live wallpaper for macOS that flows around your windows.<br>
 Move a window and the world grows, parts and settles around it.</p>
 
-<p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/download/v1.0.1/tidewall-promo.mp4"><img src="docs/promo-poster.png" width="860" alt="Watch the 38-second film"></a><br>
-<sub><a href="https://github.com/Keshav-Madhav/tidewall/releases/download/v1.0.1/tidewall-promo.mp4">▶ Watch the 38-second film</a> · <a href="https://github.com/Keshav-Madhav/tidewall/releases/latest">Download Tidewall</a></sub></p>
+https://github.com/user-attachments/assets/65214d13-136b-42cd-add1-bde06a6ab17a
+
+<p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/latest"><b>Download Tidewall</b></a> · free for macOS 14+</p>
 
 <p align="center"><img src="docs/app.png" width="860" alt="The Tidewall window: a live preview of Model Railway on your own desktop, with the theme gallery below"></p>
 
