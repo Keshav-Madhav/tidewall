@@ -33,6 +33,8 @@ swiftc -O main.swift -o tidewall -framework Cocoa -framework WebKit -framework I
 tools/check-pages.sh                        # syntax-check every page's scripts (CI runs this and build.sh)
 tools/thumbs.sh <theme>                     # regenerate a gallery thumbnail
 tools/mem.sh <theme> [--small]              # memory footprint of a theme's page
+./tidewall --bench … --film DIR --film-start S --film-dur S --film-move dx,dy   # promo footage: timestamped 1920 px frames while a window glides
+./tidewall --ui-only --demo …               # the app window plays a scripted demo (a cursor drags the preview's window)
 ```
 
 There are no unit tests. Verify by looking: `--bench --snapshot` (and `--frames DIR --every S` for motion, `--hop S`

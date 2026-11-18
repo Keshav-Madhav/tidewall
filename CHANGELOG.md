@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.1]
+
+- A new menu-bar icon: a window with a tide curling inside it, after the app icon. Clear at menu-bar size in light
+  and dark.
+- A promo video, in the README and on the release.
+
 ## [1.0.0]
 
 The first release as **Tidewall** (formerly Driftland, a fork of Deskland).

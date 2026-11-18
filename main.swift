@@ -751,22 +751,20 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
   }
 }
 
-/// The menu-bar glyph: a little window riding a wave (a template image, so it follows the menu bar's colour)
+/// The menu-bar glyph: a window with a tide curling inside it (the app icon's idea, as a template image so it follows the menu bar)
 func menuGlyph() -> NSImage {
   let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
     NSColor.black.set()
-    let win = NSBezierPath(roundedRect: NSRect(x: 5.2, y: 8.2, width: 9.6, height: 7.2), xRadius: 1.8, yRadius: 1.8); win.lineWidth = 1.35; win.stroke()
-    NSBezierPath(rect: NSRect(x: 5.2, y: 13.1, width: 9.6, height: 1.2)).fill()
-    let w1 = NSBezierPath(); w1.move(to: NSPoint(x: 1, y: 6.2))
-    w1.curve(to: NSPoint(x: 6.3, y: 6.2), controlPoint1: NSPoint(x: 2.6, y: 8.6), controlPoint2: NSPoint(x: 4.7, y: 8.6))
-    w1.curve(to: NSPoint(x: 11.7, y: 6.2), controlPoint1: NSPoint(x: 7.9, y: 3.8), controlPoint2: NSPoint(x: 10.1, y: 3.8))
-    w1.curve(to: NSPoint(x: 17, y: 6.2), controlPoint1: NSPoint(x: 13.3, y: 8.6), controlPoint2: NSPoint(x: 15.4, y: 8.6))
-    w1.lineWidth = 1.5; w1.lineCapStyle = .round; w1.stroke()
-    let w2 = NSBezierPath(); w2.move(to: NSPoint(x: 1, y: 2.4))
-    w2.curve(to: NSPoint(x: 6.3, y: 2.4), controlPoint1: NSPoint(x: 2.6, y: 4.6), controlPoint2: NSPoint(x: 4.7, y: 4.6))
-    w2.curve(to: NSPoint(x: 11.7, y: 2.4), controlPoint1: NSPoint(x: 7.9, y: 0.2), controlPoint2: NSPoint(x: 10.1, y: 0.2))
-    w2.curve(to: NSPoint(x: 17, y: 2.4), controlPoint1: NSPoint(x: 13.3, y: 4.6), controlPoint2: NSPoint(x: 15.4, y: 4.6))
-    w2.lineWidth = 1.2; w2.lineCapStyle = .round; NSColor.black.withAlphaComponent(0.55).set(); w2.stroke()
+    let win = NSBezierPath(roundedRect: NSRect(x: 1.6, y: 2.6, width: 14.8, height: 12.8), xRadius: 3.5, yRadius: 3.5); win.lineWidth = 1.5; win.stroke()
+    NSGraphicsContext.current?.saveGraphicsState(); win.addClip()
+    let p = NSBezierPath(); p.move(to: NSPoint(x: 18, y: 9.6))
+    p.curve(to: NSPoint(x: 9.2, y: 11.6), controlPoint1: NSPoint(x: 15.4, y: 12.2), controlPoint2: NSPoint(x: 11.8, y: 12.6))   // the crest
+    p.curve(to: NSPoint(x: 6.4, y: 8.4), controlPoint1: NSPoint(x: 7.0, y: 11.0), controlPoint2: NSPoint(x: 5.9, y: 9.6))       // curling over
+    p.curve(to: NSPoint(x: 9.0, y: 8.2), controlPoint1: NSPoint(x: 6.9, y: 7.2), controlPoint2: NSPoint(x: 8.6, y: 7.2))       // the inside of the curl
+    p.curve(to: NSPoint(x: 7.6, y: 5.6), controlPoint1: NSPoint(x: 9.6, y: 6.9), controlPoint2: NSPoint(x: 9.0, y: 5.8))
+    p.curve(to: NSPoint(x: 0, y: 6.2), controlPoint1: NSPoint(x: 5.4, y: 5.3), controlPoint2: NSPoint(x: 2.0, y: 7.4))         // the trough
+    p.line(to: NSPoint(x: 0, y: 0)); p.line(to: NSPoint(x: 18, y: 0)); p.close(); p.fill()
+    NSGraphicsContext.current?.restoreGraphicsState()
     return true
   }
   img.isTemplate = true; return img
@@ -826,6 +824,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       tracker.onUpdate = { [weak self] r, _ in self?.lastRects = r; self?.lastOwners = self?.tracker.owners ?? [] }; tracker.start()
       buildMainMenu { [weak self] in self?.appWindow.show(page: "about") }; appWindow.show()
       if let c = argValue("--closetest"), let t = Double(c) { DispatchQueue.main.asyncAfter(deadline: .now() + t) { self.appWindow.window?.performClose(nil) } }   // dev: is it all freed?
+      if args.contains("--demo") { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.appWindow.js("{\"t\":\"demo\"}") } }   // dev: the promo video's app-window shot
       if let m = argValue("--mode") { DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.appWindow.js("{\"t\":\"mode\",\"m\":\"\(m == "sample" ? "sample" : "mine")\"}") } }   // dev
       if let t = argValue("--select") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.appWindow.js("{\"t\":\"select\",\"id\":\"\(t)\"}") } }   // dev
       if let p = argValue("--page") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.appWindow.show(page: p) } }
@@ -1076,6 +1075,36 @@ enum Bench {
       }
     }
     // --frames DIR --every S: a numbered snapshot every S seconds (to watch motion frame by frame)
+    // --film DIR: footage for the promo video. After --film-start s, the first window glides by --film-move dx,dy (points)
+    // over --film-dur s while frames are taken as fast as they come, each named by its time (ms) since the film began.
+    if let dir = argValue("--film") {
+      let start = Double(argValue("--film-start") ?? "6")!, dur = Double(argValue("--film-dur") ?? "4")!, width = Double(argValue("--film-width") ?? "1920")!
+      let mv = (argValue("--film-move") ?? "320,140").split(separator: ",").compactMap { Double($0) }, from = rects0.first ?? .zero
+      var t0 = 0.0
+      let enc = DispatchQueue(label: "film", qos: .userInitiated, attributes: .concurrent)
+      DispatchQueue.main.asyncAfter(deadline: .now() + start) {
+        t0 = ProcessInfo.processInfo.systemUptime
+        Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { tm in
+          let t = ProcessInfo.processInfo.systemUptime - t0, a = 0.35, b = dur - 0.7
+          let u = max(0, min(1, (t - a) / (b - a))), e = u * u * u * (u * (u * 6 - 15) + 10)       // smootherstep
+          app.lastRects[0] = CGRect(x: from.minX + mv[0] * e, y: from.minY + mv[1] * e, width: from.width, height: from.height)
+          app.dispatch(live: t > a && t < b)
+          if t > dur { tm.invalidate(); app.dispatch(live: false) }
+        }
+        func shoot() {
+          let t = ProcessInfo.processInfo.systemUptime - t0
+          guard t <= dur, let w = app.walls.values.first(where: { $0.cgFrame.origin == .zero }) else { return }
+          let cfg = WKSnapshotConfiguration(); cfg.snapshotWidth = NSNumber(value: width / 2)   // in points: ×2 on a retina screen
+          w.web.takeSnapshot(with: cfg) { img, _ in
+            shoot()                                        // the next one straight away; encoding happens off the main thread
+            guard let img, let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+            enc.async { let r = NSBitmapImageRep(cgImage: cg)
+              try? r.representation(using: .jpeg, properties: [.compressionFactor: 0.94])!.write(to: URL(fileURLWithPath: String(format: "%@/t%06d.jpg", dir, Int(t * 1000)))) }
+          }
+        }
+        shoot()
+      }
+    }
     if let dir = argValue("--frames") {
       let every = Double(argValue("--every") ?? "0.25")!, start = Double(argValue("--from") ?? "6")!
       var n = 0
