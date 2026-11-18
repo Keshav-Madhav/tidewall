@@ -74,7 +74,7 @@ Mac's time zone, locally.
 Requires the Xcode command-line tools (`xcode-select --install`).
 
 ```sh
-git clone https://github.com/Keshav-Madhav/driftland.git tidewall && cd tidewall
+git clone https://github.com/Keshav-Madhav/tidewall.git && cd tidewall
 ./build.sh                       # → build/Tidewall.app
 open build/Tidewall.app
 ```
