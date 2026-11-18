@@ -4,12 +4,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p build
-VERSION=1.0
+VERSION=$(tr -d " \n" < VERSION)          # the one place the version lives (tools/release.sh bumps it)
 APP=build/Tidewall.app
 # one universal binary: Apple silicon and Intel
 FW="-framework Cocoa -framework WebKit -framework IOKit"
-swiftc -O main.swift -target arm64-apple-macos14 -o build/tidewall-arm64 $FW
-swiftc -O main.swift -target x86_64-apple-macos14 -o build/tidewall-x86_64 $FW
+# RELEASE=1 (the release workflow) makes a release build; anything else is a development build, which never updates
+# itself and is the only kind that honours the TIDEWALL_UPDATE_* test variables
+DEV="-D TIDEWALL_DEV"; [ "${RELEASE:-}" = 1 ] && DEV=""
+swiftc -O main.swift -target arm64-apple-macos14 -o build/tidewall-arm64 $FW $DEV
+swiftc -O main.swift -target x86_64-apple-macos14 -o build/tidewall-x86_64 $FW $DEV
 lipo -create build/tidewall-arm64 build/tidewall-x86_64 -output tidewall; rm build/tidewall-arm64 build/tidewall-x86_64
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp tidewall "$APP/Contents/MacOS/Tidewall"
@@ -35,5 +38,5 @@ cat > "$APP/Contents/Info.plist" <<PL
   <key>NSHumanReadableCopyright</key><string>GPL-3.0. Began as a fork of Deskland.</string>
 </dict></plist>
 PL
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
+codesign --force --deep --sign - "$APP"                       # ad-hoc; the updater refuses a bundle whose seal is broken
 echo "built $APP ($(du -sh "$APP" | cut -f1))"

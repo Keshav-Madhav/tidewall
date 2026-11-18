@@ -10,6 +10,7 @@
 //   4. Always native resolution (canvas = display pixels). No quality is traded for speed.
 //   5. Per-screen pause when a screen is (almost) fully covered; all screens pause on sleep / lock.
 import Cocoa
+import CryptoKit
 import WebKit
 import IOKit
 import Darwin
@@ -77,6 +78,8 @@ enum Cfg {
   /// seeds the generated names (your walker, the strangers); stable across launches
   static var seed: Int { if let v = d.object(forKey: "seed") as? Int { return v }; let v = Int.random(in: 1..<Int(Int32.max)); d.set(v, forKey: "seed"); return v }
   /// pause the animation when nobody has touched the mouse or keyboard for a while; any input brings it straight back
+  /// check for, download and install updates on its own (installs while the screen is locked); off = only "Check for Updates…"
+  static var autoUpdate: Bool { get { d.object(forKey: "autoUpdate") as? Bool ?? true } set { d.set(newValue, forKey: "autoUpdate") } }
   static var restWhenIdle: Bool { get { d.object(forKey: "restWhenIdle") as? Bool ?? true } set { d.set(newValue, forKey: "restWhenIdle") } }
   static var mask: Bool { get { d.object(forKey: "mask") as? Bool ?? false }   /* every theme opts out of the mask now */ set { d.set(newValue, forKey: "mask") } }
 }
@@ -573,21 +576,26 @@ final class Usage {
     let r = withUnsafeMutablePointer(to: &ri) { $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V4, $0) } }
     return r == 0 ? ri : nil
   }
-  /// GPU busy time (ns) the driver has billed to our pids (WebKit's GPU work is billed to the app).
+  /// GPU busy time (ns) the driver has billed to our pids (WebKit's GPU work is billed to the app). The per-process
+  /// counters live on the GPU driver's user clients, which are children of the accelerator: walk just those. (Walking
+  /// the whole I/O registry to find them cost ~25 ms of main thread per reading.)
   private func gpuNs(_ pids: Set<pid_t>) -> UInt64 {
-    // GPU user clients aren't "matching services": walk the registry and pick them out
     var it: io_iterator_t = 0
-    guard IORegistryCreateIterator(kIOMainPortDefault, kIOServicePlane, IOOptionBits(kIORegistryIterateRecursively), &it) == KERN_SUCCESS else { return 0 }
+    guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &it) == KERN_SUCCESS else { return 0 }
     defer { IOObjectRelease(it) }
     var total: UInt64 = 0
-    while case let e = IOIteratorNext(it), e != 0 {
-      defer { IOObjectRelease(e) }
-      guard IOObjectConformsTo(e, "AGXDeviceUserClient") != 0 else { continue }
-      var props: Unmanaged<CFMutableDictionary>?
-      guard IORegistryEntryCreateCFProperties(e, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS, let d = props?.takeRetainedValue() as? [String: Any],
-            let creator = d["IOUserClientCreator"] as? String, let pidStr = creator.split(separator: ",").first?.split(separator: " ").last,
-            let pid = pid_t(pidStr), pids.contains(pid), let usage = d["AppUsage"] as? [[String: Any]] else { continue }
-      for u in usage { total += (u["accumulatedGPUTime"] as? NSNumber)?.uint64Value ?? 0 }
+    while case let acc = IOIteratorNext(it), acc != 0 {
+      defer { IOObjectRelease(acc) }
+      var ch: io_iterator_t = 0
+      guard IORegistryEntryGetChildIterator(acc, kIOServicePlane, &ch) == KERN_SUCCESS else { continue }
+      defer { IOObjectRelease(ch) }
+      while case let e = IOIteratorNext(ch), e != 0 {
+        defer { IOObjectRelease(e) }
+        guard let creator = IORegistryEntryCreateCFProperty(e, "IOUserClientCreator" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? String,
+              let pidStr = creator.split(separator: ",").first?.split(separator: " ").last, let pid = pid_t(pidStr), pids.contains(pid),
+              let usage = IORegistryEntryCreateCFProperty(e, "AppUsage" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? [[String: Any]] else { continue }
+        for u in usage { total += (u["accumulatedGPUTime"] as? NSNumber)?.uint64Value ?? 0 }
+      }
     }
     return total
   }
@@ -690,7 +698,9 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
     wv.load(URLRequest(url: URL(string: "tidewall://app/ui/index.html")!))
     window = w; web = wv
     _ = app?.usage.sample()
-    usageTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.pushUsage() }
+    usageTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+      guard let w = self?.window, w.occlusionState.contains(.visible), !w.isMiniaturized else { return }   // hidden or minimised: nobody's reading them
+      self?.pushUsage() }
   }
   func windowWillClose(_ n: Notification) {
     usageTimer?.invalidate(); usageTimer = nil
@@ -731,7 +741,8 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
               "own": Cfg.d.string(forKey: "theme.display.\(id)") != nil, "main": s == NSScreen.screens.first] }
     var vars: [String: String] = [:]; for (t, _) in Cfg.themes { if let v = Cfg.variant(t) { vars[t] = v } }
     let st: [String: Any] = ["t": "state", "current": Cfg.theme, "displays": ds, "variants": vars, "seed": Cfg.seed, "version": Cfg.version, "siteQuery": Cfg.siteQuery,
-      "settings": ["login": LoginItem.enabled, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin]]
+      "settings": ["login": LoginItem.enabled, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin, "autoUpdate": Cfg.autoUpdate],
+      "update": app.updater.status]
     if let d = try? JSONSerialization.data(withJSONObject: st), let s = String(data: d, encoding: .utf8) { js(s) }
   }
   func userContentController(_ u: WKUserContentController, didReceive m: WKScriptMessage) {
@@ -755,11 +766,14 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       switch o["key"] as? String ?? "" {
       case "login": if let why = LoginItem.set(v as? Bool ?? false) { toast(why) }
       case "restWhenIdle": Cfg.restWhenIdle = v as? Bool ?? true
+      case "autoUpdate": Cfg.autoUpdate = v as? Bool ?? true; if Cfg.autoUpdate { app.updater.check(manual: false) }
       case "paused": app.userPaused = v as? Bool ?? false; app.dispatch(live: false)
       case "fps": Cfg.fps = (v as? NSNumber)?.doubleValue ?? 0; app.reloadAll()
       case "margin": Cfg.margin = (v as? NSNumber)?.doubleValue ?? 140; app.tracker.forceResend()
       default: break }
     case "reload": app.reloadAll()
+    case "checkUpdate": app.updater.check(manual: false, fromWindow: true)
+    case "installUpdate": app.updater.install()
     case "quit": NSApp.terminate(nil)
     default: break
     }
@@ -819,9 +833,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func refreshUsage(_ menu: NSMenu, first: Bool) {
     let s = first ? Usage.Sample() : usage.sample()
     let mono = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-    let lines = first ? ["CPU     measuring…", "GPU     measuring…", "Memory  measuring…"]
-      : [String(format: "CPU     %.1f%%", s.cpu), String(format: "GPU     %.1f%%", s.gpu), String(format: "Memory  %.0f MB  (%d processes)", s.memMB, s.procs)]
-    for (i, l) in lines.enumerated() { menu.item(withTag: 900 + i)?.attributedTitle = NSAttributedString(string: l, attributes: [.font: mono]) }
+    let ui = pid_t(appWindow.web.map(webPid) ?? -1), wc = s.cpuBy[ui] ?? 0, wm = s.memBy[ui] ?? 0
+    let lines = first ? ["CPU     measuring…", "GPU     measuring…", "Memory  measuring…", ""]
+      : [String(format: "CPU     %.1f%%", max(0, s.cpu - wc)), String(format: "GPU     %.1f%%", s.gpu), String(format: "Memory  %.0f MB", max(0, s.memMB - wm)),
+         wm > 0 ? String(format: "+ window %.0f MB, freed on close", wm) : ""]
+    for (i, l) in lines.enumerated() { guard let it = menu.item(withTag: 900 + i) else { continue }
+      it.isHidden = l.isEmpty; it.attributedTitle = NSAttributedString(string: l, attributes: [.font: mono]) }
   }
   var walls: [CGDirectDisplayID: Wallpaper] = [:]
   let tracker = Tracker()
@@ -832,9 +849,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   var lastOwners: [String] = []
   weak var cursorWall: Wallpaper?
   lazy var appWindow = AppWindow(app: self)
+  let updater = Updater()
   func applicationShouldHandleReopen(_ s: NSApplication, hasVisibleWindows f: Bool) -> Bool { if !benchMode { appWindow.show() }; return false }
 
   func applicationDidFinishLaunching(_ n: Notification) {
+    if !benchMode { updater.launching() }
     if let a = argValue("--appearance") { NSApp.appearance = NSAppearance(named: a == "light" ? .aqua : .darkAqua) }
     if args.contains("--ui-only") {           // dev: just the app window (no wallpapers), to work on the interface
       tracker.onUpdate = { [weak self] r, _ in self?.lastRects = r; self?.lastOwners = self?.tracker.owners ?? [] }; tracker.start()
@@ -875,18 +894,26 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       DispatchQueue.main.asyncAfter(deadline: .now() + a + 8) { self.userPaused = false; self.dispatch(live: false) } }
     NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.buildWalls() }
     let wnc = NSWorkspace.shared.notificationCenter
-    wnc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.displaysAsleep = true; self?.dispatch(live: false) }
+    wnc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.displaysAsleep = true; self?.dispatch(live: false); self?.updater.away() }
     wnc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.displaysAsleep = false; self?.dispatch(live: false) }
     let dnc = DistributedNotificationCenter.default()
-    dnc.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in self?.locked = true; self?.dispatch(live: false) }
+    dnc.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in self?.locked = true; self?.dispatch(live: false); self?.updater.away() }
     dnc.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in self?.locked = false; self?.dispatch(live: false) }
     if !benchMode {
       LoginItem.refresh()
+      // relaunched by an update while the screen is locked: start out knowing it (the lock notification came before us)
+      if let d = CGSessionCopyCurrentDictionary() as? [String: Any], d["CGSSessionScreenIsLocked"] as? Bool == true { locked = true }
+      updater.onChange = { [weak self] in self?.buildMenu(); self?.appWindow.pushState() }
+      updater.isAway = { [weak self] in self?.asleep ?? false }
+      updater.start()
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.updater.cameUp() }
+      if let from = argValue("--updated-from") { log("[update] updated from \(from) to \(Cfg.version)") }
       DistributedNotificationCenter.default().addObserver(forName: .init("app.tidewall.show"), object: nil, queue: .main) { [weak self] _ in self?.appWindow.show() }
       buildMenu()
       if Bundle.main.bundleIdentifier == nil, let i = NSImage(contentsOf: themesRoot.appendingPathComponent("ui/icon.png")) { NSApp.applicationIconImage = i }
       buildMainMenu { [weak self] in self?.appWindow.show(page: "about") }
       // opened by hand (not at login): show the window
+      if Mover.offerIfNeeded() { return }                    // opened from Downloads: move to Applications first, then carry on from there
       if !args.contains("--background") || !Cfg.d.bool(forKey: "welcomed") { Cfg.d.set(true, forKey: "welcomed"); appWindow.show() }
     } else { Bench.start(self) }
     if args.contains("--usage") {           // log what the menu shows, every 2 s
@@ -984,8 +1011,19 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     let m = NSMenu(); m.delegate = self
     let mono = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-    for (i, title) in ["CPU  –", "GPU  –", "Memory  –"].enumerated() {
-      let it = NSMenuItem(title: title, action: nil, keyEquivalent: ""); it.isEnabled = false; it.tag = 900 + i
+    switch updater.state {
+    case .ready(let v):
+      let u = ClosureItem("Restart to Update to \(v)") { [weak self] in self?.updater.install() }
+      u.attributedTitle = NSAttributedString(string: "Restart to Update to \(v)", attributes: [.font: NSFont.menuFont(ofSize: 0).withWeight(.semibold), .foregroundColor: NSColor.controlAccentColor])
+      m.addItem(u); m.addItem(.separator())
+    case .downloading(let v):
+      let u = NSMenuItem(title: "Downloading Tidewall \(v)…", action: nil, keyEquivalent: ""); u.isEnabled = false; m.addItem(u); m.addItem(.separator())
+    case .blocked(let v, let why):
+      let u = ClosureItem("Download Tidewall \(v)…") { NSWorkspace.shared.open(Updater.releasesPage) }; u.toolTip = why; m.addItem(u); m.addItem(.separator())
+    default: break
+    }
+    for (i, title) in ["CPU  –", "GPU  –", "Memory  –", ""].enumerated() {
+      let it = NSMenuItem(title: title, action: nil, keyEquivalent: ""); it.isEnabled = false; it.tag = 900 + i; it.isHidden = title.isEmpty
       it.attributedTitle = NSAttributedString(string: title, attributes: [.font: mono]); m.addItem(it)
     }
     m.addItem(.separator())
@@ -1015,6 +1053,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let li = ClosureItem("Open at login") { if let why = LoginItem.set(!LoginItem.enabled) { let a = NSAlert(); a.messageText = why; a.runModal() }; self.buildMenu(); self.appWindow.pushState() }
     li.state = LoginItem.enabled ? .on : .off; m.addItem(li)
     m.addItem(.separator())
+    m.addItem(ClosureItem("Check for Updates…") { [weak self] in self?.updater.check(manual: true) })
     m.addItem(ClosureItem("Quit Tidewall") { NSApp.terminate(nil) })
     status.menu = m
   }
@@ -1167,11 +1206,23 @@ enum Bench {
   }
 }
 
-// one Tidewall at a time: opening a second copy shows the running one's window instead
-if !benchMode && !args.contains("--ui-only"), let id = Bundle.main.bundleIdentifier,
-   NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { $0.processIdentifier != getpid() }) {
-  DistributedNotificationCenter.default().postNotificationName(.init("app.tidewall.show"), object: nil, userInfo: nil, deliverImmediately: true)
-  exit(0)
+// one Tidewall at a time: opening a second copy shows the running one's window instead, unless this copy is newer
+// (you downloaded an update by hand): then the old one is asked to quit and this one carries on
+if !benchMode && !args.contains("--ui-only"), let id = Bundle.main.bundleIdentifier {
+  let others = NSRunningApplication.runningApplications(withBundleIdentifier: id).filter { $0.processIdentifier != getpid() }
+  if !others.isEmpty {
+    let ver = { (a: NSRunningApplication) in a.bundleURL.flatMap { NSDictionary(contentsOf: $0.appendingPathComponent("Contents/Info.plist"))?["CFBundleShortVersionString"] as? String } ?? "0" }
+    if others.allSatisfy({ Updater.newer(Cfg.version, than: ver($0)) }) {
+      log("[launch] replacing the running Tidewall \(others.map(ver).joined(separator: ", ")) with \(Cfg.version)")
+      others.forEach { _ = $0.terminate() }
+      let until = Date().addingTimeInterval(8)
+      while others.contains(where: { !$0.isTerminated }) && Date() < until { RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+      others.filter { !$0.isTerminated }.forEach { _ = $0.forceTerminate() }
+    } else {
+      DistributedNotificationCenter.default().postNotificationName(.init("app.tidewall.show"), object: nil, userInfo: nil, deliverImmediately: true)
+      exit(0)
+    }
+  }
 }
 let app = NSApplication.shared
 let delegate = App()
@@ -1215,5 +1266,365 @@ struct Choreo {
   func pinCursor(_ t: Double) {
     let h = NSScreen.screens.first?.frame.height ?? 0, p = cursor(t) ?? CGPoint(x: -4000, y: -4000)
     SimInput.point = NSPoint(x: p.x, y: h - p.y)
+  }
+}
+
+// MARK: - Updates
+
+/// Tidewall keeps itself up to date from its GitHub releases, without an Apple Developer ID (the way VerbaSuper does):
+///  1. Each release carries `update.json` beside the zip: version, zip URL, size, SHA-256, minimum macOS, notes, and an
+///     Ed25519 signature over all of them (tools/update-sign.swift; CI signs in a job that runs no build scripts).
+///  2. The app reads releases/latest/download/update.json on launch and every 6 h. Nothing in it is used until the
+///     signature checks out against one of the public keys below. A newer version is downloaded, checked again
+///     (size, SHA-256, signature, bundle id, version, code signature) and unpacked beside the app (same volume).
+///  3. It's swapped in with plain renames and relaunched: by you ("Restart to Update"), or by itself while the screen
+///     is locked. A detached helper waits for the new copy to report it came up; if it doesn't within 20 s the old
+///     copy is put back, and that version isn't auto-installed again.
+/// Files the app downloads itself carry no quarantine flag, so only the very first install meets Gatekeeper.
+/// Development builds (build.sh without RELEASE=1) never update themselves, and only they honour the TIDEWALL_UPDATE_*
+/// test variables.
+final class Updater {
+  enum Staged { case ok(URL, String), bad(String) }
+  #if TIDEWALL_DEV
+  static let devBuild = true
+  #else
+  static let devBuild = false
+  #endif
+  /// Test hooks, development builds only
+  static let env: [String: String] = devBuild ? ProcessInfo.processInfo.environment.filter { $0.key.hasPrefix("TIDEWALL_UPDATE_") } : [:]
+  /// The release-signing keys' public halves: the one CI signs with, and an offline backup (kept off GitHub) to sign
+  /// with if the first is ever lost or has to be retired. Removing a key strands installs that only trust it.
+  static let publicKeys = ["jjgDHnSJpmtt4178OEDmCcY5tCnQ3yryG8fnEPBxvyE=", "KsHXWESHYkG6q4hV1qc6fYixqZj5UcoS/34N+7Gwycw="]
+  static let feed = URL(string: env["TIDEWALL_UPDATE_FEED"] ?? "https://github.com/Keshav-Madhav/tidewall/releases/latest/download/update.json")!
+  static let releasesPage = URL(string: "https://github.com/Keshav-Madhav/tidewall/releases/latest")!
+  enum State: Equatable { case idle, checking, downloading(String), ready(String), blocked(String, String), skipped(String), upToDate, failed(String), off(String) }
+  private(set) var state = State.idle { didSet { if state != oldValue { onChange?() } } }
+  var onChange: (() -> Void)?
+  var isAway: () -> Bool = { false }
+  private var staged: URL?, stagedHash = "", lastCheck: Date?, timer: Timer?, notes = ""
+  private let fm = FileManager.default
+  /// downloads (Caches) and the helper's notes to the next launch
+  private let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("app.tidewall")
+  private var dl: URL { caches.appendingPathComponent("update") }
+  private var alive: URL { caches.appendingPathComponent("update-alive") }
+  private var result: URL { caches.appendingPathComponent("update-result") }
+  private var pidFile: URL { caches.appendingPathComponent("update-pid") }
+
+  /// First thing at launch: this copy's pid, so an install's helper can stop exactly this process if it hangs
+  func launching() {
+    try? fm.createDirectory(at: caches, withIntermediateDirectories: true)
+    try? "\(getpid())".write(to: pidFile, atomically: true, encoding: .utf8)
+  }
+  /// The wallpapers are up: an install's helper waits for this before it lets go of the previous copy
+  func cameUp() { try? Cfg.version.write(to: alive, atomically: true, encoding: .utf8) }
+  /// unpacked updates live beside the app, so every step of the swap is a rename on one volume
+  private var work: URL { Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(".tidewall-update-\(getuid())") }
+
+  /// why updates are off altogether (nil = they're on)
+  var off: String? { Self.devBuild && Self.env["TIDEWALL_UPDATE_FEED"] == nil ? "This is a development build; it doesn't update itself." : nil }
+
+  func start() {
+    // what the last install's helper found
+    if let r = try? String(contentsOf: result, encoding: .utf8) {
+      let parts = r.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ").map(String.init)
+      if parts.count == 2, parts[0] != "ok" { failed(parts[1]); log("[update] installing \(parts[1]) didn't work (\(parts[0])); keeping \(Cfg.version)") }
+      else if parts.count == 2 { log("[update] \(parts[1]) installed") }
+      try? fm.removeItem(at: result)
+    }
+    // leftovers from an earlier update, cleared before the first check (45 s) and after any helper is done with them
+    // (it waits for update-alive, which this copy writes as soon as it has launched)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
+      guard let self, self.staged == nil else { return }
+      switch self.state { case .checking, .downloading, .ready: return; default: break }
+      try? self.fm.removeItem(at: self.work); try? self.fm.removeItem(at: self.dl); try? self.fm.removeItem(at: self.alive)
+      try? self.fm.removeItem(at: self.pidFile)
+    }
+    if let why = off { state = .off(why); return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + (Self.env["TIDEWALL_UPDATE_FEED"] != nil ? 8 : 45)) { [weak self] in self?.check(manual: false) }
+    timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.check(manual: false) }
+  }
+
+  /// Why this copy can't replace itself (nil = it can)
+  var cantInstall: String? {
+    let app = Bundle.main.bundleURL, parent = app.deletingLastPathComponent().path
+    if app.path.contains("/AppTranslocation/") { return "Move Tidewall to your Applications folder to get updates." }
+    if !fm.isWritableFile(atPath: parent) { return "Tidewall can't replace itself in \(parent)." }
+    return nil
+  }
+
+  /// versions whose install didn't come up: not installed automatically again
+  private func failed(_ v: String) { var f = Cfg.d.dictionary(forKey: "update.failed") as? [String: Int] ?? [:]; f[v, default: 0] += 1; Cfg.d.set(f, forKey: "update.failed") }
+  private func hasFailed(_ v: String) -> Bool { ((Cfg.d.dictionary(forKey: "update.failed") as? [String: Int])?[v] ?? 0) > 0 }
+
+  /// For the app window: where things stand
+  var status: [String: Any] {
+    var o: [String: Any] = ["auto": Cfg.autoUpdate]
+    switch state {
+    case .idle: o["s"] = "idle"
+    case .checking: o["s"] = "checking"
+    case .downloading(let v): o["s"] = "downloading"; o["v"] = v
+    case .ready(let v): o["s"] = "ready"; o["v"] = v
+    case .blocked(let v, let why): o["s"] = "ready"; o["v"] = v; o["blocked"] = why
+    case .upToDate: o["s"] = "current"
+    case .skipped(let v): o["s"] = "skipped"; o["v"] = v
+    case .failed(let e): o["s"] = "failed"; o["err"] = e
+    case .off(let why): o["s"] = "off"; o["err"] = why
+    }
+    if let d = lastCheck { o["checked"] = Int(d.timeIntervalSince1970) }
+    return o
+  }
+
+  static func newer(_ a: String, than b: String) -> Bool {
+    let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
+    for i in 0..<max(x.count, y.count) { let p = i < x.count ? x[i] : 0, q = i < y.count ? y[i] : 0; if p != q { return p > q } }
+    return false
+  }
+
+  func check(manual: Bool, fromWindow: Bool = false) {
+    if let why = off { state = .off(why); if manual { tell("Updates are off", why) }; return }
+    switch state {
+    case .checking, .downloading: return
+    case .ready(let v): if manual { tell("Tidewall \(v) is ready", "Choose “Restart to Update to \(v)” in the menu bar.") }; return
+    default: break }
+    guard manual || fromWindow || Cfg.autoUpdate else { return }
+    state = .checking
+    var req = URLRequest(url: Self.feed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+    req.setValue("Tidewall/\(Cfg.version)", forHTTPHeaderField: "User-Agent")
+    URLSession.shared.dataTask(with: req) { [weak self] data, resp, err in DispatchQueue.main.async {
+      guard let self else { return }
+      self.lastCheck = Date()
+      let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+      guard err == nil, code == 200, let data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let v = o["version"] as? String, let urlS = o["url"] as? String, let url = URL(string: urlS), let sha = o["sha256"] as? String,
+            let sig = (o["signature"] as? String).flatMap({ Data(base64Encoded: $0) }), let size = (o["size"] as? NSNumber)?.intValue,
+            let minOS = o["minimumSystemVersion"] as? String, let notes = o["notes"] as? String else {
+        let why = err?.localizedDescription ?? (code == 404 ? "no update information was found" : "the update feed answered \(code)")
+        log("[update] check failed: \(why)"); self.state = .failed(why)
+        if manual { self.tell("Couldn’t check for updates", "\(why.prefix(1).uppercased() + why.dropFirst()). You have version \(Cfg.version).") }; return }
+      // nothing in the feed is trusted until its signature checks out (the zip itself is checked again after download)
+      guard Self.signatureValid(sig, v, sha, size, minOS, notes) else {
+        log("[update] the update feed's signature is invalid; ignoring it"); self.state = .failed("the update information isn't signed by Tidewall")
+        if manual { self.tell("Couldn’t check for updates", "The update information wasn’t signed by Tidewall.") }; return }
+      let os = ProcessInfo.processInfo.operatingSystemVersion
+      guard Self.newer(v, than: Cfg.version) else { self.state = .upToDate; if manual { self.tell("Tidewall is up to date", "You have version \(Cfg.version), the newest.") }; return }
+      guard !Self.newer(minOS, than: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)") else {
+        self.state = .failed("Tidewall \(v) needs macOS \(minOS)"); if manual { self.tell("Tidewall \(v) needs macOS \(minOS)", "This Mac stays on \(Cfg.version).") }; return }
+      guard url.scheme == "https" || Self.env["TIDEWALL_UPDATE_FEED"] != nil else { self.state = .failed("insecure update URL"); return }
+      if let why = self.cantInstall {        // don't fetch what can't be installed: point at the download instead
+        self.state = .blocked(v, why); if manual { self.tell("Tidewall \(v) is available", "\(why) You can download it from GitHub.") }; return }
+      if !manual && !fromWindow && self.hasFailed(v) { log("[update] \(v) failed to install before; waiting for a newer one (or Check for Updates…)"); self.state = .skipped(v); return }
+      self.notes = notes                                  // plain text: never render it as HTML
+      log("[update] \(v) is available (have \(Cfg.version)); downloading")
+      if manual { self.tell("Tidewall \(v) is available", "It’s downloading now. When it’s ready, choose “Restart to Update” in the menu bar.") }
+      self.download(v, url, sha, sig, size: size, minOS: minOS, notes: notes)
+    } }.resume()
+  }
+
+  /// The release signature: over every field the app acts on (tools/update-sign.swift makes the same message)
+  static func signatureValid(_ sig: Data, _ v: String, _ sha: String, _ size: Int, _ minOS: String, _ notes: String) -> Bool {
+    let n = SHA256.hash(data: Data(notes.utf8)).map { String(format: "%02x", $0) }.joined()
+    let msg = Data("tidewall-update-v1\n\(v)\n\(sha.lowercased())\n\(size)\n\(minOS)\n\(n)".utf8)
+    return publicKeys.contains { k in
+      Data(base64Encoded: k).flatMap { try? Curve25519.Signing.PublicKey(rawRepresentation: $0) }?.isValidSignature(sig, for: msg) ?? false }
+  }
+
+  private func download(_ v: String, _ url: URL, _ sha: String, _ sig: Data, size: Int, minOS: String, notes: String) {
+    state = .downloading(v)
+    URLSession.shared.downloadTask(with: url) { [weak self] tmp, resp, err in
+      guard let self else { return }
+      // verify and unpack off the main thread (hashing ~130 MB takes a moment)
+      let r: Staged = {
+        guard let tmp, err == nil, (resp as? HTTPURLResponse)?.statusCode == 200 else { return .bad(err?.localizedDescription ?? "download failed") }
+        return self.verifyAndStage(tmp, v, sha, sig, size: size, minOS: minOS, notes: notes)
+      }()
+      DispatchQueue.main.async {
+        switch r {
+        case .ok(let app, let hash): self.staged = app; self.stagedHash = hash; self.state = .ready(v); log("[update] \(v) is ready to install"); self.away()
+        case .bad(let why): log("[update] \(v) rejected: \(why)"); self.state = .failed(why)
+        }
+      }
+    }.resume()
+  }
+
+  private func verifyAndStage(_ zip: URL, _ v: String, _ sha: String, _ sig: Data, size: Int, minOS: String, notes: String) -> Staged {
+    guard (try? fm.attributesOfItem(atPath: zip.path))?[.size] as? Int == size else { return .bad("size mismatch") }
+    guard let h = FileHandle(forReadingAtPath: zip.path) else { return .bad("can't read the download") }
+    var hasher = SHA256()
+    while case let d = h.readData(ofLength: 1 << 20), !d.isEmpty { hasher.update(data: d) }
+    try? h.close()
+    let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    guard digest == sha.lowercased() else { return .bad("checksum mismatch") }
+    guard Self.signatureValid(sig, v, sha, size, minOS, notes) else { return .bad("bad signature: not a Tidewall release") }
+    let stage = work.appendingPathComponent(v)
+    try? fm.removeItem(at: stage); try? fm.createDirectory(at: stage, withIntermediateDirectories: true)
+    guard run("/usr/bin/ditto", ["-x", "-k", zip.path, stage.path]).0 == 0 else { return .bad("couldn't unpack the update") }
+    let app = stage.appendingPathComponent("Tidewall.app")
+    guard let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
+          info["CFBundleIdentifier"] as? String == "app.tidewall", info["CFBundleShortVersionString"] as? String == v else { return .bad("the update isn't Tidewall \(v)") }
+    _ = run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", app.path])
+    guard let hash = codeHash(app) else { return .bad("the update's code signature is broken") }
+    return .ok(app, hash)
+  }
+
+  /// The bundle's code-directory hash, if its signature (which seals every file in it) verifies; nil if it doesn't
+  private func codeHash(_ app: URL) -> String? {
+    guard run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path]).0 == 0 else { return nil }
+    let out = run("/usr/bin/codesign", ["-dv", "--verbose=4", app.path]).1
+    return out.split(separator: "\n").first { $0.hasPrefix("CDHash=") }.map(String.init)
+  }
+
+  @discardableResult private func run(_ tool: String, _ a: [String]) -> (Int32, String) {
+    let p = Process(), pipe = Pipe(); p.executableURL = URL(fileURLWithPath: tool); p.arguments = a
+    p.standardOutput = pipe; p.standardError = pipe
+    do { try p.run() } catch { return (-1, "") }
+    let out = pipe.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit(); return (p.terminationStatus, String(data: out, encoding: .utf8) ?? "")
+  }
+
+  /// The screen locked or the displays slept: a good moment to install, if updates are automatic
+  func away() {
+    guard case .ready(let v) = state, Cfg.autoUpdate, cantInstall == nil, !hasFailed(v),       // a version that failed: only by hand
+          isAway() || Self.env["TIDEWALL_UPDATE_INSTALL_NOW"] == "1" else { return }
+    log("[update] installing while you're away"); install()
+  }
+
+  /// Swap the new version in and relaunch, through a detached helper: it waits for this process to exit, renames the
+  /// old app aside and the new one into place, opens it, and waits up to 20 s for it to report it came up. If it
+  /// doesn't, it puts the old app back and opens that; the next launch remembers the version failed.
+  func install() {
+    if case .blocked = state { NSWorkspace.shared.open(Self.releasesPage); return }
+    guard case .ready(let v) = state, let new = staged else { return }
+    if let why = cantInstall { tell("Can’t update here", why); return }
+    // the unpacked copy waited, maybe for hours: make sure it's exactly what was verified
+    guard codeHash(new) == stagedHash, !stagedHash.isEmpty else {
+      log("[update] the downloaded \(v) changed since it was checked; discarding it")
+      staged = nil; try? fm.removeItem(at: work); state = .failed("the downloaded update changed; it will be fetched again"); return }
+    let cur = Bundle.main.bundleURL.path, prev = work.appendingPathComponent("previous.app").path
+    let q = shQuote
+    // with the login item on, relaunch through it, so launchd keeps restarting Tidewall if it ever crashes
+    // (only if launchd's loaded copy of the job runs exactly this app: it keeps the definition it read at login)
+    let job = "gui/$(id -u)/\(LoginItem.label)"
+    let viaLogin = LoginItem.enabled
+      ? "[ \"$(launchctl print \(job) 2>/dev/null | awk '/^\\tprogram = /{print substr($0, index($0, \"= \") + 2); exit}')\" = \"$EXE\" ] && launchctl kickstart \(job) >/dev/null 2>&1 || " : ""
+    let script = """
+    APP=\(q(cur)); NEW=\(q(new.path)); PREV=\(q(prev)); OK=\(q(alive.path)); RES=\(q(result.path)); PIDF=\(q(pidFile.path)); V=\(q(v))
+    EXE="$APP/Contents/MacOS/Tidewall"
+    launch() { \(viaLogin)/usr/bin/open "$APP" --args --background --updated-from \(q(Cfg.version)); }
+    # stop every Tidewall running from $APP: the pid it wrote, and any other whose executable is exactly $EXE
+    stop() { for sig in TERM TERM TERM KILL; do
+        ps=""; p=$(cat "$PIDF" 2>/dev/null); [ -n "$p" ] && [ "$(ps -o comm= -p "$p" 2>/dev/null)" = "$EXE" ] && ps="$p"
+        for q in $(pgrep -x Tidewall); do [ "$(ps -o comm= -p "$q" 2>/dev/null)" = "$EXE" ] && ps="$ps $q"; done
+        [ -z "$ps" ] && return 0
+        kill -$sig $ps 2>/dev/null; sleep 1; done; }
+    while kill -0 \(getpid()) 2>/dev/null; do sleep 0.2; done
+    rm -rf "$PREV"; rm -f "$OK" "$PIDF"
+    if ! mv "$APP" "$PREV"; then echo "failed $V" > "$RES"; launch; exit 0; fi
+    if ! mv "$NEW" "$APP"; then mv "$PREV" "$APP"; echo "failed $V" > "$RES"; launch; exit 0; fi
+    launch
+    i=0; while [ $i -lt 300 ]; do
+      if [ "$(cat "$OK" 2>/dev/null)" = "$V" ]; then rm -rf "$PREV"; echo "ok $V" > "$RES"; exit 0; fi
+      sleep 0.2; i=$((i+1)); done
+    # it didn't come up within 60 s: stop it, put the previous copy back, open that
+    stop
+    if mv "$APP" "$APP.failed"; then
+      if mv "$PREV" "$APP"; then rm -rf "$APP.failed"; else mv "$APP.failed" "$APP"; fi
+    fi
+    echo "rolledback $V" > "$RES"; launch
+    """
+    guard spawnDetached(script) else { log("[update] couldn't start the installer"); state = .failed("couldn't start the installer"); return }
+    log("[update] installing \(v); relaunching")
+    NSApp.terminate(nil)
+  }
+
+  private func tell(_ title: String, _ body: String) {
+    NSApp.activate(ignoringOtherApps: true)
+    let a = NSAlert(); a.messageText = title; a.informativeText = body; a.icon = NSApp.applicationIconImage; a.runModal()
+  }
+}
+
+/// Runs a /bin/sh script that outlives this process: its own session (so launchd tidying up the login item's process
+/// group can't take it down) and a clean environment (nothing of ours leaks into whatever it opens).
+func spawnDetached(_ script: String) -> Bool {
+  var attr: posix_spawnattr_t? = nil; posix_spawnattr_init(&attr)
+  posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETSID))
+  var pid: pid_t = 0
+  let argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(script), nil]
+  let envp: [UnsafeMutablePointer<CChar>?] = ["PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=\(NSHomeDirectory())", "USER=\(NSUserName())", "TMPDIR=\(NSTemporaryDirectory())"]
+    .map { (e: String) -> UnsafeMutablePointer<CChar>? in strdup(e) } + [nil]
+  let rc = posix_spawn(&pid, "/bin/sh", nil, &attr, argv, envp)
+  posix_spawnattr_destroy(&attr); argv.forEach { free($0) }; envp.forEach { free($0) }
+  return rc == 0
+}
+func shQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
+// MARK: - Move to Applications
+
+/// Opened from Downloads (or anywhere outside an Applications folder), Tidewall offers once to move itself there:
+/// only from there can it open at login and update itself. Until a downloaded app is moved, macOS runs it from a
+/// temporary read-only copy (App Translocation), so the original is found through the Security framework.
+enum Mover {
+  static func inApplications(_ app: URL) -> Bool {
+    let parent = app.deletingLastPathComponent().path
+    return ["/Applications", NSHomeDirectory() + "/Applications"].contains { parent == $0 || parent.hasPrefix($0 + "/") }
+  }
+  /// opens `app` once this copy has quit; --moved stops the opened copy from offering to move again
+  static func relaunch(_ app: URL) -> Bool {
+    guard spawnDetached("while kill -0 \(getpid()) 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open \(shQuote(app.path)) --args --moved") else { return false }
+    NSApp.terminate(nil); return true
+  }
+  static func unquarantine(_ app: URL) {
+    let x = Process(); x.executableURL = URL(fileURLWithPath: "/usr/bin/xattr"); x.arguments = ["-dr", "com.apple.quarantine", app.path]
+    try? x.run(); x.waitUntilExit()
+  }
+  /// where the app really is (not the translocated copy it's running from)
+  static var original: URL {
+    let u = Bundle.main.bundleURL
+    guard u.path.contains("/AppTranslocation/"), let h = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW),
+          let f = dlsym(h, "SecTranslocateCreateOriginalPathForURL") else { return u }
+    typealias Fn = @convention(c) (CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<CFURL>?
+    return (unsafeBitCast(f, to: Fn.self)(u as CFURL, nil)?.takeRetainedValue() as URL?) ?? u
+  }
+  /// true when it's moving: this copy then quits and the moved one opens
+  static func offerIfNeeded() -> Bool {
+    let test = Updater.env["TIDEWALL_UPDATE_MOVE_TEST"] == "1"        // development builds only: no question asked
+    guard !args.contains("--moved"), !Updater.devBuild || test else { return false }
+    let fm = FileManager.default, src = original
+    // already in Applications, but still run from a translocated copy (unzipped there rather than moved by Finder):
+    // clear the quarantine flag you've already approved and open the real one, once
+    if inApplications(src) {
+      guard src != Bundle.main.bundleURL else { return false }
+      unquarantine(src); log("[move] reopening \(src.path) from where it is"); return relaunch(src)
+    }
+    guard test || !Cfg.d.bool(forKey: "moveDeclined") else { return false }
+    let apps = Updater.env["TIDEWALL_UPDATE_MOVE_DEST"].map { URL(fileURLWithPath: $0) }
+      ?? (fm.isWritableFile(atPath: "/Applications") ? URL(fileURLWithPath: "/Applications") : fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications"))
+    let dest = apps.appendingPathComponent("Tidewall.app")
+    // already installed, and at least as new (say an old download opened by mistake): use that one, never downgrade it
+    if let have = NSDictionary(contentsOf: dest.appendingPathComponent("Contents/Info.plist"))?["CFBundleShortVersionString"] as? String,
+       !Updater.newer(Cfg.version, than: have) {
+      log("[move] Tidewall \(have) is already in \(apps.path); opening that"); return relaunch(dest)
+    }
+    if !test {
+      NSApp.activate(ignoringOtherApps: true)
+      let a = NSAlert(); a.icon = NSApp.applicationIconImage
+      a.messageText = "Move Tidewall to your Applications folder?"
+      a.informativeText = "From there it can open when you log in and keep itself up to date. You only do this once."
+      a.addButton(withTitle: "Move to Applications"); a.addButton(withTitle: "Not Now")
+      guard a.runModal() == .alertFirstButtonReturn else { Cfg.d.set(true, forKey: "moveDeclined"); return false }
+    }
+    do {
+      try fm.createDirectory(at: apps, withIntermediateDirectories: true)
+      if fm.fileExists(atPath: dest.path) {                         // an older Tidewall; anything else named that is left alone
+        guard NSDictionary(contentsOf: dest.appendingPathComponent("Contents/Info.plist"))?["CFBundleIdentifier"] as? String == "app.tidewall" else {
+          throw NSError(domain: "Tidewall", code: 1, userInfo: [NSLocalizedDescriptionKey: "Something else called Tidewall.app is already in \(apps.path)."]) }
+        try fm.trashItem(at: dest, resultingItemURL: nil)
+      }
+      try fm.copyItem(at: src, to: dest)
+    } catch {
+      Cfg.d.set(true, forKey: "moveDeclined")                     // don't ask at every launch; Settings ▸ Updates explains
+      let a = NSAlert(); a.messageText = "Couldn’t move Tidewall"; a.informativeText = error.localizedDescription; a.runModal(); return false }
+    unquarantine(dest)          // you've opened it once already (Gatekeeper is done with it): no second translocation
+    try? fm.trashItem(at: src, resultingItemURL: nil)                 // the copy in Downloads
+    log("[move] moved to \(dest.path)"); return relaunch(dest)
   }
 }

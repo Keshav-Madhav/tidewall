@@ -1,25 +1,80 @@
 name: Release
+# Runs when tools/release.sh pushes a version tag. Two jobs, so the signing key never shares a machine with the build:
+#   build:   builds the release app, zips it, and checks the zip exactly the way the app's updater will. No secrets.
+#   publish: (environment "release": the key lives there, and only v* tags may use it) signs update.json with
+#            tools/update-sign.swift, verifies it against the app's public keys, and publishes the release. It runs
+#            none of the repo's build scripts, and keeps no git credentials on disk.
+# Installed copies read releases/latest/download/update.json, so publishing the release IS shipping the update.
 on:
   push:
     tags: ['v*']
 permissions:
-  contents: write
+  contents: read
 jobs:
-  release:
+  build:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
         with:
-          fetch-depth: 0
-      - name: Build Tidewall.app
+          persist-credentials: false
+      - name: Check the version
         run: |
-          sed -i '' "s/^VERSION=.*/VERSION=${GITHUB_REF_NAME#v}/" build.sh
-          ./build.sh
-      - name: Zip
-        run: ditto -c -k --keepParent build/Tidewall.app "Tidewall-${GITHUB_REF_NAME}.zip"
+          v="${GITHUB_REF_NAME#v}"
+          [ "$(tr -d ' \n' < VERSION)" = "$v" ] || { echo "::error::tag $GITHUB_REF_NAME but VERSION says $(cat VERSION)"; exit 1; }
+          grep -q "^## \[$v\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no ## [$v] section"; exit 1; }
+      - name: Build the release app
+        run: RELEASE=1 ./build.sh && bash tools/check-pages.sh
+      - name: Zip, and check it the way the updater will
+        run: |
+          v="${GITHUB_REF_NAME#v}"; z="Tidewall-${GITHUB_REF_NAME}.zip"
+          ditto -c -k --keepParent build/Tidewall.app "$z"
+          mkdir check && ditto -x -k "$z" check
+          a=check/Tidewall.app
+          [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' $a/Contents/Info.plist)" = app.tidewall ] || { echo "::error::bundle id"; exit 1; }
+          [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' $a/Contents/Info.plist)" = "$v" ] || { echo "::error::bundle version"; exit 1; }
+          codesign --verify --deep --strict "$a" || { echo "::error::code signature doesn't verify after the zip round trip"; exit 1; }
+          lipo -archs $a/Contents/MacOS/Tidewall | grep -q arm64 && lipo -archs $a/Contents/MacOS/Tidewall | grep -q x86_64 || { echo "::error::not universal"; exit 1; }
+          awk -v v="$v" '$0 ~ "^## \\[?"v {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
+        with:
+          name: release
+          path: |
+            Tidewall-${{ github.ref_name }}.zip
+            notes.md
+          retention-days: 3
+
+  publish:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2 (only the signer and the public keys are used)
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/update-sign.swift
+            main.swift
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4.3.0
+        with:
+          name: release
+      - name: Sign the update
+        env:
+          TIDEWALL_UPDATE_KEY: ${{ secrets.TIDEWALL_UPDATE_KEY }}
+        run: |
+          [ -n "$TIDEWALL_UPDATE_KEY" ] || { echo "::error::the TIDEWALL_UPDATE_KEY secret is missing from the release environment"; exit 1; }
+          v="${GITHUB_REF_NAME#v}"; z="Tidewall-${GITHUB_REF_NAME}.zip"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$z"
+          swift tools/update-sign.swift sign "$z" "$v" "$url" notes.md > update.json
+          pub=$(sed -n 's/.*static let publicKeys = \["\([^"]*\)".*/\1/p' main.swift)
+          swift tools/update-sign.swift verify "$z" update.json "$pub"   # the app will accept it
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes=$(awk -v v="${GITHUB_REF_NAME#v}" '$0 ~ "^## \\[?"v {f=1; next} /^## / {f=0} f' CHANGELOG.md)
-          gh release create "$GITHUB_REF_NAME" "Tidewall-${GITHUB_REF_NAME}.zip" --title "Tidewall ${GITHUB_REF_NAME#v}" --notes "${notes:-See CHANGELOG.md}"
+          gh release create "$GITHUB_REF_NAME" "Tidewall-${GITHUB_REF_NAME}.zip" update.json -R "$GITHUB_REPOSITORY" \
+            --title "Tidewall ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag

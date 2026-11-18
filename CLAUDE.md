@@ -44,6 +44,37 @@ for a window moving) and read the image. `--bench` prints `window.__dbg()` every
 Run benches one at a time; several at once skew each other. Quit any running Tidewall before running `./tidewall`
 from source, or two wallpapers stack.
 
+## Releasing (and how installed copies update)
+
+1. Add a `## [X.Y.Z]` section to `CHANGELOG.md` (it becomes the release notes and the update's notes). Commit, push.
+2. `tools/release.sh X.Y.Z`: checks main is clean and in sync, builds, writes `VERSION`, commits, tags `vX.Y.Z`, pushes.
+3. `.github/workflows/release.yml` builds, zips, signs `update.json` with the `TIDEWALL_UPDATE_KEY` secret, verifies it
+   against the app's public key, and publishes the release. Installed copies read
+   `releases/latest/download/update.json` (launch + every 6 h), download, verify (size, SHA-256, Ed25519, bundle id,
+   version, codesign), and swap themselves in while the screen is locked or on "Restart to Update".
+
+- `VERSION` is the only place the version lives (build.sh reads it). `RELEASE=1 ./build.sh` makes a release build;
+  a plain `./build.sh` is a development build (compiled with `-D TIDEWALL_DEV`): it never updates itself and is the only
+  kind that honours the `TIDEWALL_UPDATE_*` test variables.
+- The key lives in the `release` environment (v* tags only). The publish job runs no repo build scripts. The
+  "Protect release tags" ruleset means a pushed `vX.Y.Z` tag can't be moved or deleted: a broken release is fixed
+  with the next version, never by re-tagging.
+- `Mover` (end of main.swift): opened outside an Applications folder, the app offers once to move itself there
+  (resolves App Translocation, never downgrades an installed copy). Release builds only; test it in a dev build with
+  `TIDEWALL_UPDATE_MOVE_TEST=1 TIDEWALL_UPDATE_MOVE_DEST=/some/dir`.
+- `log` is a shell function on the maintainer's Mac: read the system log with `/usr/bin/log show …`.
+- `Updater.publicKeys` = [CI key, offline backup key]. CI verifies against the first. If you ever sign with the backup,
+  change that `sed` in release.yml.
+- **Never change `Updater.publicKey` or lose the private key**: every existing install would refuse later updates.
+  The private key is the repo secret; keep an offline backup (`tools/update-sign.swift keygen` made it once).
+- Test an update locally without publishing: build a higher version, sign it (`TIDEWALL_UPDATE_KEY=… swift
+  tools/update-sign.swift sign …`), serve it with `python3 -m http.server`, then run an installed copy with
+  `TIDEWALL_UPDATE_FEED=http://127.0.0.1:PORT/update.json TIDEWALL_UPDATE_INSTALL_NOW=1` (a development build, with a
+  throwaway key swapped into `publicKeys`, so you never need the real one locally). The swap is a detached helper (its
+  own session and a clean environment). It renames the old app to `.tidewall-update/previous.app` beside it, opens the
+  new one and waits 20 s for `~/Library/Caches/app.tidewall/update-alive`. If that doesn't arrive, it rolls back and
+  writes `update-result`, which the next launch reads (`update.failed` in defaults).
+
 ## Rules the project lives by
 
 - **Cost first.** It runs all day. A theme draws its scene once and redraws only when windows change; moving things

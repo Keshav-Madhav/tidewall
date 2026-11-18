@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.2]
+
+- **Tidewall now updates itself.** It checks GitHub for new versions (at launch and every 6 hours), downloads them in
+  the background, verifies each one is a genuine signed Tidewall release, and installs it while your screen is locked.
+  Or choose **Restart to Update** in the menu bar. Turn it off in Settings ▸ Updates; **Check for Updates…** is in the
+  menu. *Coming from 1.0.1? Download this one by hand and open it: it replaces the running copy and offers to move itself to Applications. Every update after this installs itself.*
+- **Opened from Downloads, Tidewall offers to move itself to Applications** (where it can open at login and update
+  itself), then carries on from there. It never replaces a newer copy already installed.
+- The menu-bar CPU and memory now show what the wallpaper costs; the Tidewall window's own page is listed apart (and
+  freed when you close it). Reading GPU use is ~20× cheaper, and the window's meters stop while it's hidden.
+
 ## [1.0.1]
 
 - A new menu-bar icon: a window with a tide curling inside it, after the app icon. Clear at menu-bar size in light

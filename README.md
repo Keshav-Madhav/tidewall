@@ -39,14 +39,20 @@ can have its own theme.
 
 ## Install
 
-1. Download `Tidewall-<version>.zip` from [Releases](../../releases) and unzip it.
-2. Move **Tidewall.app** to your Applications folder.
-3. Open it. The first time, macOS will say it can't check the app for malicious software, because Tidewall isn't
-   signed with a paid Apple developer certificate. Open **System Settings ▸ Privacy & Security**, scroll down and
-   click **Open Anyway**, then confirm. You only need to do this once. (On macOS 14 you can also right-click the app
-   and choose **Open**; macOS 15 and later removed that shortcut.)
+1. Download `Tidewall-<version>.zip` from [Releases](../../releases/latest) and double-click it to unzip.
+2. Open **Tidewall.app**. The first time, macOS says it can't check the app for malicious software, because Tidewall
+   isn't signed with a paid Apple developer certificate. Open **System Settings ▸ Privacy & Security**, scroll down,
+   click **Open Anyway** and confirm. (On macOS 14 you can instead right-click the app and choose **Open**; macOS 15
+   and later removed that shortcut.)
+3. Tidewall offers to move itself to your Applications folder: choose **Move to Applications**. That's it.
+
+You only see steps 2 and 3 once. After that, updates install themselves.
 
 Requires macOS 14 Sonoma or later, on Apple silicon or Intel.
+
+**Updates install themselves.** Tidewall checks GitHub for new versions, verifies each download is a signed Tidewall
+release, and installs it while your screen is locked (or when you choose **Restart to Update** in the menu bar). You
+only see the "Open Anyway" step once. Turn it off in **Settings ▸ Updates**.
 
 Tidewall lives in the menu bar, as a little window riding a wave. Click it and choose **Open Tidewall…** for the
 window, where you can try every theme on a live preview of your own desktop, give each display its own theme, and
@@ -90,7 +96,7 @@ your own theme** (a single HTML page; the host tells it where the windows are).
 ## Uninstall
 
 Turn off **Open at login** in Tidewall ▸ Settings, quit Tidewall from its menu, and move the app to the Bin. Its
-settings live in `~/Library/Preferences/app.tidewall.plist`.
+settings live in `~/Library/Preferences/app.tidewall.plist` and its downloads in `~/Library/Caches/app.tidewall`.
 
 ## Credits and licence
 

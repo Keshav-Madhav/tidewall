@@ -8,3 +8,25 @@ If you find a security problem (for example a way for a web page to read files o
 to drive the app through its window's message bridge), please **don't open a public issue**. Use GitHub's
 [private vulnerability reporting](../../security/advisories/new) for this repository instead, with steps to reproduce.
 You'll get a reply within a week.
+
+## How updates are verified
+
+- **Signed releases.** Each release's `update.json` is signed with Ed25519 over every field the app acts on: the
+  version, the zip's SHA-256 and size, the minimum macOS and the notes
+  (`tidewall-update-v1\n<version>\n<sha256>\n<size>\n<minOS>\n<sha256(notes)>`). The app ignores the feed unless
+  the signature verifies against one of its public keys (`Updater.publicKeys` in `main.swift`). It then checks the
+  downloaded zip's size, hash and signature again, and the bundle id, the version and the code signature, and
+  re-checks the unpacked copy's code hash right before installing it.
+- **Two keys.** CI signs with the first. The second is an offline backup that is never on GitHub, for the day the first
+  is lost or has to be retired.
+- **The key in CI.** The private key is a secret of the `release` environment, which only `v*` tags can use. It is
+  read by a job that runs no build scripts and keeps no git credentials. A ruleset stops published `v*` tags from
+  being moved or deleted. Fork pull requests never see it.
+- **Safe installs.** The app never asks for an administrator password. It only replaces itself in a folder you can
+  write to, with renames on one volume. If a new version doesn't report that it started within 20 seconds, the
+  previous one is put back and that version isn't installed automatically again.
+- **No downgrades.** Older versions are never installed.
+- **Development builds** (anything not built with `RELEASE=1`) don't update themselves.
+
+Residual risk, by design: whoever controls the release key (or the GitHub account and its release environment) can
+ship code to every install that has automatic updates on. Keep 2FA on the account.

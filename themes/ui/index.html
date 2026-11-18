@@ -67,6 +67,7 @@
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 7px; border: 0;
     background: var(--card); box-shadow: 0 0 0 .5px var(--line), 0 1px 2px rgba(0,0,0,.08); white-space: nowrap; }
   .btn:active { filter: brightness(.94); }
+  .btn:disabled { opacity: .5; pointer-events: none; }
   .btn.wide { width: 100%; }
   .btn.primary { background: var(--accent); color: var(--accent-ink); box-shadow: 0 1px 2px rgba(0,0,0,.15); font-weight: 600; }
   .btn.primary:hover { background: var(--accent-hi); }
@@ -275,6 +276,11 @@
       <div class="rowx"><div class="tx"><b>Open at login</b><span>Start Tidewall when you log in.</span></div><div class="sw" data-k="login" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>Rest when idle</b><span>Pause after 3 minutes without input; let go of memory after 10.</span></div><div class="sw" data-k="restWhenIdle" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>Pause wallpaper</b><span>Freeze the scene where it is.</span></div><div class="sw" data-k="paused" role="switch" tabindex="0"></div></div>
+    </div>
+    <div class="group-t">Updates</div>
+    <div class="group">
+      <div class="rowx"><div class="tx"><b>Update automatically</b><span>Download new versions and install them while your screen is locked.</span></div><div class="sw" data-k="autoUpdate" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b id="updT">Version 1.0</b><span id="updS">Checks GitHub for new versions.</span></div><button class="btn" id="updBtn">Check now</button></div>
     </div>
     <div class="group-t">Performance</div>
     <div class="group">
@@ -525,6 +531,20 @@ function drawSettings() {
 function drawLive() { const p = !!S.settings.paused; $('#liveDot').classList.toggle('off', p); $('#liveTxt').textContent = p ? 'Paused' : (S.displays.length > 1 ? `Live on ${S.displays.length} displays` : 'Live'); $('#pauseBtn').textContent = p ? 'Resume' : 'Pause'; }
 $('#pauseBtn').addEventListener('click', () => { S.settings.paused = !S.settings.paused; send({ t: 'set', key: 'paused', value: S.settings.paused }); drawSettings(); });
 $('#reloadBtn').addEventListener('click', () => send({ t: 'reload' }));
+/* updates: the host sends S.update = { s: idle|checking|downloading|ready|current|failed, v, err, blocked, checked } */
+function drawUpdate() {
+  const u = S.update || {}, b = $('#updBtn'), ago = u.checked ? new Date(u.checked * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+  $('#updT').textContent = 'Version ' + S.version;
+  const say = { checking: 'Checking for updates…', downloading: `Downloading Tidewall ${u.v}…`, current: `You're up to date${ago ? ' · checked ' + ago : ''}.`,
+    failed: `Couldn't check: ${u.err || 'unknown error'}.`, off: u.err || 'Updates are off.',
+    skipped: `Tidewall ${u.v} didn't start properly last time, so it won't install by itself. Check now to try it again.`, idle: 'Checks GitHub for new versions.',
+    ready: u.blocked ? `Tidewall ${u.v} is out. ${u.blocked}` : `Tidewall ${u.v} is ready. It installs in a few seconds and reopens.` };
+  $('#updS').textContent = say[u.s] || say.idle;
+  const ready = u.s === 'ready';
+  b.textContent = ready ? (u.blocked ? 'Download…' : 'Restart to Update') : 'Check now'; b.classList.toggle('primary', ready);
+  b.disabled = u.s === 'checking' || u.s === 'downloading' || u.s === 'off';
+}
+$('#updBtn').addEventListener('click', () => send({ t: (S.update || {}).s === 'ready' ? 'installUpdate' : 'checkUpdate' }));
 $('#quitBtn').addEventListener('click', () => send({ t: 'quit' }));
 
 /* ======================= from the host ======================= */
@@ -532,7 +552,7 @@ window.tw = { receive(m) {
   if (m.t === 'state') {
     const first = !sel; S = Object.assign(S, m);
     $('#ver').textContent = 'Version ' + S.version;
-    drawGrid(); drawSettings(); drawNow();
+    drawGrid(); drawSettings(); drawNow(); drawUpdate();
     if (first) select(mainTheme()); else select(sel, true);
     if ($('#displays').classList.contains('on')) drawDesk();
   } else if (m.t === 'desktop') {
