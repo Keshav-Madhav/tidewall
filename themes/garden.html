@@ -25,9 +25,11 @@
 </head>
 <body>
 <canvas id="gl"></canvas>
+<script src="span.js"></script>
 <script>
 'use strict';
 window.__noMask = true;
+window.__twCalm = 20;                                    // frames a second while nobody's working here (gardeners and robins at a stroll)
 let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
 const P = { quality: 1 };                                              // read by the host's bench probe
 let FB = null; function commit() { } function refresh() { }          // hooks the host calls on every theme
@@ -35,10 +37,22 @@ const post = s => { try { webkit.messageHandlers.host.postMessage(s); } catch (_
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const h1 = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
 let SEED = 0;
+// one world across displays (span.js): W×H is the whole world, OX/OY where this display sits in it, VW×VH its size
+let OX = 0, OY = 0, VW = innerWidth, VH = innerHeight, EDGES = [], FRAMES = [];
+const inGap = (x, y) => FRAMES.length > 1 && !FRAMES.some(([fx, fy, fw, fh]) => x >= fx && y >= fy && x <= fx + fw && y <= fy + fh);
+// how far inside the sheet: to the nearest outside edge of the world (the border runs along it); <0 in a gap
+function rim(x, y) { if (inGap(x, y)) return -1; let d = 1e9; for (const [ax, ay, bx, by] of EDGES) d = Math.min(d, sdSeg(x, y, ax, ay, bx, by)); return d; }
+// how far inside this one display (beds' ponds and the title block never straddle a bezel)
+function inner(x, y) { let e = -1; for (const [fx, fy, fw, fh] of FRAMES) if (x >= fx && y >= fy && x <= fx + fw && y <= fy + fh) e = Math.max(e, Math.min(x - fx, fx + fw - x, y - fy, fy + fh - y)); return e; }
+function worldShape() {
+  FRAMES = Span.frames(); EDGES = [];
+  for (const F of FRAMES) for (const e of Span.edges(F)) { const [x, y, w, h] = F;
+    EDGES.push(e.side === 'top' ? [e.a, y, e.b, y] : e.side === 'bottom' ? [e.a, y + h, e.b, y + h] : e.side === 'left' ? [x, e.a, x, e.b] : [x + w, e.a, x + w, e.b]); }
+}
 
 /* ======================= the plan's geometry (shared by the shader and the gardener) ======================= */
 const BED = 34, GAP = 7, PW = 18, RING = BED + GAP + PW / 2;       // flowerbed depth, verge, gravel walk width
-const MAXR = 16, MAXS = 32, MAXO = 32;
+const MAXR = 24, MAXS = 40, MAXO = 32, MAXE = 16;
 let slots = [], segs = [], pond = { x: 0, y: 0, r: 0, tx: 0, ty: 0, tr: 0, life: 0 }, nodes = [], dirty = true;
 let nextId = 1;
 function sdRB(px, py, cx, cy, bx, by, r) { const qx = Math.abs(px - cx) - bx + r, qy = Math.abs(py - cy) - by + r; return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r; }
@@ -75,7 +89,8 @@ function plan() {
   // the pond: in the roomiest stretch of lawn, kept clear of the frame and of every bed's walk
   let best = null;
   for (let y = 140; y < H - 140; y += 30) for (let x = 140; x < W - 140; x += 30) {
-    const c = Math.min(eT(x, y) - (BED + GAP + PW + 30), x - 70, W - 70 - x, y - 90, H - 90 - y);
+    const ed = inner(x, y); if (ed < 70) continue;
+    const c = Math.min(eT(x, y) - (BED + GAP + PW + 30), ed - 70, inner(x, y - 20) - 70, inner(x, y + 20) - 70);   // 70 from the sides, 90 from top and bottom, as before   // clear of each display's edges (and its menu bar)
     const score = c - Math.hypot(x - W * .5, y - H * .55) * .05;
     if (!best || score > best.score) best = { x, y, c, score };
   }
@@ -87,6 +102,7 @@ function plan() {
   // a walk is only laid where it won't run through another bed
   const clearRun = (ax, ay, bx, by, skip) => { const L = Math.hypot(bx - ax, by - ay);
     for (let d = 0; d < L; d += 16) { const t = d / L, x = ax + (bx - ax) * t, y = ay + (by - ay) * t;
+      if (inGap(x, y)) return false;
       for (const s of live) { if (skip.includes(s.id)) continue; if (sdRB(x, y, s.tx + s.tw / 2, s.ty + s.th / 2, s.tw / 2, s.th / 2, 10) < BED + GAP + 4) return false; }
       if (pond.want && !skip.includes('pond') && Math.hypot(x - pond.tx, y - pond.ty) < pond.tr + 10) return false; }
     return true; };
@@ -143,7 +159,7 @@ function layTrees() {
     const x = (i + .18 + .64 * h1(n)) * CELL, y = (j + .18 + .64 * h1(n + .5)) * CELL, keep = h1(n + .9) < .6, Rmax = 20 + 30 * h1(n + .3);
     let R = 0;
     if (keep) {
-      let c = Math.min(eWin(x, y) - (BED + GAP + PW + 7), eSeg(x, y) - 8, ePond(x, y) - (7 + GAP + PW + 9), x - 30, W - 30 - x, y - 30, H - 30 - y);
+      let c = Math.min(eWin(x, y) - (BED + GAP + PW + 7), eSeg(x, y) - 8, ePond(x, y) - (7 + GAP + PW + 9), rim(x, y) - 30);
       for (const o of ORN) c = Math.min(c, Math.hypot(x - o[0], y - o[1]) - (o[2] ? 16 : 9));   // and clear of the benches and urns
       R = Math.min(Rmax, c); R = R < 9 ? Math.max(0, R - 4) * 1.8 : R;       // grows in and shrinks away smoothly as the room changes
     }
@@ -201,7 +217,7 @@ function prog(vs, fs, name) {
 const PLAN = prog(`#version 300 es
 out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUV = p; gl_Position = vec4(p * 2. - 1., 0., 1.); }`, `#version 300 es
 precision highp float; in vec2 vUV; out vec4 o;
-uniform vec2 uRes; uniform float uK, uSeed;
+uniform vec2 uRes, uOff; uniform float uK, uSeed; uniform vec4 uE[${MAXE}]; uniform int uNE;
 uniform vec4 uR[${MAXR}]; uniform float uRL[${MAXR}], uRS[${MAXR}]; uniform int uN;
 uniform vec4 uO[${MAXO}]; uniform int uNO;
 uniform vec4 uS[${MAXS}]; uniform float uSW[${MAXS}]; uniform int uNS;
@@ -219,7 +235,7 @@ float smin(float a, float b, float k) { float h = clamp(.5 + .5 * (b - a) / k, 0
 // an ink line along the zero of d, about 0.7 pt wide, antialiased
 float inkLine(float d, float w) { float aa = fwidth(d) + 1e-3; return 1. - smoothstep(w * .5, w * .5 + aa, abs(d)); }
 void main() {
-  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes;
+  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uOff;
   // ---- the plan's fields ----
   float eW = 1e5, eWs = 1e5, best = 1e5, styl = 0., bedSeed = 0.;
   for (int i = 0; i < ${MAXR}; i++) { if (i >= uN) break; vec4 r = uR[i]; float sh = (1. - uRL[i]) * SHRINK;
@@ -391,7 +407,7 @@ void main() {
   if (uPond.w > .01) { col = mix(col, INK, inkLine(eP, .7) * .8); col = mix(col, INK, inkLine(eP - 8., .6) * .6); }
   // the drawing sheet: paper, granulation, a ruled border
   col *= .965 + .05 * paper; col *= .985 + .03 * gran;
-  float frame = min(min(p.x, uRes.x - p.x), min(p.y, uRes.y - p.y));
+  float frame = 1e5; for (int i = 0; i < ${MAXE}; i++) { if (i >= uNE) break; frame = min(frame, sdSeg(p, uE[i].xy, uE[i].zw)); }
   vec3 sheet = vec3(.93, .9, .83) * (.97 + .04 * paper);
   col = mix(sheet, col, smoothstep(17., 18.5, frame));
   col = mix(col, INK, (inkLine(frame - 18., .9) + inkLine(frame - 13., .5) * .6) * .75);
@@ -412,7 +428,9 @@ function render() {
   for (const s of slots) { if (n >= MAXR) break; R.set([s.x, s.y, s.w, s.h], n * 4); RL[n] = s.life; RS[n] = s.style + .01; n++; }
   const S = new Float32Array(MAXS * 4), SW = new Float32Array(MAXS); let m = 0;
   for (const g of segs) { if (m >= MAXS) break; const a = nodeAt(g.a), b = nodeAt(g.b); if (!a || !b) continue; S.set([a[0], a[1], b[0], b[1]], m * 4); SW[m] = g.life; m++; }
-  gl.uniform2f(PLAN.u.uRes, W, H); gl.uniform1f(PLAN.u.uK, K); gl.uniform1f(PLAN.u.uSeed, SEED * 3.7);
+  const E = new Float32Array(MAXE * 4); EDGES.slice(0, MAXE).forEach((e, i) => E.set(e, i * 4));
+  gl.uniform4fv(PLAN.u.uE, E); gl.uniform1i(PLAN.u.uNE, Math.min(EDGES.length, MAXE)); gl.uniform2f(PLAN.u.uOff, OX, OY);
+  gl.uniform2f(PLAN.u.uRes, VW, VH); gl.uniform1f(PLAN.u.uK, K); gl.uniform1f(PLAN.u.uSeed, SEED * 3.7);
   gl.uniform4fv(PLAN.u.uR, R); gl.uniform1fv(PLAN.u.uRL, RL); gl.uniform1fv(PLAN.u.uRS, RS); gl.uniform1i(PLAN.u.uN, n);
   gl.uniform4fv(PLAN.u.uO, OB.arr); gl.uniform1i(PLAN.u.uNO, OB.n);
   gl.uniform4fv(PLAN.u.uS, S); gl.uniform1fv(PLAN.u.uSW, SW); gl.uniform1i(PLAN.u.uNS, m);
@@ -446,8 +464,8 @@ function ringOf(id) {
   return pts;
 }
 // under a window: hidden, so never a place to walk or stand
-const hidden = (x, y) => slots.some(s => s.alive && x > s.tx - 3 && x < s.tx + s.tw + 3 && y > s.ty - 3 && y < s.ty + s.th + 3);   // where the window really is, already
-const onGravel = (x, y) => { const e = eWin(x, y), ep = ePond(x, y); return (Math.abs(e - RING) < PW / 2 + 2 || Math.abs(ep - (7 + GAP + PW / 2)) < PW / 2 + 2 || (eSeg(x, y) < 2 && e > BED + 2)) && x > 22 && y > 22 && x < W - 22 && y < H - 22; };
+const hidden = (x, y) => inGap(x, y) || slots.some(s => s.alive && x > s.tx - 3 && x < s.tx + s.tw + 3 && y > s.ty - 3 && y < s.ty + s.th + 3);   // where the window really is, already
+const onGravel = (x, y) => { const e = eWin(x, y), ep = ePond(x, y); return (Math.abs(e - RING) < PW / 2 + 2 || Math.abs(ep - (7 + GAP + PW / 2)) < PW / 2 + 2 || (eSeg(x, y) < 2 && e > BED + 2)) && rim(x, y) > 22; };
 // a route from (x, y) to the walk point nearest the goal: along rings and the joining walks of the spanning tree
 function route(fx, fy, gx, gy) {
   const ids = [...slots.filter(s => s.alive && s.life > .5).map(s => s.id), ...(pond.life > .5 ? ['pond'] : [])];
@@ -529,14 +547,14 @@ const birds = [robin(), robin(), robin()].map((el, i) => ({ el, x: 0, y: 0, ang:
 const gardeners = GTYPES.map((t, i) => { const el = sprite(t.w, t.h, x => { x.translate(t.ox, t.oy); t.draw(x); });
   return { el, t, i, x: -100, y: -100, ang: 0, path: null, k: 0, wait: 1 + i * 2.5, placed: false, bob: 0, lane: 0, stuck: 0, work: 0 }; });
 let cur = { x: -1e4, y: -1e4, on: false, t: 0 };
-function onLawn(x, y) { return eWin(x, y) > BED + GAP + PW + 8 && ePond(x, y) > 7 + GAP + PW + 6 && eSeg(x, y) > 6 && x > 40 && y > 40 && x < W - 40 && y < H - 40; }
+function onLawn(x, y) { return eWin(x, y) > BED + GAP + PW + 8 && ePond(x, y) > 7 + GAP + PW + 6 && eSeg(x, y) > 6 && rim(x, y) > 40; }
 function underTree(x, y) { const i = Math.floor(x / CELL), j = Math.floor(y / CELL);
   for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= TG[0] || jj >= TG[1]) continue;
     const o = (jj * TG[0] + ii) * 4; if (treeArr[o + 2] > 1 && Math.hypot(x - treeArr[o], y - treeArr[o + 1]) < treeArr[o + 2] + 4) return true; } return false; }
 function lawnSpot(avoid) { for (let k = 0; k < 60; k++) { const x = 60 + Math.random() * (W - 120), y = 60 + Math.random() * (H - 120);
   const ub = blockAt && block.style.opacity !== '0' && x > blockAt[0] - 10 && x < blockAt[0] + block._w + 10 && y > blockAt[1] - 10 && y < blockAt[1] + block._h + 10;
   if (onLawn(x, y) && !underTree(x, y) && !ub && (!avoid || Math.hypot(x - avoid.x, y - avoid.y) > 220)) return [x, y]; } return null; }
-const place = (el, x, y, ang, s = 1) => { el.style.transform = `translate3d(${(x - el._w / 2).toFixed(1)}px,${(y - el._h / 2).toFixed(1)}px,0) rotate(${ang.toFixed(3)}rad) scale(${s})`; };
+const place = (el, x, y, ang, s = 1) => { el._p = [x, y, ang, s]; x -= OX; y -= OY; el.style.transform = `translate3d(${(x - el._w / 2).toFixed(1)}px,${(y - el._h / 2).toFixed(1)}px,0) rotate(${ang.toFixed(3)}rad) scale(${s})`; };
 function anyRing() { const ids = [...slots.filter(s => s.alive).map(s => s.id), ...(pond.life > .5 ? ['pond'] : [])], id = ids[Math.floor(Math.random() * ids.length)];
   const r = id != null && ringOf(id); if (!r) return null;
   for (let k = 0; k < 12; k++) { const q = r[Math.floor(Math.random() * r.length)]; if (onGravel(q[0], q[1]) && !hidden(q[0], q[1])) return q; } return null; }
@@ -609,6 +627,21 @@ function stepBirds(dt) {
   }
 }
 
+/* ======================= one world: the gardeners and robins, as the leader sees them ======================= */
+let remote = null, sentAt = 0;
+Span.on('life', m => { remote = m; });
+function sendLife(now) {
+  if (!Span.world || now - sentAt < 30) return; sentAt = now;
+  const one = el => [el._p || null, el.style.opacity, el.className];
+  Span.post('life', { g: gardeners.map(g => one(g.el).concat([g.x, g.y, g.ang])), b: birds.map(b => one(b.el).concat([b.x, b.y, b.ang, b.away])) });
+}
+function applyLife() {
+  const m = remote; if (!m) { for (const v of gardeners) v.el.style.opacity = 0; for (const b of birds) b.el.style.opacity = 0; return; }
+  const one = (el, [pp, o, cls]) => { if (el.className !== cls) el.className = cls; if (pp) place(el, ...pp); if (el.style.opacity !== o) el.style.opacity = o; };
+  m.g.forEach((d, i) => { const g = gardeners[i]; if (!g) return; one(g.el, d); [g.x, g.y, g.ang] = d.slice(3); g.placed = !!d[0]; });
+  m.b.forEach((d, i) => { const b = birds[i]; if (!b) return; one(b.el, d); [b.x, b.y, b.ang, b.away] = d.slice(3); b.placed = !!d[0]; });
+}
+
 /* ======================= the title block: an architect's sheet label, in the freest corner ======================= */
 const block = sprite(250, 92, x => {
   const ink = '#3d3a34'; x.strokeStyle = ink; x.fillStyle = 'rgba(241,236,222,.94)'; x.lineWidth = .9;
@@ -636,12 +669,16 @@ function placeBlock() {
   const clear = (x, y) => !live.some(s => { const pad = (s.tw < 260 && s.th < 260) ? 14 : BED + GAP + PW + 8;   // a small widget needs less room than a bed
       return x < s.tx + s.tw + pad && x + bw > s.tx - pad && y < s.ty + s.th + pad && y + bh > s.ty - pad; })
     && !(pond.want && x < pond.tx + pond.tr + 40 && x + bw > pond.tx - pond.tr - 40 && y < pond.ty + pond.tr + 40 && y + bh > pond.ty - pond.tr - 40);
-  const cands = [[W - 30 - bw, H - 30 - bh], [30, H - 30 - bh], [W - 30 - bw, 46], [30, 46]];
-  for (let x = 30; x <= W - 30 - bw; x += 40) cands.push([x, H - 30 - bh], [x, 46]);
-  for (let y = 90; y <= H - 40 - bh; y += 40) for (let x = 30; x <= W - 30 - bw; x += 60) cands.push([x, y]);
+  const [mx, my] = Span.main, isMain = F => mx > F[0] && mx < F[0] + F[2] && my > F[1] && my < F[1] + F[3];
+  const fr = FRAMES.slice().sort((a, b) => isMain(b) - isMain(a)), cands = [];
+  // the corners that touch the sheet's border; then along each display's bottom and top; then anywhere
+  for (const [fx, fy, fw, fh] of fr) cands.push([fx + fw - 30 - bw, fy + fh - 30 - bh], [fx + 30, fy + fh - 30 - bh], [fx + fw - 30 - bw, fy + 46], [fx + 30, fy + 46]);
+  for (const [fx, fy, fw, fh] of fr) for (let x = fx + 30; x <= fx + fw - 30 - bw; x += 40) cands.push([x, fy + fh - 30 - bh], [x, fy + 46]);
+  for (const [fx, fy, fw, fh] of fr) for (let y = fy + 90; y <= fy + fh - 40 - bh; y += 40) for (let x = fx + 30; x <= fx + fw - 30 - bw; x += 60) cands.push([x, y]);
+
   const sp = cands.find(([x, y]) => clear(x, y));
   block.style.opacity = sp ? 1 : 0;
-  if (sp && (!blockAt || sp[0] !== blockAt[0] || sp[1] !== blockAt[1])) { blockAt = sp; block.style.transform = `translate3d(${sp[0]}px,${sp[1]}px,0)`; }
+  if (sp && (!blockAt || sp[0] !== blockAt[0] || sp[1] !== blockAt[1])) { blockAt = sp; block.style.transform = `translate3d(${sp[0] - OX}px,${sp[1] - OY}px,0)`; }
 }
 
 /* ======================= loop: the plan is drawn only while it changes; the little lives go on ======================= */
@@ -654,7 +691,8 @@ function loop0(now) {
   fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
   const moving = stepLayout(dt);
   if (moving || dirty) { render(); dirty = false; }
-  stepGardeners(dt, moving); stepBirds(dt);
+  if (Span.leader()) { stepGardeners(dt, moving); stepBirds(dt); sendLife(now); }
+  else applyLife();
   if (moving && blockAt && block.style.opacity !== '0') {               // a bed sliding under the title block: it steps aside at once
     const pad = 10, [bx, by] = blockAt; if (slots.some(s => s.alive && bx < s.x + s.w + BED + pad && bx + block._w > s.x - BED - pad && by < s.y + s.h + BED + pad && by + block._h > s.y - BED - pad)) block.style.opacity = 0;
   }
@@ -663,18 +701,24 @@ function loop0(now) {
 
 /* ======================= boot + host protocol ======================= */
 function build() {
-  W = innerWidth; H = innerHeight; K = devicePixelRatio; cv.width = Math.round(W * K); cv.height = Math.round(H * K);
+  VW = innerWidth; VH = innerHeight; W = Span.uw; H = Span.uh; OX = Span.x; OY = Span.y; K = devicePixelRatio; worldShape();
+  cv.width = Math.round(VW * K); cv.height = Math.round(VH * K);
   plan(); wake(); clearTimeout(blockT); blockT = setTimeout(placeBlock, 200);
   if (lastWinMsg) handle(lastWinMsg);                                  // the screen's scale may have changed
 }
-let lastWinMsg = null;
+let lastWinMsg = null, deskKey = '', curFrom = -1;
+function curAt(x, y, from) { if (Math.hypot(x - cur.x, y - cur.y) > 2) cur.t = performance.now(); cur.x = x; cur.y = y; cur.on = true; curFrom = from; }
+Span.on('cur', m => curAt(m.x, m.y, m.from));
+Span.on('curoff', m => { if (curFrom === m.from) cur.on = false; });
 const handle = m => {
-  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
-  if (m.t === 'desk') { SEED = m.i | 0; dirty = true; wake(); return; }                  // each display grows its own garden
-  if (m.t === 'cursor') { const x = m.x / K, y = m.y / K; if (Math.hypot(x - cur.x, y - cur.y) > 2) cur.t = performance.now(); cur.x = x; cur.y = y; cur.on = true; return; }
-  if (m.t === 'cursorOff') { cur.on = false; return; }
+  if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
+  if (m.t === 'desk') { const k = [m.i, m.x, m.y, m.w, m.h, JSON.stringify(m.fr || [])].join('|'); if (k === deskKey) return; deskKey = k;
+    Span.desk(m); SEED = Span.world ? 7 : m.i | 0;                    // one world: one garden (each display alone grows its own)
+    for (const g of gardeners) { g.placed = false; g.path = null; } for (const b of birds) b.placed = false; remote = null; build(); return; }
+  if (m.t === 'cursor') { curAt(m.x / K + OX, m.y / K + OY, -1); Span.post('cur', { x: cur.x, y: cur.y }); return; }
+  if (m.t === 'cursorOff') { if (curFrom === -1) { cur.on = false; Span.post('curoff', {}); } return; }
   if (m.t === 'windows') { lastWinMsg = m; const K = devicePixelRatio;   // the scale as it is now
-    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) })));
+    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) })));
     clearTimeout(blockT); blockT = setTimeout(placeBlock, m.live ? 1500 : 600);
   }
 };

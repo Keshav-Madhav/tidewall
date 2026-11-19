@@ -34,7 +34,7 @@ in vec2 palmUV;
 void main() {
   vec4 tree = texture(uPalmAtlas, palmUV);
   if (tree.a < .002) discard;
-  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale + uOff;
   // 飞鸟始终从树冠上方经过。
   for (int i = 0; i < 8; i++) {
     if (float(i) >= uBirdN) break;
@@ -107,7 +107,7 @@ function chooseMaldivesPalms() {
       const radius = style.radius * scale, offsetX = random() * 13, offsetY = random() * 13;let best = null, candidates = 0;
       for (let y = 100 * scale + offsetY; y < H - TASKBAR - 55 * scale; y += 13) for (let x = radius + 5 + offsetX; x < W - radius - 5; x += 13) {
         const shore = sampleArr(FB.s, x, y);
-        if (shore > -25 || shore < -58) continue;
+        if (shore > -25 || shore < -58 || (window.__visible && !__visible(x, y, 60))) continue;
         if (chosen.some(q => Math.hypot(q.x - x, q.y - y) < spacing)) continue;
         // 弯干款以根部为轴翻转，弯曲方向跟随岸线朝向海水；不旋转树的竖直视角。
         const seaX = style.faceSea ? sampleArr(FB.s, x + 8, y) - sampleArr(FB.s, x - 8, y) : 0;
@@ -128,7 +128,7 @@ function drawMaldivesPalms(now, pass, configurePass, context) {
   if (!FB || !beachPalmImages.every(image => image.complete && image.naturalWidth)) return;
   if (!beachPalmsScene) beachPalmsScene = {atlas: makeMaldivesPalmAtlas(), palms: [], previous: now};
   const scene = beachPalmsScene, dt = Math.max(0, Math.min(.1, (now - scene.previous) / 1000));scene.previous = now;
-  const count = Math.max(0, Math.min(10, Math.round(Number.isFinite(P.palms) ? P.palms : 4)));
+  const count = Math.max(0, Math.min(10, Math.round((Number.isFinite(P.palms) ? P.palms : 4) * (window.Span ? Span.n : 1))));
   const layoutChanged = scene.field !== FB || scene.seed !== seed || scene.width !== W || scene.height !== H;
   if (layoutChanged || scene.count !== count) {
     if (layoutChanged || !scene.placements) scene.placements = count ? chooseMaldivesPalms() : null;
@@ -150,7 +150,7 @@ function drawMaldivesPalms(now, pass, configurePass, context) {
     const target = palm.retiring ? 0 : onSand;
     palm.opacity += (target - palm.opacity) * (1 - Math.exp(-dt * 4));
     if (palm.opacity < .003) continue;
-    gl.uniform4f(pass.U.uPalm, palm.x, palm.y, palm.scale, palm.variant);gl.uniform1f(pass.U.uPalmOpacity, palm.opacity);
+    gl.uniform4f(pass.U.uPalm, palm.x - (typeof OX !== 'undefined' ? OX : 0), palm.y - (typeof OY !== 'undefined' ? OY : 0), palm.scale, palm.variant);gl.uniform1f(pass.U.uPalmOpacity, palm.opacity);
     gl.uniform1f(pass.U.uPalmMirror, palm.mirror);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }

@@ -34,6 +34,25 @@ enum Cfg {
   /// a display can have its own theme (Displays ▸ …); otherwise it shows the main one
   static func theme(for id: CGDirectDisplayID) -> String { themeOverride ?? d.string(forKey: "theme.display.\(id)") ?? theme }
   static func setTheme(_ t: String?, for id: CGDirectDisplayID) { d.set(t, forKey: "theme.display.\(id)") }
+  /// themes that can draw one world across every display showing them (the rest draw each display on its own)
+  /// the sharpest a theme is drawn (device pixels per point): the soft, full-screen scenes are redrawn every frame
+  /// and look the same a little under retina (the window server scales them up smoothly), at a fraction of the GPU
+  /// work and memory; the crisp ones (ink, lettering, sprites) stay at full sharpness. --fullres (dev) turns it off
+  static func renderCap(_ t: String) -> Double {
+    if CommandLine.arguments.contains("--fullres") { return 8 }
+    return ["lava": 1.25, "reef": 1.5, "beach": 1.5, "meadow": 1.5, "tunnel": 1.5, "wind": 1.5, "snow": 1.5][t] ?? 8
+  }
+  static let spanThemes: Set<String> = ["celestial", "snow", "wind", "railway", "reef", "inkmap", "garden", "gallery", "beach", "meadow", "estate"]
+  /// displays showing the same spanning theme share one world (off: each display draws its own)
+  static var spanWorlds: Bool { get { CommandLine.arguments.contains("--solo") ? false : d.object(forKey: "spanWorlds") as? Bool ?? true } set { d.set(newValue, forKey: "spanWorlds") } }   // --solo (dev): each display alone
+  /// the displays (frames, CG points) that one world is drawn across: every display showing this spanning theme
+  static func world(of id: CGDirectDisplayID) -> [NSScreen] {
+    let t = theme(for: id)
+    guard spanWorlds, spanThemes.contains(t) else { return NSScreen.screens.filter { $0.displayID == id } }
+    return NSScreen.screens.filter { theme(for: $0.displayID) == t }
+  }
+  /// a theme's name as the menu shows it ("Model Railway"), without the cost tier
+  static func label(_ id: String) -> String { (themes.first { $0.0 == id }?.1 ?? id).components(separatedBy: " · ").first ?? id }
   static func clearDisplayThemes() { for k in d.dictionaryRepresentation().keys where k.hasPrefix("theme.display.") { d.removeObject(forKey: k) } }
   static let themes: [(String, String)] = [("estate", "Marauders · very low"), ("gallery", "Gallery · none"), ("wind", "Wind Map · medium"), ("lava", "Lava Lamp · low"),
     ("tunnel", "Wind Tunnel · high"), ("reef", "Koi Reef · medium"), ("snow", "Snowfall · low"), ("celestial", "Celestial Atlas · none"),
@@ -74,8 +93,8 @@ enum Cfg {
   }()
   static func setVariant(_ t: String, _ v: String) { variantOverride = nil; d.set(v, forKey: "variant.\(t)") }
   /// how far (pt) the land / cloud bank reaches past each window edge
-  static var margin: Double { get { d.object(forKey: "margin") as? Double ?? 140 } set { d.set(newValue, forKey: "margin") } }
-  static var fps: Double { get { d.object(forKey: "fps") as? Double ?? 0 } set { d.set(newValue, forKey: "fps") } }
+  static var margin: Double { get { (d.object(forKey: "margin") as? Double).flatMap { $0.isFinite ? min(400, max(0, $0)) : nil } ?? 140 } set { d.set(newValue, forKey: "margin") } }
+  static var fps: Double { get { (d.object(forKey: "fps") as? Double).flatMap { $0.isFinite ? min(120, max(0, $0)) : nil } ?? 0 } set { d.set(newValue, forKey: "fps") } }
   /// seeds the generated names (your walker, the strangers); stable across launches
   static var seed: Int { if let v = d.object(forKey: "seed") as? Int { return v }; let v = Int.random(in: 1..<Int(Int32.max)); d.set(v, forKey: "seed"); return v }
   /// pause the animation when nobody has touched the mouse or keyboard for a while; any input brings it straight back
@@ -113,8 +132,46 @@ if args.contains("--install-login-item") { LoginItem.set(true); print(LoginItem.
 if stock { Cfg.mask = false }
 
 func log(_ s: String) { print(s); fflush(stdout) }
-// the LaunchAgent appends to ~/Library/Logs/Tidewall.log forever: start over once it passes 5 MB
+// The released app always keeps a log at ~/Library/Logs/Tidewall.log (the LaunchAgent sends it there; opened from
+// Finder, stdout went nowhere, so a crash left no trace): what it did last, and how it died, if it ever does
+if Bundle.main.bundleIdentifier != nil && !benchMode {
+  var st = stat()
+  if fstat(STDOUT_FILENO, &st) != 0 || (st.st_mode & S_IFMT) != S_IFREG {
+    let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    // opened first, swapped in only if that worked (a failed freopen would leave fd 1 free for whatever opens next)
+    let fd = open(dir.appendingPathComponent("Tidewall.log").path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+    if fd >= 0 { fflush(stdout); dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO); close(fd) }
+  }
+}
+// start over once it passes 5 MB
 if var st = Optional(stat()), fstat(STDOUT_FILENO, &st) == 0, st.st_size > 5_000_000, (st.st_mode & S_IFMT) == S_IFREG { ftruncate(STDOUT_FILENO, 0) }
+// how it died: an Objective-C exception (its reason and where), or a crash signal (a Swift trap, a bad pointer) with a
+// stack, before the system's own crash report.
+// AppKit catches exceptions thrown while it handles a click or a menu, logs them and carries on in whatever state they
+// left behind; crash on them instead, so they come here (and to the system report) like any other
+UserDefaults.standard.register(defaults: ["NSApplicationCrashOnExceptions": true])
+NSSetUncaughtExceptionHandler { e in
+  log("CRASH exception \(e.name.rawValue): \(e.reason ?? "") (Tidewall \(Cfg.version))\n" + e.callStackSymbols.prefix(40).joined(separator: "\n")) }
+// The signal handler runs when memory may be corrupt (the allocator's lock held, say): everything it touches is made
+// here, ahead of time, and it allocates nothing. It writes the stack, then returns: its handler is reset as it runs,
+// so the faulting instruction runs again and the process dies of the original fault (the system report shows it).
+let crashHead: UnsafeMutablePointer<CChar> = strdup("CRASH signal (Tidewall); stack:\n")
+let crashFrames = UnsafeMutablePointer<UnsafeMutableRawPointer?>.allocate(capacity: 64)
+_ = backtrace(crashFrames, 64)                                          // loads what backtrace needs now, not mid-crash
+do {
+  var alt = stack_t(); alt.ss_size = 1 << 16; alt.ss_sp = UnsafeMutableRawPointer.allocate(byteCount: 1 << 16, alignment: 16); alt.ss_flags = 0
+  sigaltstack(&alt, nil)                                                // a stack overflow still gets its log line
+  for sig in [SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGABRT, SIGFPE] {
+    var sa = sigaction()
+    sa.__sigaction_u.__sa_handler = { _ in
+      _ = write(STDOUT_FILENO, crashHead, strlen(crashHead))
+      backtrace_symbols_fd(crashFrames, backtrace(crashFrames, 64), STDOUT_FILENO)
+    }
+    sa.sa_flags = SA_RESETHAND | SA_ONSTACK
+    sigaction(sig, &sa, nil)
+  }
+}
 
 // MARK: - Theme pages over a private scheme (file:// gives opaque origins → tainted canvases)
 
@@ -136,8 +193,14 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
 }
 
 /// Runs before any page script.
-func earlyScript(fps: Double, opaque: Bool) -> String { """
+func earlyScript(fps: Double, opaque: Bool, cap: Double = 8) -> String { """
 (() => {
+  // the theme's sharpness cap: the page sees a devicePixelRatio no higher than it (the host scales its messages the same)
+  if (\(cap) < 8) {
+    const pd = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio') || Object.getOwnPropertyDescriptor(Window.prototype, 'devicePixelRatio');
+    const real = pd && pd.get ? () => pd.get.call(window) : () => 2;
+    try { Object.defineProperty(window, 'devicePixelRatio', { get: () => Math.min(real(), \(cap)), configurable: true }); } catch (_) {}
+  }
   const post = m => webkit.messageHandlers.host.postMessage(m);
   // A WebGL page whose GPU context is lost (displays sleeping and waking, external monitors reconnecting, a GPU
   // switch) is left showing only its CSS background, for good. Watch every WebGL canvas on the page: when one is
@@ -177,19 +240,29 @@ func earlyScript(fps: Double, opaque: Bool) -> String { """
   HTMLCanvasElement.prototype.getContext = function (type, opts) {
     if (type === 'webgl2' && !window.__gl) {
       // opaque: the scene covers every pixel anyway; an opaque layer lets WindowServer copy instead of blend
-      const g = gc.call(this, type, Object.assign({}, opts, { stencil: false, depth: false, alpha: window.__opaque === false }));   // no theme uses depth or the stencil mask: no buffers for them
+      // low-power: on Macs with two GPUs, a wallpaper must never wake the discrete one (it would hold it on, and drain the battery)
+      const g = gc.call(this, type, Object.assign({}, opts, { stencil: false, depth: false, alpha: window.__opaque === false, powerPreference: 'low-power' }));   // no theme uses depth or the stencil mask: no buffers for them
       window.__gl = g; return g;
     }
-    return gc.call(this, type, opts);
+    return gc.call(this, type, String(type).indexOf('webgl') === 0 ? Object.assign({ powerPreference: 'low-power' }, opts) : opts);
   };
-  // Frame pacing: the pages self-cap at ~30 fps but still wake every vsync (60–120 Hz on ProMotion).
-  // Only wake when a frame is actually due.
-  if (\(fps) <= 0) return;
-  const raf = window.requestAnimationFrame.bind(window), iv = 1000 / \(fps);
+  // Frame pacing. Left alone, every page would draw at the display's refresh (120 Hz on ProMotion) and the slow,
+  // ambient ones would wake 120 times a second just to skip most of those frames. So every page runs at a calm
+  // 30 fps, and at 60 while you're working near it (the cursor over its display, a window being dragged), so what
+  // follows you and your windows stays smooth. A slow scene may ask for less while calm (window.__twCalm: slow ships,
+  // wax, gardeners). A frame rate picked in Settings replaces all of it. Between frames the
+  // page sleeps on a timer instead of waking at every vsync.
+  const pick = \(fps), CALM = pick > 0 ? pick : 30, LIVE = pick > 0 ? pick : 60;
+  let boostUntil = 0;
+  window.__twBoost = ms => { const u = performance.now() + ms; if (u > boostUntil) boostUntil = u; };
+  { const deliver = window.__hostSend;
+    window.__hostSend = s => { const cur = s.startsWith('{"t":"cursor"') && s.charCodeAt(13) === 44;   // the pointer, not cursorOff
+      if (cur) window.__twOver = s.indexOf('"w":1') >= 0;
+      if ((cur && !window.__twOver) || window.__live) window.__twBoost(900); deliver(s); }; }   // the pointer over the wallpaper ({"t":"cursor…, not over a window), or a live drag
+  const raf = window.requestAnimationFrame.bind(window);
   let due = 0, lastT = -1, go = false;
-  // between frames, sleep on a timer instead of waking at every vsync just to skip it (4× fewer wake-ups at 120 Hz)
   window.requestAnimationFrame = cb => raf(function tick(t) {
-    if (t !== lastT) { lastT = t; go = t + 2 >= due; if (go) due = Math.max(due + iv, t); }
+    if (t !== lastT) { lastT = t; const iv = 1000 / (performance.now() < boostUntil ? LIVE : pick > 0 ? pick : (window.__twCalm || CALM)); go = t + 2 >= due; if (go) due = Math.max(due + iv, t); }
     if (!go) { const wait = due - t - 6; if (wait > 4) setTimeout(() => raf(tick), wait); else raf(tick); return; }
     if (window.__prof) { const a = performance.now(); cb(t); const p = window.__prof; p.n++; p.ms += performance.now() - a; } else cb(t);
   });
@@ -303,7 +376,8 @@ final class StillWall {
 
 final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   let screenID: CGDirectDisplayID
-  static weak var anyWeb: WKWebView?
+  /// the pages showing now: a new one joins their web process (one process for every display, theme after theme)
+  static let live = NSHashTable<WKWebView>.weakObjects()
   var cgFrame: CGRect                         // screen in CG global coords (top-left origin), points
   let window: NSWindow
   let web: WKWebView
@@ -313,21 +387,24 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   var pending: (() -> Void)?
   var onShown: (() -> Void)?                  // called once a page that started hidden has drawn and is on show
 
-  init(screen: NSScreen, hidden: Bool = false) {
-    screenID = screen.displayID
-    cgFrame = screen.cgFrame
+  init(screen: NSScreen, hidden: Bool = false, fakeID: CGDirectDisplayID? = nil, fakeFrame: CGRect? = nil) {
+    screenID = fakeID ?? screen.displayID
+    cgFrame = fakeFrame ?? screen.cgFrame
+    cap = min(stock ? 8 : CGFloat(Cfg.renderCap(Cfg.theme(for: fakeID ?? screen.displayID))), fakeID.flatMap { fakeScale[$0] } ?? 8)   // (a pretend 1× monitor draws at 1×)
+    let winRect = fakeFrame.map { NSRect(x: screen.frame.minX, y: screen.frame.minY, width: $0.width, height: $0.height) } ?? screen.frame
     let cfg = WKWebViewConfiguration()
     // every screen's page in ONE web process: the engine, its libraries and caches are paid for once, not per display
-    if let r = Wallpaper.anyWeb, cfg.responds(to: NSSelectorFromString("_setRelatedWebView:")) { cfg.perform(NSSelectorFromString("_setRelatedWebView:"), with: r) }
+    if let r = Wallpaper.live.allObjects.first, cfg.responds(to: NSSelectorFromString("_setRelatedWebView:")) { cfg.perform(NSSelectorFromString("_setRelatedWebView:"), with: r) }
     cfg.setURLSchemeHandler(SchemeHandler(), forURLScheme: "tidewall")
     cfg.suppressesIncrementalRendering = true
     unlockHighRefresh(cfg.preferences)
 
     let ucc = cfg.userContentController
     if let k = argValue("--timescale").flatMap(Double.init), k != 1 { ucc.addUserScript(WKUserScript(source: timescaleScript(k), injectionTime: .atDocumentStart, forMainFrameOnly: true)) }
-    ucc.addUserScript(WKUserScript(source: earlyScript(fps: stock ? 0 : Cfg.fps, opaque: !stock && !args.contains("--no-opaque")), injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    ucc.addUserScript(WKUserScript(source: earlyScript(fps: stock ? 0 : Cfg.fps, opaque: !stock && !args.contains("--no-opaque"), cap: Double(cap)), injectionTime: .atDocumentStart, forMainFrameOnly: true))
     ucc.addUserScript(WKUserScript(source: lateScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-    window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+    window = fakeFrame != nil ? FreeSizeWindow(contentRect: winRect, styleMask: .borderless, backing: .buffered, defer: false)   // dev: a pretend display's own size
+      : NSWindow(contentRect: winRect, styleMask: .borderless, backing: .buffered, defer: false)
     window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)))
     window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenNone]
     window.ignoresMouseEvents = true
@@ -335,8 +412,8 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     window.backgroundColor = NSColor(red: 0.914, green: 0.847, blue: 0.706, alpha: 1)
     window.hasShadow = false
     window.isReleasedWhenClosed = false
-    web = WKWebView(frame: NSRect(origin: .zero, size: screen.frame.size), configuration: cfg)
-    if Wallpaper.anyWeb == nil { Wallpaper.anyWeb = web }
+    web = WKWebView(frame: NSRect(origin: .zero, size: winRect.size), configuration: cfg)
+    Wallpaper.live.add(web)
     web.setValue(false, forKey: "drawsBackground")
     super.init()
     ucc.add(WeakHandler(self), name: "host")
@@ -347,7 +424,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         typealias F = @convention(c) (AnyObject, Selector, Bool) -> Void; unsafeBitCast(imp, to: F.self)(web, sel, false) }
     }
     window.contentView = web
-    window.setFrame(screen.frame, display: false)
+    window.setFrame(winRect, display: false)
     if hidden { window.alphaValue = 0 }      // built behind the still picture; shown once it has drawn
     window.orderFront(nil)
     load()
@@ -364,7 +441,10 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   /// where this screen sits among all of them (points, top-left origin): themes continue one world across displays
   /// (the sky, the map, the painted panorama) and never repeat the same thing on every screen
   func sendDesk() {
-    var frames = NSScreen.screens.map { $0.cgFrame }, main = NSScreen.screens.first?.cgFrame ?? cgFrame, me = cgFrame
+    let spanning = Cfg.spanThemes.contains(Cfg.theme(for: screenID))
+    var frames = spanning ? worldFrames(for: screenID) : allFrames(), me = cgFrame
+    let mainFrame = fakeWorld.isEmpty ? (NSScreen.screens.first?.cgFrame ?? cgFrame) : CGRect(origin: .zero, size: NSScreen.screens.first?.frame.size ?? .zero)
+    var main = frames.first { $0 == mainFrame } ?? frames.first ?? cgFrame
     if let f = argValue("--fakedesk"), let i = Int(f) {   // bench: pretend to be screen i of a three-screen desk (external | built-in | external)
       let b = cgFrame; frames = [CGRect(x: b.minX - 1920, y: b.minY - 98, width: 1920, height: 1080), b, CGRect(x: b.maxX, y: b.minY - 98, width: 1920, height: 1080)]
       if args.contains("--stacked") {                    // two monitors side by side above the laptop, as on this Mac
@@ -377,15 +457,24 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     for f in frames.sorted(by: { $0.midY < $1.midY }) {
       if let r = rows.firstIndex(where: { $0.contains { min($0.maxY, f.maxY) - max($0.minY, f.minY) > 40 } }) { rows[r].append(f) } else { rows.append([f]) } }
     let order = rows.flatMap { $0.sorted { $0.minX < $1.minX } }, i = order.firstIndex(of: me) ?? 0
-    send("{\"t\":\"desk\",\"x\":\(me.minX - u.minX),\"y\":\(me.minY - u.minY),\"w\":\(me.width),\"h\":\(me.height),\"uw\":\(u.width),\"uh\":\(u.height),\"i\":\(i),\"n\":\(frames.count),\"mx\":\(main.midX - u.minX),\"my\":\(main.midY - u.minY),\"mw\":\(main.width),\"mh\":\(main.height)}")
+    lastDeskWorld = frames.count
+    let fr = frames.map { "[\(Int($0.minX - u.minX)),\(Int($0.minY - u.minY)),\(Int($0.width)),\(Int($0.height))]" }.joined(separator: ",")
+    send("{\"t\":\"desk\",\"fr\":[\(fr)],\"x\":\(me.minX - u.minX),\"y\":\(me.minY - u.minY),\"w\":\(me.width),\"h\":\(me.height),\"uw\":\(u.width),\"uh\":\(u.height),\"i\":\(i),\"n\":\(frames.count),\"mx\":\(main.midX - u.minX),\"my\":\(main.midY - u.minY),\"mw\":\(main.width),\"mh\":\(main.height)}")
   }
+  private(set) var lastDeskWorld = 1
+  /// the page's pixels per point: the display's, but no more than its theme is drawn at (what its devicePixelRatio says)
+  let cap: CGFloat                            // fixed when the page is made: the same number its devicePixelRatio was given
+  var scale: CGFloat { min(window.backingScaleFactor, cap) }
   func cursor(_ p: CGPoint) {
     guard wantsCursor else { return }
-    let k = window.backingScaleFactor
-    send("{\"t\":\"cursor\",\"x\":\(Int((p.x - cgFrame.minX) * k)),\"y\":\(Int((p.y - cgFrame.minY) * k))}")
+    let k = scale
+    // over one of your windows (you're working in an app, not looking at the wallpaper): the page still learns where
+    // the pointer is, but doesn't speed up for it
+    let over = lastArgs?.0.contains { $0.contains(p) } == true
+    send("{\"t\":\"cursor\",\"x\":\(Int((p.x - cgFrame.minX) * k)),\"y\":\(Int((p.y - cgFrame.minY) * k))\(over ? ",\"w\":1" : "")}")
   }
 
-  func close() { web.stopLoading(); window.orderOut(nil); window.close() }
+  func close() { Wallpaper.live.remove(web); web.stopLoading(); window.orderOut(nil); window.close() }
 
   func userContentController(_ u: WKUserContentController, didReceive m: WKScriptMessage) {
     let s = "\(m.body)"
@@ -439,7 +528,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         guard let self, self.lastArgs?.3 == true, self.paused != true else { return }
         self.paused = true; self.send("{\"t\":\"pause\",\"v\":true}") }
     }
-    let k = window.backingScaleFactor, m = Cfg.margin, o = cgFrame.origin
+    let k = scale, m = Cfg.margin, o = cgFrame.origin
     let local = rects.map { $0.offsetBy(dx: -o.x, dy: -o.y) }
     let icons = local.map { r -> String in
       let q = r.insetBy(dx: -m, dy: -m)
@@ -476,7 +565,7 @@ final class WeakHandler: NSObject, WKScriptMessageHandler {
 }
 
 extension NSScreen {
-  var displayID: CGDirectDisplayID { deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as! CGDirectDisplayID }
+  var displayID: CGDirectDisplayID { deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID ?? 0 }   // (missing for a moment while displays reconfigure)
   var cgFrame: CGRect { let h = NSScreen.screens.first?.frame.height ?? frame.maxY; return CGRect(x: frame.minX, y: h - frame.maxY, width: frame.width, height: frame.height) }
 }
 
@@ -507,7 +596,7 @@ final class Tracker {
   private let me = ProcessInfo.processInfo.processIdentifier
   private(set) var polls = 0, pollMs = 0.0
 
-  static let idleInterval = 0.15
+  static let idleInterval = 0.25         // nothing moving under your hand: a look 4× a second (moves you make wake the fast path at once)
   static var allHidden = false      // every screen covered (e.g. a full-screen app): poll at 2 Hz
 
   private var fastTimer = false, mouseMonitor: Any?
@@ -537,7 +626,7 @@ final class Tracker {
 
   private func tick() {
     let t = now()
-    if t - lastCursorT >= 1.0 / 120 {           // cursor at display rate (the celestial cursor hole sits exactly on the pointer)
+    if t - lastCursorT >= 1.0 / 60 {            // cursor at 60 Hz: the pages draw at most 60 fps while you work, so more is only overhead
       let m = SimInput.point ?? NSEvent.mouseLocation
       if m != lastCursor { lastCursor = m; lastCursorT = t; if let h = NSScreen.screens.first?.frame.height { onCursor(CGPoint(x: m.x, y: h - m.y)) } }
     }
@@ -577,15 +666,20 @@ final class Tracker {
   }
   static func read(excluding me: pid_t) -> [(CGRect, String)] {
     stageRects.removeAll(); widgetRects.removeAll()
-    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+    // read straight from the CF list, a field at a time (bridging the whole list into Swift dictionaries cost more than
+    // the list itself, several times a second); system windows on other layers are dropped before anything else is read
+    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) else { return [] }
+    func get(_ d: CFDictionary, _ k: CFString) -> AnyObject? {
+      CFDictionaryGetValue(d, Unmanaged.passUnretained(k).toOpaque()).map { Unmanaged<AnyObject>.fromOpaque($0).takeUnretainedValue() } }
     var out: [(CGRect, String)] = []
-    for w in list {
-      guard let layer = w[kCGWindowLayer as String] as? Int,
-            let pid = w[kCGWindowOwnerPID as String] as? pid_t, pid != me,
-            let b = w[kCGWindowBounds as String] as? NSDictionary,
-            let r = CGRect(dictionaryRepresentation: b) else { continue }
-      let owner = w[kCGWindowOwnerName as String] as? String ?? ""
-      let alpha = w[kCGWindowAlpha as String] as? Double ?? 1
+    for i in 0..<CFArrayGetCount(list) {
+      let w = unsafeBitCast(CFArrayGetValueAtIndex(list, i), to: CFDictionary.self)
+      guard let layer = (get(w, kCGWindowLayer) as? NSNumber)?.intValue, layer <= 0,
+            let pid = (get(w, kCGWindowOwnerPID) as? NSNumber)?.int32Value, pid != me,
+            let b = get(w, kCGWindowBounds), CFGetTypeID(b) == CFDictionaryGetTypeID(),
+            let r = CGRect(dictionaryRepresentation: unsafeBitCast(b, to: CFDictionary.self)), r.width >= 40, r.height >= 40 else { continue }
+      let owner = get(w, kCGWindowOwnerName) as? String ?? ""
+      let alpha = (get(w, kCGWindowAlpha) as? NSNumber)?.doubleValue ?? 1
       // normal windows + Stage Manager strip (layer 0); desktop widgets live on a desktop-ish layer
       let widget = layer < 0 && (isWidgetOwner(pid) || owner == "Notification Centre" || owner == "Notification Center")
       guard (layer == 0 || widget), alpha > 0.05, r.width >= 40, r.height >= 40 else { continue }
@@ -630,7 +724,7 @@ final class Usage {
     var pids = [me]
     guard let resp = Self.responsible else { return pids }
     let n = proc_listallpids(nil, 0); var buf = [pid_t](repeating: 0, count: Int(n) + 64)
-    let c = proc_listallpids(&buf, Int32(buf.count * MemoryLayout<pid_t>.size))
+    let c = proc_listallpids(&buf, Int32(buf.count * MemoryLayout<pid_t>.size)); guard c > 0 else { return pids }
     for p in buf.prefix(Int(c)) where p > 0 && p != me && resp(p) == me { pids.append(p) }
     return pids
   }
@@ -795,9 +889,10 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
     js(String(format: "{\"t\":\"usage\",\"cpu\":%.2f,\"gpu\":%.2f,\"mem\":%.1f,\"winCpu\":%.2f,\"winMem\":%.1f}", max(0, u.cpu - uc), u.gpu, max(0, u.memMB - um), uc, um))
   }
   /// the main display and what's on it now: the preview shows your own desktop
-  func desktopJSON() -> String {
-    guard let app, let scr = NSScreen.screens.first else { return "null" }
-    let f = scr.cgFrame
+  func desktopJSON(display: CGDirectDisplayID? = nil) -> String {
+    guard let app, let scr = NSScreen.screens.first(where: { $0.displayID == display }) ?? NSScreen.screens.first else { return "null" }
+    let fake = display.flatMap { fakeWorld[$0] }                       // dev: a pretend display
+    let f = fake ?? scr.cgFrame
     var wins: [[String: Any]] = []
     for (i, r) in app.lastRects.enumerated() where r.intersects(f) {
       let owner = i < app.lastOwners.count ? app.lastOwners[i] : ""
@@ -805,17 +900,31 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       wins.append(["x": r.minX - f.minX, "y": r.minY - f.minY, "w": r.width, "h": r.height, "name": owner,
                    "sm": Tracker.stageRects.contains("\(r)"), "widget": Tracker.widgetRects.contains("\(r)") || owner == "Notification Centre" || owner == "Notification Center" || owner == "WidgetKit Simulator"])
     }
-    let d: [String: Any] = ["w": f.width, "h": f.height, "windows": wins]
+    let d: [String: Any] = ["w": f.width, "h": f.height, "windows": wins, "display": Int(fake != nil ? display! : scr.displayID),
+                            "notch": fake.map { $0.origin == .zero && scr.safeAreaInsets.top > 0 } ?? (scr.safeAreaInsets.top > 0)]
     return (try? JSONSerialization.data(withJSONObject: d)).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
   }
   func pushState() {
     guard let app, web != nil else { return }
+    if !fakeWorld.isEmpty {                                          // dev: the harness's pretend displays, as the window would list real ones
+      let ids = fakeWorld.keys.sorted(), main = ids.first { fakeWorld[$0]?.origin == .zero }
+      let ds = ids.map { id -> [String: Any] in let f = fakeWorld[id]!, t = Cfg.theme(for: id)
+        let world = Cfg.spanWorlds && Cfg.spanThemes.contains(t) ? ids.filter { Cfg.theme(for: $0) == t }.map { Int($0) } : [Int(id)]
+        return ["id": Int(id), "name": id == main ? "Built-in Retina Display" : "Monitor \(id - 1000)", "x": f.minX, "y": f.minY, "w": f.width, "h": f.height, "theme": t,
+                "own": Cfg.d.string(forKey: "theme.display.\(id)") != nil, "main": id == main, "world": world] }
+      return pushStateWith(ds)
+    }
     let ds = NSScreen.screens.map { s -> [String: Any] in let f = s.cgFrame, id = s.displayID
       return ["id": Int(id), "name": s.localizedName, "x": f.minX, "y": f.minY, "w": f.width, "h": f.height, "theme": Cfg.theme(for: id),
-              "own": Cfg.d.string(forKey: "theme.display.\(id)") != nil, "main": s == NSScreen.screens.first] }
+              "own": Cfg.d.string(forKey: "theme.display.\(id)") != nil, "main": s == NSScreen.screens.first,
+              "world": Cfg.world(of: id).map { Int($0.displayID) }] }
+    pushStateWith(ds)
+  }
+  private func pushStateWith(_ ds: [[String: Any]]) {
+    guard let app else { return }
     var vars: [String: String] = [:]; for (t, _) in Cfg.themes { if let v = Cfg.variant(t) { vars[t] = v } }
     let st: [String: Any] = ["t": "state", "current": Cfg.theme, "displays": ds, "variants": vars, "seed": Cfg.seed, "version": Cfg.version, "siteQuery": Cfg.siteQuery,
-      "settings": ["login": LoginItem.enabled, "loginBlocked": LoginItem.blocked, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin, "autoUpdate": Cfg.autoUpdate],
+      "spanThemes": Array(Cfg.spanThemes), "settings": ["spanWorlds": Cfg.spanWorlds, "login": LoginItem.enabled, "loginBlocked": LoginItem.blocked, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin, "autoUpdate": Cfg.autoUpdate],
       "update": app.updater.status, "newNotes": Cfg.hasNewNotes, "notesSeen": Cfg.notesSeen ?? ""]
     if let d = try? JSONSerialization.data(withJSONObject: st), let s = String(data: d, encoding: .utf8) { js(s) }
   }
@@ -830,14 +939,14 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       if let p = pendingPage { pendingPage = nil; js("{\"t\":\"show\",\"page\":\"\(p)\"}") }
       return
     case "notesSeen": Cfg.notesSeen = Cfg.version; app.buildMenu()
-    case "desktop": js("{\"t\":\"desktop\",\"d\":\(desktopJSON())}"); return
+    case "desktop": js("{\"t\":\"desktop\",\"d\":\(desktopJSON(display: (o["display"] as? Int).flatMap { CGDirectDisplayID(exactly: $0) }))}"); return
     case "open": if let s = o["url"] as? String, let url = URL(string: s), ["https", "http"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }; return
     case "log": log("[ui] \(o["s"] as? String ?? "")"); return
     case "apply": if let id = o["theme"] as? String, Cfg.themes.contains(where: { $0.0 == id }) { Cfg.clearDisplayThemes(); Cfg.theme = id; app.reloadAll() }
     case "applyDisplay":
       let th = o["theme"] as? String
-      if let did = o["display"] as? Int, let id = CGDirectDisplayID(exactly: did), NSScreen.screens.contains(where: { $0.displayID == id }),
-         th == nil || Cfg.themes.contains(where: { $0.0 == th }) { Cfg.setTheme(th, for: id); app.reloadWall(id) }
+      if let did = o["display"] as? Int, let id = CGDirectDisplayID(exactly: did), NSScreen.screens.contains(where: { $0.displayID == id }) || fakeWorld[id] != nil,
+         th == nil || Cfg.themes.contains(where: { $0.0 == th }) { Cfg.setTheme(th, for: id); app.reloadWall(id); app.resendDesks() }
       else { toast("That display isn't connected any more.") }
     case "variant": if let th = o["theme"] as? String, let v = o["id"] as? String {
         Cfg.setVariant(th, v); for s in NSScreen.screens where Cfg.theme(for: s.displayID) == th { app.reloadWall(s.displayID) } }
@@ -849,10 +958,11 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
         if LoginItem.blocked && (v as? Bool ?? false) { SMAppService.openSystemSettingsLoginItems(); break }
         if let why = LoginItem.set(v as? Bool ?? false) { toast(why) }
       case "restWhenIdle": Cfg.restWhenIdle = v as? Bool ?? true
+      case "spanWorlds": Cfg.spanWorlds = v as? Bool ?? true; app.resendDesks(); app.tracker.forceResend()   // each page: its new world's windows
       case "autoUpdate": Cfg.autoUpdate = v as? Bool ?? true; if Cfg.autoUpdate { app.updater.check(manual: false) }
       case "paused": app.userPaused = v as? Bool ?? false; app.dispatch(live: false)
       case "fps": Cfg.fps = (v as? NSNumber)?.doubleValue ?? 0; app.reloadAll()
-      case "margin": Cfg.margin = (v as? NSNumber)?.doubleValue ?? 140; app.tracker.forceResend()
+      case "margin": Cfg.margin = (v as? NSNumber)?.doubleValue ?? 140; app.tracker.forceResend(); app.dispatch(live: false)   // every page, now
       default: break }
     case "reload": app.reloadAll()
     case "checkUpdate": app.updater.check(manual: false, fromWindow: true)
@@ -862,6 +972,37 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
     }
     pushState(); app.buildMenu()
   }
+}
+
+/// A window macOS doesn't shrink to fit the screen (the harness's pretend displays can be bigger than the real one)
+final class FreeSizeWindow: NSWindow { override func constrainFrameRect(_ r: NSRect, to s: NSScreen?) -> NSRect { r } }
+/// Test harness (--fakescreens): pretend displays, id → frame (CG points), all drawn by pages in this one app
+var fakeWorld: [CGDirectDisplayID: CGRect] = [:]
+/// … and each one's pixels per point (an ordinary external monitor is 1×: its page then draws at 1×, as on a real one)
+var fakeScale: [CGDirectDisplayID: CGFloat] = [:]
+/// Every display (frame) in the world this display's page draws: the displays showing the same spanning theme
+/// (in one world), or just this one
+func worldFrames(for id: CGDirectDisplayID) -> [CGRect] {
+  if !fakeWorld.isEmpty {
+    let t = Cfg.theme(for: id), spans = Cfg.spanWorlds && Cfg.spanThemes.contains(t)
+    return spans ? fakeWorld.keys.sorted().filter { Cfg.theme(for: $0) == t }.compactMap { fakeWorld[$0] } : [fakeWorld[id] ?? .zero]
+  }
+  return Cfg.world(of: id).map { $0.cgFrame }
+}
+/// Every display's frame (the whole desk), real or pretend
+func allFrames() -> [CGRect] { fakeWorld.isEmpty ? NSScreen.screens.map { $0.cgFrame } : fakeWorld.keys.sorted().compactMap { fakeWorld[$0] } }
+
+/// Display names as people see them, with the size (or position) added when two share a name
+func displayNames() -> [CGDirectDisplayID: String] {
+  var out: [CGDirectDisplayID: String] = [:]
+  for s in NSScreen.screens {
+    let same = NSScreen.screens.filter { $0.localizedName == s.localizedName }
+    if same.count < 2 { out[s.displayID] = s.localizedName; continue }
+    let f = s.frame.size, sameSize = same.filter { $0.frame.size == f }
+    out[s.displayID] = sameSize.count < 2 ? "\(s.localizedName) (\(Int(f.width))×\(Int(f.height)))"
+      : "\(s.localizedName) (\((sameSize.sorted { $0.frame.minX < $1.frame.minX }.firstIndex(of: s) ?? 0) + 1))"
+  }
+  return out
 }
 
 /// The menu-bar glyph: a window with a tide curling inside it (the app icon's idea, as a template image so it follows the menu bar)
@@ -963,6 +1104,17 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.terminate(nil) } }
       return }
     SimInput.start()
+    if benchMode, let fs = argValue("--fakescreens"), let b = NSScreen.screens.first.map({ CGRect(origin: .zero, size: $0.frame.size) }) {   // dev
+      switch fs {
+      case "row": fakeWorld = [1001: CGRect(x: -1920, y: b.minY - 98, width: 1920, height: 1080), 1002: b, 1003: CGRect(x: b.maxX, y: b.minY - 98, width: 1920, height: 1080)]
+      case "two": fakeWorld = [1001: CGRect(x: -1920, y: b.maxY - 1080, width: 1920, height: 1080), 1002: b]                      // one monitor left of the laptop, bottoms level
+      case "portrait": fakeWorld = [1001: b, 1002: CGRect(x: b.maxX, y: b.minY - 420, width: 1080, height: 1920)]               // a monitor on its side, to the right
+      case "big": fakeWorld = [1001: CGRect(x: b.minX - 300, y: b.minY - 1440, width: 2560, height: 1440), 1002: b]             // a 1440p monitor above, overhanging
+      default: fakeWorld = [1001: CGRect(x: b.minX - 1533, y: b.minY - 1080, width: 1920, height: 1080), 1002: CGRect(x: b.minX + 387, y: b.minY - 1080, width: 1920, height: 1080), 1003: b]
+      }
+      // the monitors are ordinary 1× displays (--fakeretina: every one 2×, like the laptop)
+      for (id, f) in fakeWorld where f != b { fakeScale[id] = args.contains("--fakeretina") ? 2 : 1 }
+    }
     buildWalls()
     tracker.onUpdate = { [weak self] r, live in self?.lastRects = r; self?.lastOwners = self?.tracker.owners ?? []; self?.dispatch(live: live) }
     tracker.onCursor = { [weak self] p in
@@ -997,11 +1149,75 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
           if flag == "--resize-at" { self.buildWalls() }        // the real path: the screen's own size comes back
           else { for (id, w) in self.walls { if let s = NSScreen.screens.first(where: { $0.displayID == id }) { w.window.setFrame(s.frame, display: true) } } }
         } } } }
+    if let js = argValue("--eval-each") {   // dev: ask every page the same question, now and then (--eval-every S)
+      let every = Double(argValue("--eval-every") ?? "4") ?? 4
+      Timer.scheduledTimer(withTimeInterval: every, repeats: true) { _ in
+        for (id, w) in self.walls.sorted(by: { $0.key < $1.key }) { w.web.evaluateJavaScript("String((() => { \(js) })())") { r, e in log("eval [\(id)] \(r as? String ?? "error: \(e?.localizedDescription ?? "?")")") } } } }
     if let t = argValue("--cycle").flatMap(Double.init) {   // dev: switch through every theme, t seconds each (memory soak)
       var i = 0
       Timer.scheduledTimer(withTimeInterval: t, repeats: true) { _ in
         i += 1; let id = Cfg.themes[i % Cfg.themes.count].0; Cfg.themeOverride = id; log("bench: theme \(i) \(id)"); self.reloadAll() } }
     if let t = argValue("--reload-at").flatMap(Double.init) { DispatchQueue.main.asyncAfter(deadline: .now() + t) { log("bench: reloadAll"); self.reloadAll() } }   // dev
+    if benchMode, let path = argValue("--uisteps"), let d = FileManager.default.contents(atPath: path),
+       let steps = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] {   // dev: a scripted walk through the app window
+      // each step: at (s), ui (JS run in the app window), shot (save the window as <shot>.png), pages (JS asked of every
+      // wallpaper page, answers logged as "PAGE <id> <answer>"). Settings it changes are put back when the run ends.
+      let domain = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName, saved = Cfg.d.persistentDomain(forName: domain) ?? [:]
+      NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+        Cfg.d.setPersistentDomain(saved, forName: domain); Cfg.d.synchronize() }
+      appWindow.show()
+      for st in steps {
+        let at = (st["at"] as? NSNumber)?.doubleValue ?? 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + at) {
+          if let js = st["ui"] as? String { self.appWindow.web?.evaluateJavaScript(js) { r, e in if let e { log("UI error: \(e.localizedDescription)") } else if let r { log("UI \(r)") } } }
+          if let shot = st["shot"] as? String, let w = self.appWindow.web {
+            w.takeSnapshot(with: nil) { img, _ in if let img, let t = img.tiffRepresentation, let r = NSBitmapImageRep(data: t), let png = r.representation(using: .png, properties: [:]) {
+              try? png.write(to: URL(fileURLWithPath: shot + ".png")); log("SHOT \(shot)") } } }
+          if let js = st["pages"] as? String {
+            for (id, w) in self.walls.sorted(by: { $0.key < $1.key }) { w.web.evaluateJavaScript("String((() => { \(js) })())") { r, _ in log("PAGE \(id) \(st["label"] as? String ?? "") \(r as? String ?? "?")") } } }
+        }
+      }
+    }
+    if benchMode, let u = argValue("--unplug-at").flatMap(Double.init), !fakeWorld.isEmpty {   // dev: a display goes away mid-run (its page with it)
+      DispatchQueue.main.asyncAfter(deadline: .now() + u) {
+        let id = CGDirectDisplayID(argValue("--unplug") ?? "1001") ?? 1001
+        log("bench: unplugging \(id)"); fakeWorld[id] = nil; fakeScale[id] = nil; self.walls[id]?.close(); self.walls[id] = nil
+        self.resendDesks(); self.tracker.forceResend(); self.appWindow.pushState() } }
+    if benchMode, let t = argValue("--crashtest").flatMap(Double.init) {   // dev: a real bad-pointer crash, to see the log catch it
+      DispatchQueue.main.asyncAfter(deadline: .now() + t) { log("crashtest: writing through a bad pointer"); UnsafeMutablePointer<Int>(bitPattern: 0x18)!.pointee = 1 } }
+    if benchMode, let t = argValue("--uistress").flatMap(Double.init) {   // dev: what a tester does in the window, as fast as a click every t s
+      // the clicks change real settings: put them all back when the run ends, so the next test starts from the same place
+      let domain = Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName, saved = Cfg.d.persistentDomain(forName: domain) ?? [:]
+      NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+        Cfg.d.setPersistentDomain(saved, forName: domain); Cfg.d.synchronize() }
+      appWindow.show(); var n = 0
+      Timer.scheduledTimer(withTimeInterval: t, repeats: true) { _ in n += 1
+        if n % 17 == 0 { log("uistress \(n): close and reopen the window"); self.appWindow.window?.performClose(nil)
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.appWindow.show() }; return }
+        if n % 3 == 0, let menu = self.status?.menu {                     // and the menu bar: a random item, as a click would
+          var items: [(NSMenu, Int, String)] = []
+          func walk(_ m: NSMenu) { for (i, it) in m.items.enumerated() { if let sm = it.submenu { walk(sm) } else if it.isEnabled, it.action != nil,
+            !["Quit", "Open", "Check", "What", "Restart", "Download", "About", "Report"].contains(where: { it.title.hasPrefix($0) }) { items.append((m, i, it.title)) } } }
+          walk(menu)
+          if let (m, i, title) = items.randomElement() { log("uistress \(n): menu \(title)"); m.performActionForItem(at: i) }
+          return
+        }
+        self.appWindow.web?.evaluateJavaScript("""
+        (() => { const T = ['railway','garden','estate','gallery','inkmap','celestial','snow','lava','wind','reef','tunnel','meadow','beach'];
+          const r = Math.random(), th = T[Math.floor(Math.random() * T.length)], ids = (S.displays || []).map(d => d.id);
+          let a;
+          if (r < .3) a = { t: 'apply', theme: th };
+          else if (r < .4) a = { t: 'applyDisplay', display: ids[Math.floor(Math.random() * ids.length)] || 1, theme: Math.random() < .2 ? null : th };
+          else if (r < .5) a = { t: 'set', key: 'spanWorlds', value: Math.random() < .5 };
+          else if (r < .6) a = { t: 'set', key: 'fps', value: [0, 30, 60][Math.floor(Math.random() * 3)] };
+          else if (r < .68) a = { t: 'set', key: 'paused', value: Math.random() < .3 };
+          else if (r < .76) a = { t: 'set', key: 'margin', value: Math.round(80 + Math.random() * 120) };
+          else if (r < .84) a = { t: 'variant', theme: Math.random() < .5 ? 'lava' : 'wind', id: Math.random() < .5 ? 'blue' : 'IND' };
+          else if (r < .9) a = { t: 'set', key: 'restWhenIdle', value: Math.random() < .5 };
+          else if (r < .95) a = { t: 'reload' };
+          else a = { t: 'desktop', display: ids[0] };
+          send(a); return JSON.stringify(a); })()
+        """) { r, e in log("uistress \(n): \(r as? String ?? "error \(e?.localizedDescription ?? "?")")") } } }
     if let t = argValue("--testpause"), let a = Double(t), !testPauseArmed {   /* bench: pause at a, resume at a + 8 */
       testPauseArmed = true
       DispatchQueue.main.asyncAfter(deadline: .now() + a) { self.userPaused = true; self.dispatch(live: false) }
@@ -1067,6 +1283,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
   func buildWalls() {
     if args.contains("--ui-only") { return }                       // dev: the window alone, no wallpapers
+    if !fakeWorld.isEmpty, let scr = NSScreen.screens.first {      // dev: pretend displays, one page each, in this app
+      for (id, f) in fakeWorld where walls[id] == nil { walls[id] = Wallpaper(screen: scr, fakeID: id, fakeFrame: f) }
+      tracker.forceResend(); return
+    }
     let ids = Set(NSScreen.screens.map { $0.displayID })
     for (id, st) in stills where !ids.contains(id) { st.close(); stills[id] = nil }   // a display unplugged while away
     if releasedAway { return }                                     // away: the pages come back when you do
@@ -1094,6 +1314,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
     }
   }
+  /// a theme changed somewhere: worlds may have grown or shrunk, so every page hears its desk again
+  func resendDesks() { for w in walls.values { w.sendDesk() } }
   func reloadAll() { walls.values.forEach { $0.close() }; walls = [:]; comeBackIfAway(); buildWalls() }
   func reloadWall(_ id: CGDirectDisplayID) { walls[id]?.close(); walls[id] = nil; comeBackIfAway(); buildWalls() }
   /// while the pages are let go (paused or away) a new theme or setting must still show: bring the pages back (the
@@ -1134,10 +1356,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let hidden = NSScreen.screens.allSatisfy { s in dormant.contains(s.displayID) || coveredSince[s.displayID] != nil }
     if hidden != Tracker.allHidden { Tracker.allHidden = hidden; log(hidden ? "everything covered: idling" : "something visible again") }
     for w in walls.values {
-      let idx = lastRects.indices.filter { lastRects[$0].intersects(w.cgFrame) }
+      let world = Cfg.spanThemes.contains(Cfg.theme(for: w.screenID)) ? worldFrames(for: w.screenID) : [w.cgFrame]
+      let idx = lastRects.indices.filter { r in world.contains { lastRects[r].intersects($0) } }
       let mine = idx.map { lastRects[$0] }, names = idx.map { $0 < lastOwners.count ? lastOwners[$0] : "" }
       // never pause while windows are moving (a sliver of the town is still on show and must keep up)
-      let pause = userPaused || asleep || idleRest || (!live && uncoveredArea(w.cgFrame, mine) < 1)
+      let own = mine.filter { $0.intersects(w.cgFrame) }
+      let pause = userPaused || asleep || idleRest || (!live && uncoveredArea(w.cgFrame, own) < 1)
       w.update(rects: mine, owners: names, live: live, pause: pause)
     }
   }
@@ -1190,7 +1414,18 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     // the main theme: every display (choosing it clears any per-display themes)
     let showing = Set(NSScreen.screens.map { Cfg.theme(for: $0.displayID) })
-    sub("Theme", Cfg.themes.map { (id, label) in (label, showing.contains(id), { Cfg.clearDisplayThemes(); Cfg.theme = id; self.reloadAll(); self.buildMenu(); self.appWindow.pushState() }) })
+    if NSScreen.screens.count > 1 {                          // several displays: "All Displays", then one menu each
+      let names = displayNames()
+      for s in NSScreen.screens {
+        let id = s.displayID, own = Cfg.d.string(forKey: "theme.display.\(id)") != nil, main = s == NSScreen.screens.first
+        let items: [(String, Bool, () -> Void)] = [(main ? "Default (\(Cfg.label(Cfg.theme)))" : "Same as Main (\(Cfg.label(Cfg.theme)))", !own,
+            { Cfg.setTheme(nil, for: id); self.reloadWall(id); self.resendDesks(); self.buildMenu(); self.appWindow.pushState() })] +
+          Cfg.themes.map { (tid, label) in (label, own && Cfg.theme(for: id) == tid,
+            { Cfg.setTheme(tid, for: id); self.reloadWall(id); self.resendDesks(); self.buildMenu(); self.appWindow.pushState() }) }
+        sub("\(names[id] ?? s.localizedName) — \(Cfg.label(Cfg.theme(for: id)))", items)
+      }
+    }
+    sub(NSScreen.screens.count > 1 ? "All Displays" : "Theme", Cfg.themes.map { (id, label) in (label, NSScreen.screens.count > 1 ? Cfg.theme == id && !NSScreen.screens.contains { Cfg.d.string(forKey: "theme.display.\($0.displayID)") != nil } : showing.contains(id), { Cfg.clearDisplayThemes(); Cfg.theme = id; self.reloadAll(); self.buildMenu(); self.appWindow.pushState() }) })
     m.addItem(.separator())
     let ri = ClosureItem("Rest when idle") { Cfg.restWhenIdle.toggle(); self.buildMenu(); self.appWindow.pushState() }; ri.state = Cfg.restWhenIdle ? .on : .off
     let p = ClosureItem("Pause") { self.userPaused.toggle(); self.dispatch(live: false); self.buildMenu(); self.appWindow.pushState() }
@@ -1211,7 +1446,8 @@ final class ClosureItem: NSMenuItem {
   let f: () -> Void
   init(_ t: String, _ f: @escaping () -> Void) { self.f = f; super.init(title: t, action: #selector(run), keyEquivalent: ""); target = self }
   required init(coder: NSCoder) { fatalError() }
-  @objc func run() { f() }
+  // after the click has been handled, not inside it: many actions rebuild the very menu this item belongs to
+  @objc func run() { let f = self.f; DispatchQueue.main.async { f() } }
 }
 
 // MARK: - Bench: prints page + host stats; --sweep moves a synthetic window around to measure live updates
@@ -1227,6 +1463,9 @@ enum Bench {
     // --layout NAME: realistic desktops to test themes against (Stage Manager strip, widgets, tiling, crowding, screen edges)
     let R = { (x: Double, y: Double, w: Double, h: Double) in CGRect(x: x, y: y, width: w, height: h) }
     let layouts: [String: [(CGRect, String, Bool)]] = [
+      "world3": [(R(-1250, -880, 760, 480), "Safari", false), (R(-150, -980, 420, 300), "Notes", false),
+                 (R(1000, -930, 820, 520), "Code", false), (R(200, 170, 640, 420), "Slack", false), (R(900, 450, 460, 320), "Notes", false),
+                 (R(1324, 794, 180, 180), "Notification Centre", false)],
       "sm": [(R(300, 40, 1050, 800), "WhatsApp", false), (R(14, 40, 140, 105), "Slack", true), (R(14, 200, 150, 120), "Google Chrome", true),
              (R(14, 375, 140, 115), "Code", true), (R(14, 545, 145, 110), "Claude", true), (R(14, 700, 140, 100), "Spotify", true),
              (R(1330, 790, 170, 170), "Notification Centre", false)],
@@ -1250,6 +1489,11 @@ enum Bench {
     let choreo = argValue("--choreo").flatMap { Choreo(path: $0) }
     if let c = choreo { let a = c.at(0); rects0 = a.0; owners0 = a.1; stage0 = zip(a.0, a.2).filter { $0.1 }.map { $0.0 }
       c.pinCursor(0) }                                     // the real mouse must not reach the page while filming
+    else if argValue("--layout") == "auto", !fakeWorld.isEmpty {     // dev: a big and a small window on every pretend display
+      let names = ["Safari", "Code", "Slack", "Notes", "Mail", "Figma"]; var i = 0; rects0 = []; owners0 = []
+      for (_, f) in fakeWorld.sorted(by: { $0.key < $1.key }) {
+        rects0.append(CGRect(x: f.minX + f.width * 0.1, y: f.minY + max(40, f.height * 0.12), width: f.width * 0.46, height: f.height * 0.48)); owners0.append(names[i % 6]); i += 1
+        rects0.append(CGRect(x: f.minX + f.width * 0.64, y: f.minY + f.height * 0.55, width: f.width * 0.24, height: f.height * 0.28)); owners0.append(names[i % 6]); i += 1 } }
     else if let name = argValue("--layout"), let l = layouts[name] { rects0 = l.map { $0.0 }; owners0 = l.map { $0.1 }; stage0 = l.filter { $0.2 }.map { $0.0 } }
     if !sweep { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
       for r in stage0 { Tracker.stageRects.insert("\(r)") }
@@ -1344,6 +1588,15 @@ enum Bench {
         a += 0.035; app.walls.values.first(where: { $0.cgFrame.origin == .zero })?.cursor(CGPoint(x: 1380 + 70 * cos(a), y: 330 + 160 * sin(a * 0.5)))
       }
       DispatchQueue.main.asyncAfter(deadline: .now() + secs - 1) {
+        if !fakeWorld.isEmpty {                                  // every pretend display, and the desk it makes
+          let base = (shot as NSString).deletingPathExtension
+          var lay: [String] = []
+          for (id, w) in app.walls { let f = w.cgFrame; lay.append("\"\(id)\":[\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))]")
+            w.web.takeSnapshot(with: nil) { img, _ in
+              if let img, let r = NSBitmapImageRep(data: img.tiffRepresentation!) { try? r.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: "\(base)-\(id).png")) } } }
+          try? "{\(lay.joined(separator: ","))}".write(toFile: "\(base)-layout.json", atomically: true, encoding: .utf8); log("snapshots -> \(base)-*.png")
+          return
+        }
         guard let w = app.walls.values.first(where: { $0.cgFrame.origin == .zero }) else { return }
         w.web.takeSnapshot(with: nil) { img, _ in
           if let img, let r = NSBitmapImageRep(data: img.tiffRepresentation!) { try? r.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: shot)); log("snapshot -> \(shot)") }

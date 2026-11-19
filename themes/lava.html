@@ -21,6 +21,7 @@
 <canvas id="gl"></canvas>
 <script>
 'use strict';
+window.__twCalm = 24;                                    // frames a second while nobody's working here (the wax rises slowly)
 window.__noMask = true;
 let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
 const P = { quality: 2 };

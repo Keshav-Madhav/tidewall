@@ -100,6 +100,7 @@
   .hint { margin-top: 10px; opacity: .5; font-size: 11px; line-height: 1.6; }
   #nogl { position: fixed; inset: 0; display: none; place-items: center; color: #fff; font-size: 16px; }
 </style>
+<script src="span.js"></script>
 <script src="companion.js"></script>
 </head>
 <body>
@@ -286,11 +287,16 @@ function makeNoiseImage() {
    陆地场（CPU）：s = 到海岸的有符号距离（<0 陆地）
    ====================================================================== */
 let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
+// one world across displays (span.js). The meadow, its clouds and the drifting sky are laid out in world coordinates;
+// W×H is still this display (its boy and cat, which stay on the main display), OX/OY where it sits, WW×WH the world.
+// The cloud field reaches MG past every edge, so a cloud near a seam is worked out the same on both sides of it.
+let OX = 0, OY = 0, WW = innerWidth, WH = innerHeight;
+const MG = 240;
 function buildNoise() {
   const N = Gw * Gh;
   NZ = { wx: new Float32Array(N), wy: new Float32Array(N) };
   for (let gy = 0; gy < Gh; gy++) for (let gx = 0; gx < Gw; gx++) {
-    const i = gy * Gw + gx, x = gx * STEP, y = gy * STEP;
+    const i = gy * Gw + gx, x = gx * STEP - MG + OX, y = gy * STEP - MG + OY;     // the warp follows the world
     NZ.wx[i] = fbm(x * 0.0028, y * 0.0028, 1) - 0.47;
     NZ.wy[i] = fbm(x * 0.0028, y * 0.0028, 2) - 0.47;
   }
@@ -303,14 +309,14 @@ function computeField(rects) {
   const wa = P.warp * 2.2, wmax = wa * 0.5;
   for (const r of rects) {
     const R = 5.5 * sig + Math.max(r.hw, r.hh) + wmax;
-    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
-    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    const gx0 = Math.max(0, Math.floor((r.cx + MG - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + MG + R) / STEP));
+    const gy0 = Math.max(0, Math.floor((r.cy + MG - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + MG + R) / STEP));
     // Tidewall: windows are big — put the cloud / sand edge just *outside* the window (+ margin), not inside it.
     // The edge (f = 0.35) sits σ·1.025 beyond the core, so a core of (half-size − 0.8σ) lands it a little past the rect.
     const chw = Math.max(r.hw - 0.8 * sig, r.hw * 0.25), chh = Math.max(r.hh - 0.8 * sig, r.hh * 0.25);
     for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
       const i = gy * Gw + gx;
-      const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
+      const qx = gx * STEP - MG + NZ.wx[i] * wa, qy = gy * STEP - MG + NZ.wy[i] * wa;
       let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
       if (dx < 0) dx = 0; if (dy < 0) dy = 0;
       f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
@@ -326,7 +332,7 @@ function computeField(rects) {
   return { s };
 }
 function sampleArr(a, x, y) {
-  const fx = Math.min(Math.max(x / STEP, 0), Gw - 1.001), fy = Math.min(Math.max(y / STEP, 0), Gh - 1.001);
+  const fx = Math.min(Math.max((x + MG) / STEP, 0), Gw - 1.001), fy = Math.min(Math.max((y + MG) / STEP, 0), Gh - 1.001);
   const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, i = iy * Gw + ix;
   return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + Gw] * (1 - tx) + a[i + Gw + 1] * tx) * ty;
 }
@@ -343,7 +349,7 @@ void main() {
 const FS = `#version 300 es
 precision highp float;
 uniform sampler2D uNoise, uFA, uFB, uGrass;   // Tidewall: uGrass = a painted meadow (generated for this theme), tiling
-uniform vec2 uRes, uGrid;
+uniform vec2 uRes, uGrid, uOff, uWorld;
 uniform float uScale, uSeed, uStep, uMix, uTime, uDebug, uEdge;
 #ifdef MEADOW_ACTOR
 uniform sampler2D uActor, uActorShadow;
@@ -378,7 +384,7 @@ float hash2(vec2 p) {
 }
 float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
 vec4 N(vec2 p, float scale) { return texture(uNoise, p / scale + uSeed * 0.013); }
-float fieldS(sampler2D t, vec2 p) { return texture(t, (p / uStep + 0.5) / uGrid).r; }
+float fieldS(sampler2D t, vec2 p) { return texture(t, ((p + 240.0) / uStep + 0.5) / uGrid).r; }   // the grid starts MG before this display
 float smin(float a, float b, float k) { float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
 
 // 到云的距离（<0 在云里）：图标周围云团的主体 + 自己格子里的圆（和天空主题同一套）
@@ -443,16 +449,17 @@ vec4 catColor(vec2 uv) {
 
 void main() {
   vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  vec2 pw = p + uOff;                         // where this pixel is in the world: the paint and its noise follow it, so seams don't show
 
   // ---------- 草地：黄绿和绿的大块水彩晕染，几片颜色深一点，左上（向阳）稍亮；纸的颗粒 ----------
   // Tidewall: the meadow is painted — two samplings of one gouache texture at different scales and angles, blended
   // by large slow noise so the tile never repeats visibly; big soft washes of light and shade on top
-  float w1 = N(p, 1900.0).b, w2 = N(p + 311.0, 650.0).g;
-  vec3 gA = texture(uGrass, p / 820.0).rgb, gB = texture(uGrass, mat2(0.8, 0.6, -0.6, 0.8) * p / 1130.0 + 0.37).rgb;
-  vec3 col = mix(gA, gB, ss(0.3, 0.7, N(p + 53.0, 1500.0).r));
+  float w1 = N(pw, 1900.0).b, w2 = N(pw + 311.0, 650.0).g;
+  vec3 gA = texture(uGrass, pw / 820.0).rgb, gB = texture(uGrass, mat2(0.8, 0.6, -0.6, 0.8) * pw / 1130.0 + 0.37).rgb;
+  vec3 col = mix(gA, gB, ss(0.3, 0.7, N(pw + 53.0, 1500.0).r));
   col *= mix(0.9, 1.07, ss(0.25, 0.8, w1 * 0.7 + w2 * 0.3));                 // sunlit and shaded sweeps across the field
-  col = mix(col, col * vec3(0.78, 0.86, 0.74), ss(0.5, 0.85, N(p + 977.0, 1300.0).r) * 0.45);
-  col *= 1.0 + 0.05 * (0.5 - (p.x + p.y) / (uRes.x + uRes.y));
+  col = mix(col, col * vec3(0.78, 0.86, 0.74), ss(0.5, 0.85, N(pw + 977.0, 1300.0).r) * 0.45);
+  col *= 1.0 + 0.05 * (0.5 - (pw.x + pw.y) / (uWorld.x + uWorld.y));
 
 #ifdef MEADOW_ACTOR
   // 人物、风筝和完整投影都先落在草地上，随后由同一层云影和白云覆盖。
@@ -479,7 +486,7 @@ void main() {
 
   // ---------- 云投在草地上的影子（右下方）：一整块深绿 ----------
   float sd = cloudDist(p - SHADOW_OFF);
-  col = mix(col, col * vec3(0.52, 0.6, 0.62), ss(26.0, -34.0, sd + (N(p, 260.0).r - 0.5) * 30.0) * 0.8);   // a cloud's shadow is soft-edged and cool
+  col = mix(col, col * vec3(0.52, 0.6, 0.62), ss(26.0, -34.0, sd + (N(pw, 260.0).r - 0.5) * 30.0) * 0.8);   // a cloud's shadow is soft-edged and cool
 
   // ---------- 云：卡通画法（和大海主题一样）——一个个圆合起来，每个圆色调略有不同，
   //            只有朝光（左上）的外轮廓一道亮白，里面没有亮面；边缘干净 ----------
@@ -488,19 +495,19 @@ void main() {
   // Tidewall: the clouds are painted with volume — each puff is lit from the upper left (brighter where its surface
   // faces the sun, a soft blue shade on the far side), its edge is billowy rather than a clean circle, and its body has
   // the cauliflower texture of real cumulus
-  float bill = (N(p, 210.0).r - 0.5) * 22.0 + (N(p + 71.0, 90.0).g - 0.5) * 8.0;
+  float bill = (N(pw, 210.0).r - 0.5) * 22.0 + (N(pw + 71.0, 90.0).g - 0.5) * 8.0;
   float de = d + bill * ss(-50.0, 0.0, d);                                   // only the rim billows; the middle stays whole
   if (de < 12.0) {
     // near the rim: which way the cloud's surface faces the sun, from its outline
     float edgeW = ss(-55.0, -14.0, d), litEdge = 0.6;
     if (edgeW > 0.0) { float dl = cloudDist(p + LIGHT * 26.0), dd = cloudDist(p - LIGHT * 26.0); litEdge = clamp((dl - dd) / 52.0 * 0.5 + 0.5, 0.0, 1.0); }
     // inside: the soft bumpy relief of a cumulus top, lit from the same side
-    float rel = ss(0.2, 0.8, N(p, 420.0).r) * 0.22 + ss(0.25, 0.75, N(p + 37.0, 160.0).g) * 0.12 - 0.17;
+    float rel = ss(0.2, 0.8, N(pw, 420.0).r) * 0.22 + ss(0.25, 0.75, N(pw + 37.0, 160.0).g) * 0.12 - 0.17;
     float lit = clamp(mix(0.62 + rel, litEdge, edgeW), 0.0, 1.0);
     vec3 shade = vec3(0.74, 0.79, 0.88), body = vec3(0.93, 0.95, 0.98), sun = vec3(1.0, 0.995, 0.975);
     vec3 cc = mix(shade, body, ss(0.12, 0.6, lit));
     cc = mix(cc, sun, ss(0.64, 0.98, lit));
-    cc *= 1.0 + (N(p + 7.0, 34.0).r - 0.5) * 0.035;                          // the faintest grain of vapour
+    cc *= 1.0 + (N(pw + 7.0, 34.0).r - 0.5) * 0.035;                          // the faintest grain of vapour
     col = mix(col, cc, ss(10.0, -12.0, de));                                 // a soft, airy edge
   }
   if (uDebug > 0.5) col = mix(col, vec3(0.9, 0.15, 0.15), 1.0 - ss(0.0, 1.5, abs(d)));
@@ -619,8 +626,8 @@ let circStats = null, circTex = null, circBuf = null, cgW = 0, cgH = 0;
 const rnd1 = (x, y, k) => hash2(x, y, k);                  // 固定的随机数（和换种子一起变）
 const skyClouds = [];
 let flowT = 0;
-function makeSkyCloud(x) {
-  const rnd = Math.random, R = 95 * 1.2;                 // 轮廓大一些（云厚一些，才放得下大圆）；圆的大小还是按 95 算
+function makeSkyCloud(x, rnd = Math.random) {
+  const R = 95 * 1.2;                 // 轮廓大一些（云厚一些，才放得下大圆）；圆的大小还是按 95 算
   // 1) 大致的轮廓：底下一排大圆（中间大、两边小），上面再堆几个 → 底宽上窄的一团
   const n = 3 + Math.floor(rnd() * 3), w = R * (1.0 + n * 0.5);
   const body = [];
@@ -665,31 +672,26 @@ function makeSkyCloud(x) {
   for (const [cx, cy, r] of body) if (r > 0.75 * Rm) circles.push([cx, cy, r - 0.75 * Rm, rnd()]);
   layer(34 * 0.85, [0.5, 0.9], -1.0 * Rm, ci => sstep(-0.05 * Rm, -0.35 * Rm, ci) * (1 - sstep(-0.7 * Rm, -1.0 * Rm, ci)), true);
   layer(24 * 0.85, [0.45, 0.8], -0.6 * Rm, ci => sstep(0, -0.2 * Rm, ci) * (1 - sstep(-0.4 * Rm, -0.6 * Rm, ci)), true);
-  const y = 80 + rnd() * (H - TASKBAR - 120);
+  const y = 80 + rnd() * (WH - TASKBAR - 120);
   return { x, y, circles, v: 0.7 + rnd() * 0.6, grow: 0, hw: Math.max(-x0, x1) + 20 };
 }
 function stepSkyClouds(dt) {
-  flowT += dt * P.flow;                                     // 云自己的时钟：流动速度越快，鼓包呼吸得也越快
-  const want = Math.round(P.cover * 10);
-  // 数量变少：多出来的慢慢缩小消失；变多：直接在画面里淡入（找一块别的小云不太挤的地方）
-  const alive = skyClouds.filter(c => !c.dying);
-  for (let i = want; i < alive.length; i++) alive[i].dying = true;
-  for (let n = alive.length; n < want; n++) {
-    let best = null, bestD = -1;
-    for (let k = 0; k < 20; k++) {
-      const c = makeSkyCloud(Math.random() * W);
-      const dmin = Math.min(1e9, ...skyClouds.map(o => Math.hypot((o.x - c.x) / 1.6, o.y - c.y)));
-      if (dmin > bestD) { bestD = dmin; best = c; }
-    }
-    skyClouds.push(best);
+  flowT = Span.secs(16384) * P.flow;                      // 云自己的时钟（the world's clock: every display's sky in step）
+  const want = Math.round(P.cover * 10 * Math.max(1, WW / Math.max(1, W) * .8));
+  // each cloud k drifts along its own lane across the whole world and comes round again as a new cloud; where it is
+  // and what it looks like follow from the clock alone. A cloud seen for the first time grows in (count changes, start-up)
+  const span = WW + 2 * 400, seen = new Set();
+  for (let k = 0; k < want; k++) {
+    const R = mulberry32((seed * 31 + k * 7919) >>> 0), v = 0.7 + R() * 0.6, phase = R() * span;
+    const pos = phase + flowT * 10 * v, cyc = Math.floor(pos / span), key = k + ':' + cyc;
+    let c = skyClouds.find(q => q.key === key);
+    if (!c) { c = makeSkyCloud(0, mulberry32((seed * 131 + k * 104729 + cyc * 15485863) >>> 0)); c.key = key; c.grow = 0; skyClouds.push(c); }
+    c.x = (pos - cyc * span) - 400; c.v = v; seen.add(key);
   }
   for (let i = skyClouds.length - 1; i >= 0; i--) {
-    const c = skyClouds[i];
-    c.x += P.flow * 10 * c.v * dt;                          // 流动速度 ×1 时约 10px/秒
-    c.grow = c.dying ? c.grow - dt * 0.5 : Math.min(1, c.grow + dt * 0.5);
-    if (c.grow <= 0) { skyClouds.splice(i, 1); continue; }
-    // 飘出画面：从上风那边画面外重新飘进来
-    if (c.x - c.hw > W + 50) { const n = makeSkyCloud(-c.hw - 50); n.grow = 1; skyClouds[i] = n; }
+    const c = skyClouds[i], on = seen.has(c.key);
+    c.grow = on ? Math.min(1, c.grow + dt * 0.5) : c.grow - dt * 0.5;
+    if (c.grow <= 0 && !on) skyClouds.splice(i, 1);
   }
 }
 const sstep = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
@@ -704,9 +706,9 @@ function buildMassCircles() {
   const big = new Map();
   const layer = (G, k0, size, band, isBig) => {
     if (!FB) return;
-    for (let cy = -Math.ceil(2 * R / G); cy <= Math.ceil((H + 2 * R) / G); cy++) for (let cx = -Math.ceil(2 * R / G); cx <= Math.ceil((W + 2 * R) / G); cx++) {
+    for (let cy = Math.floor((OY - 2 * R) / G); cy <= Math.ceil((OY + H + 2 * R) / G); cy++) for (let cx = Math.floor((OX - 2 * R) / G); cx <= Math.ceil((OX + W + 2 * R) / G); cx++) {
       const ox = rnd1(cx, cy, k0), oy = rnd1(cx, cy, k0 + 1), rr = rnd1(cx, cy, k0 + 2), ph = rnd1(cx, cy, k0 + 3);
-      const x = (cx + 0.1 + ox * 0.8) * G, y = (cy + 0.1 + oy * 0.8) * G;
+      const x = (cx + 0.1 + ox * 0.8) * G - OX, y = (cy + 0.1 + oy * 0.8) * G - OY;   // world cell, this display's coordinates
       const ci = curS(x, y) - P.edge;                        // 圆心处离云团边多远（<0 在云团里）
       if (ci > 0 || ci < band[1] - 10) continue;
       let r = G * (size[0] + (size[1] - size[0]) * rr) * band[2](ci);
@@ -714,7 +716,7 @@ function buildMassCircles() {
       const gap = ci + 0.6 * R;
       let att = sstep(gap - 4, gap + 12, r);
       if (!isBig) {
-        const bx = Math.floor(x / R), by = Math.floor(y / R);
+        const bx = Math.floor((x + OX) / R), by = Math.floor((y + OY) / R);   // the big circles' world cells
         for (let j = by - 1; j <= by + 1; j++) for (let i = bx - 1; i <= bx + 1; i++) {
           const o = big.get(i + ',' + j);
           if (!o) continue;
@@ -760,14 +762,14 @@ function uploadCircles(t) {
   const list = massList.slice();
   for (let i = 0; i < list.length; i += 4) {
     const x = list[i], y = list[i + 1], r = list[i + 2], ph = list[i + 3];
-    list[i] = x + wobX(x, y, r, ph); list[i + 1] = y + wobY(x, y, r, ph);
+    list[i] = x + wobX(x + OX, y + OY, r, ph); list[i + 1] = y + wobY(x + OX, y + OY, r, ph);
   }
   // 天上的小云
   for (const c of skyClouds) {
     const g = c.grow * c.grow * (3 - 2 * c.grow);
     c.circles.forEach(([dx, dy, r, ph], i) => {
       const rb = r * g * (1 + 0.04 * Math.sin(flowT * (0.09 + 0.035 * ph) + ph * 6.283 + i));
-      if (rb > 0.5) list.push(c.x + dx + wobX(dx, dy, r, ph), c.y + dy + wobY(dx, dy, r, ph), rb, ph);   // 天上的云：按云自己的坐标算，整朵飘的时候也在轻轻翻动
+      if (rb > 0.5) list.push(c.x - OX + dx + wobX(dx, dy, r, ph), c.y - OY + dy + wobY(dx, dy, r, ph), rb, ph);   // 天上的云：按云自己的坐标算，整朵飘的时候也在轻轻翻动
     });
   }
   // 分到格子里（圆盖到的每个格子都放一份；一个格子放不下就留大的）
@@ -905,14 +907,15 @@ function applyLayout(kind) {
    尺寸 / 主循环
    ====================================================================== */
 function resize() {
-  W = innerWidth; H = innerHeight;
+  redraw = true; circAt = -1e9;
+  W = innerWidth; H = innerHeight; OX = Span.x; OY = Span.y; WW = Span.uw; WH = Span.uh;
   // 预览模式：页面按整块桌面的尺寸排版、再整体缩小显示，所以画布只需要很低的分辨率
   const scale = PREVIEW ? 0.45 : Math.min(devicePixelRatio || 1, P.quality);
   // 按画布实际占的大小算（带小数：2560 宽的屏幕 150% 缩放是 1706.67，innerWidth 取整成 1707），
   // 不然画布比屏幕多出一个像素，浏览器会把整幅画缩放一下贴上去，又发糊
   const box = cv.getBoundingClientRect();
   cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
-  Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
+  Gw = Math.ceil((W + 2 * MG) / STEP) + 2; Gh = Math.ceil((H + 2 * MG) / STEP) + 2;
   buildNoise();
   allocField();
 }
@@ -935,17 +938,27 @@ function frame(now) {
   draw(now);
   if (++frameN % 10 === 0) updateStats();
 }
+const isMainDisplay = () => { const [mx, my] = Span.main; return mx >= OX && my >= OY && mx < OX + W && my < OY + H; };
+let circAt = -1e9, redraw = true;                          // Tidewall: when the clouds were last rebuilt; something else needs a frame
 function draw(now) {
   const measure = !!window.__measure && frameN % 20 === 0,   // Tidewall: a GPU stall every 20 frames, only when profiling
     t0 = performance.now();
   // 隐藏男孩时只保留路线状态，小猫仍能独立显示并避开男孩再次出现的路线。
-  const boy=typeof prepareMeadowBoy==='function'?prepareMeadowBoy(now,P.showBoy===1):null;
-  const actor=P.showBoy===1?boy:null;
-  const cat=P.showCat===1&&typeof prepareMeadowCat==='function'?prepareMeadowCat(boy,now):null;
+  const here=!Span.world||isMainDisplay();                 // one world: the boy and his cat play on the main display
+  const boy=typeof prepareMeadowBoy==='function'?prepareMeadowBoy(now,P.showBoy===1&&here):null;
+  const actor=P.showBoy===1&&here?boy:null;
+  const cat=here&&P.showCat===1&&typeof prepareMeadowCat==='function'?prepareMeadowCat(boy,now):null;
   // 官网不加载人物脚本，沿用原来的草地着色器和开销。
   if(actor&&!actorPR)actorPR=program(FS.replace('#version 300 es','#version 300 es\n#define MEADOW_ACTOR'));
   // 两次绘制共享本帧云数据，不额外重算、上传云团。
-  uploadCircles((now - T0) / 1000);
+  // Tidewall: the clouds move slowly (well under a pixel in a fifteenth of a second), so they're rebuilt and uploaded
+  // 15 times a second, and while windows move; with nobody walking the meadow, nothing else changes between those
+  // moments, so the frame isn't drawn at all
+  const morphing = curMix < 1, circDue = morphing || !circTex || now - circAt >= 66;
+  window.__twCalm = actor || cat ? 30 : 15;                 // only the clouds moving: 15 frames a second is plenty
+  if (!actor && !cat && !circDue && !redraw) return;
+  if (circDue) { uploadCircles((now - T0) / 1000); circAt = now; }
+  redraw = false;
   const render=(renderer,withCat)=>{
     const { p, U } = renderer;
     gl.useProgram(p);
@@ -956,12 +969,12 @@ function draw(now) {
     gl.uniform1i(U.uNoise, 0); gl.uniform1i(U.uFA, 1); gl.uniform1i(U.uFB, 2);
     gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, grassTex); gl.uniform1i(U.uGrass, 4);
     gl.uniform2f(U.uRes, cv.width / cv._scale, cv.height / cv._scale);   // 和画布的实际像素对齐（innerWidth、innerHeight 是取整过的）
-    gl.uniform2f(U.uGrid, Gw, Gh);
+    gl.uniform2f(U.uGrid, Gw, Gh); if (U.uOff) gl.uniform2f(U.uOff, OX, OY); if (U.uWorld) gl.uniform2f(U.uWorld, WW, WH);
     gl.uniform1f(U.uScale, cv._scale);
     gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
     gl.uniform1f(U.uStep, STEP);
     gl.uniform1f(U.uMix, curMix);
-    gl.uniform1f(U.uTime, (now - T0) / 1000);
+    gl.uniform1f(U.uTime, Span.secs(16384));
     gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, circTex); gl.uniform1i(U.uCirc, 3);
     gl.uniform2f(U.uCGrid, cgW, cgH); gl.uniform1f(U.uCellG, CELL_G);
@@ -1128,6 +1141,11 @@ function drawGhosts() {
   box.innerHTML = icons.map(ic => `<div class="ghost" style="left:${ic.x}px;top:${ic.y}px;width:${ic.w}px;height:${ic.h}px"><i></i><b></b></div>`).join('');
 }
 
+function worldDesk(m) {
+  Span.desk(m);
+  if (Span.world && seed !== 4242) { seed = 4242; if (noiseTex) gl.deleteTexture(noiseTex); buildNoiseTex(); }   // one meadow: the same paint everywhere
+  resize(); skyClouds.length = 0;
+}
 function startHostedMode() {
   document.body.classList.add('wall');
   if (PREVIEW) {
@@ -1136,12 +1154,15 @@ function startHostedMode() {
   }
   icons = [];
   commit(true);                                   // 先是一片草地（还不知道图标在哪）
-  let first = true;
+  let first = true, deskKey = '', lastIconsMsg = null;
   const handle = m => {
-    if (m.t === 'pause') { paused = PREVIEW ? false : m.v; if (!paused && !looping) { looping = true; requestAnimationFrame(frame); } return; }
+    if (m.t === 'pause') { paused = PREVIEW ? false : m.v; Span.paused(!!paused); if (!paused && !looping) { looping = true; requestAnimationFrame(frame); } return; }
     if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'desk') { const dk = [m.x, m.y, m.w, m.h, m.uw, m.uh, JSON.stringify(m.fr || [])].join('|'); if (dk === deskKey) return; deskKey = dk;
+      worldDesk(m); if (lastIconsMsg) { first = true; handle(lastIconsMsg); } else commit(true); return; }
     if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
     if (m.t !== 'icons') return;
+    lastIconsMsg = m;
     const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
     icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
     if (PREVIEW) drawGhosts();

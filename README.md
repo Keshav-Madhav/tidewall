@@ -34,8 +34,9 @@ paintings on a museum wall. Drag a window and the world re-arranges itself aroun
 | **Wind Tunnel** | a real fluid simulation: smoke streams past museum-scanned models, and around your windows | high |
 | **Meadow**, **Beach** | painted landscapes that part around your windows | medium to high |
 
-Several displays are one desk: the sky, the wind map and the snow panorama continue across screens, and each display
-can have its own theme.
+**Several displays are one world.** Show a theme on more than one display and it becomes one continuous scene: trains
+run, koi swim and boats sail from screen to screen; one garden, one castle plan, one sea of islands, one long museum
+wall. Every theme but Lava Lamp and Wind Tunnel spans, and each display can also have its own theme.
 
 ## Install
 
@@ -52,7 +53,7 @@ Requires macOS 14 Sonoma or later, on Apple silicon or Intel.
 
 **Updates install themselves.** Tidewall checks GitHub for new versions, verifies each download is a signed Tidewall
 release, and installs it while your screen is locked (or when you choose **Restart to Update** in the menu bar). You
-only see the "Open Anyway" step once. Turn it off in **Settings ▸ Updates**.
+only see the "Open Anyway" step once. Turn it off in Tidewall's **About** page.
 
 Tidewall lives in the menu bar, as a little window riding a wave. Click it and choose **Open Tidewall…** for the
 window, where you can try every theme on a live preview of your own desktop, give each display its own theme, and
@@ -64,6 +65,9 @@ A wallpaper runs all day, so Tidewall is built to cost as little as possible:
 
 - The cheap themes draw the scene once and redraw only when your windows change; trains, boats and gardeners are
   small pictures the graphics card slides around for free.
+- Scenes draw at a calm 30 frames a second or less, and at 60 only while you're working on the wallpaper itself (the
+  pointer over it, a window being dragged); the soft, full-screen scenes draw a little under retina, which looks the
+  same at about half the work.
 - Every display shares one web process.
 - A screen that's fully covered stops drawing. With no mouse or keyboard input for 3 minutes, everything pauses; after
   10 minutes (or 90 seconds after locking) the pages are let go entirely and a still picture stands in, until you're

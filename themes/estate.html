@@ -27,6 +27,7 @@
 <canvas id="decorA" class="layer decor" style="opacity:0"></canvas>
 <canvas id="decorB" class="layer decor" style="opacity:0"></canvas>
 <canvas id="ink" class="layer" style="z-index:3"></canvas>
+<script src="span.js"></script>
 <script>
 'use strict';
 window.__opaque = false; window.__noMask = true;      // the ink layer needs alpha; no host stencil here
@@ -34,6 +35,19 @@ const INK = 'rgba(70,44,26,0.9)', INK_SOFT = 'rgba(70,44,26,0.5)', RED = 'rgba(1
 const SCRIPT = '"Apple Chancery", "Snell Roundhand", "Iowan Old Style", serif';
 const P = { quality: 2 };
 let W = innerWidth, H = innerHeight, K = devicePixelRatio, fpsEMA = 0, fieldMs = 0, paused = false;
+// one world across displays (span.js): the town is laid out over the whole world and every display shows its part.
+// W×H stay this display; OX/OY say where it sits in the world. Windows, roads, walkers and walls are in world coordinates.
+let OX = 0, OY = 0;
+const FRS = () => Span.frames();
+const onOneW = (b, m = 0) => FRS().some(([fx, fy, fw, fh]) => b[0] >= fx + m && b[1] >= fy + m && b[2] <= fx + fw - m && b[3] <= fy + fh - m);
+// the compass rose: top-left of the main display
+const compassAt = () => { if (!Span.world) return [W * .09, H * .15]; const [mx, my, mw, mh] = Span.main; return [mx - mw / 2 + mw * .09, my - mh / 2 + mh * .15]; };
+const onMain = () => { const [cx, cy] = compassAt(); return cx >= OX && cy >= OY && cx < OX + W && cy < OY + H; };
+function worldArgs() {
+  const [CX, CY] = compassAt(), FR = Span.world ? FRS() : null, E = [];
+  if (FR) for (const F of FR) for (const e of Span.edges(F)) { const [x, y, w, h] = F; E.push(e.side === 'top' ? [e.a, y, e.b, y] : e.side === 'bottom' ? [e.a, y + h, e.b, y + h] : e.side === 'left' ? [x, e.a, x, e.b] : [x + w, e.a, x + w, e.b]); }
+  return { OX, OY, WW: Span.uw, WH: Span.uh, CX, CY, FR, E: FR ? E : null };
+}
 const $ = id => document.getElementById(id);
 const cv = $('ink');                                   // the host's bench probe reads the main canvas
 
@@ -82,8 +96,8 @@ worker.onerror = e => { try { webkit.messageHandlers.host.postMessage('JSERR wor
 worker.onmessage = e => {
   const d = e.data;
   // the parchment is painted into each decor sheet (under its labels and towers), so there's no separate layer for it
-  if (d.paper) { if (PAPER) PAPER.close(); PAPER = d.paper; const f = decorFront; f.width = PAPER.width; f.height = PAPER.height;
-    f.getContext('2d').drawImage(PAPER, 0, 0); f.style.transition = 'none'; f.style.opacity = 1; f.style.zIndex = 1; return; }
+  if (d.paper) { const f = decorFront; f.width = d.paper.width; f.height = d.paper.height;   // the bare sheet, until the town is drawn on it
+    f.getContext('2d').drawImage(d.paper, 0, 0); d.paper.close(); f.style.transition = 'none'; f.style.opacity = 1; f.style.zIndex = 1; return; }
   if (d.town && d.failed) { building = false; try { webkit.messageHandlers.host.postMessage('JSERR town ' + d.failed); } catch (_) {} return; }
   if (d.town) {
     building = false; fieldMs = d.ms; townGen = d.gen || 0;
@@ -92,7 +106,7 @@ worker.onmessage = e => {
     const apply = () => {
     const back = decorFront === $('decorA') ? $('decorB') : $('decorA');
     back.width = d.bitmap.width; back.height = d.bitmap.height;
-    const x = back.getContext('2d'); if (PAPER) x.drawImage(PAPER, 0, 0, back.width, back.height); x.drawImage(d.bitmap, 0, 0); d.bitmap.close(); decorate(x, d.rings, d.spots);
+    const x = back.getContext('2d'); x.drawImage(d.bitmap, 0, 0); d.bitmap.close(); decorate(x, d.rings, d.spots);   // the worker's picture comes on its parchment
     // the new sheet fades in on top of the old one (both opaque: nothing shows through mid-fade), then the old one goes
     const old = decorFront; old.style.zIndex = 1; back.style.zIndex = 2; back.style.transition = 'none'; back.style.opacity = 0; void back.offsetWidth;
     back.style.transition = ''; back.style.opacity = 1; decorFront = back;
@@ -108,18 +122,20 @@ worker.onmessage = e => {
     if (pending) worker.postMessage({ recycle: pending.inst }, [pending.inst.buffer]);   // superseded before it was shown
     pending = d; if (!running) { running = true; lastT = 0; requestAnimationFrame(loop); } return; }
 };
-let decorFront = $("decorB"), pending = null, decorNext = 0, PAPER = null;
+let decorFront = $("decorB"), pending = null, decorNext = 0;
 function grow(seed) {
   if (building) { growQueued = { seed }; return; } building = true; buildT0 = performance.now();
   townSeed = seed ?? hash(`${citySeed}:${generation++}`);
   const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS); tFrozen = ease3(tm);
-  worker.postMessage({ town: true, W, H, K, seed: townSeed, t: tFrozen });
+  worker.postMessage(Object.assign({ town: true, W, H, K, seed: townSeed, t: tFrozen, paperSeed: citySeed }, worldArgs()));
 }
 let growQueued = null, tFrozen = 0, townGen = 0, buildT0 = 0;
 // labels go only into open ground the town reported, and never overlap each other, the towers or the compass
 function decorate(x, rings, spots = []) {
   x.setTransform(K, 0, 0, K, 0, 0);
-  const boxes = [[W * .09 - 70, H * .15 - 70, W * .09 + 70, H * .15 + 70]];
+  const [ccx, ccy] = compassAt(), cpx = ccx - OX, cpy = ccy - OY, mine = !Span.world || onMain();
+  const boxes = mine ? [[cpx - 70, cpy - 70, cpx + 70, cpy + 70]] : [];
+  rings = rings.map(rg => ({ cx: rg.cx - OX, cy: rg.cy - OY, r: rg.r, wcx: rg.cx })).filter(rg => rg.cx > -rg.r && rg.cy > -rg.r && rg.cx < W + rg.r && rg.cy < H + rg.r);   // this display's towers
   for (const rg of rings) boxes.push([rg.cx - rg.r - 8, rg.cy - rg.r - 8, rg.cx + rg.r + 8, rg.cy + rg.r + 8]);
   const fits = (cx, cy, text, size) => {
     x.font = `${size}px ${SCRIPT}`; const w = x.measureText(text).width + size * 4.6, h = size * 2.6;
@@ -128,16 +144,16 @@ function decorate(x, rings, spots = []) {
     return boxes.some(o => b[0] < o[2] + 14 && b[2] > o[0] - 14 && b[1] < o[3] + 14 && b[3] > o[1] - 14) ? null : b;
   };
   for (const rg of rings) {                          // a tower's name sits just beneath it
-    const name = placeName(rng(hash(`ring${townSeed}${rg.cx | 0}`))), cy = rg.cy + rg.r + 22, b = fits(rg.cx, cy, name, 11);
+    const name = placeName(rng(hash(`ring${townSeed}${rg.wcx | 0}`))), cy = rg.cy + rg.r + 22, b = fits(rg.cx, cy, name, 11);
     if (b) { boxes.push(b); banner(x, name, rg.cx, cy, 11); }
   }
   let placed = 0; const want = Math.round(W * H / 260000);
   for (const [px, py] of spots) {
     if (placed >= want) break;
-    const name = placeName(rng(hash(`b${townSeed}${px | 0}:${py | 0}`))), b = fits(px, py, name, 11.5);
+    const name = placeName(rng(hash(`b${townSeed}${(px + OX) | 0}:${(py + OY) | 0}`))), b = fits(px, py, name, 11.5);
     if (!b) continue; boxes.push(b); banner(x, name, px, py, 11.5); placed++;
   }
-  compassRose(x, W * .09, H * .15, 44);
+  if (mine) compassRose(x, cpx, cpy, 44);
 }
 
 /* ---------- GPU lettering: one instanced quad per letter, from a glyph atlas ---------- */
@@ -149,11 +165,11 @@ const adv = (() => { const x = atlasCv.getContext('2d'); x.font = `${FONT_PX}px 
 worker.postMessage({ init: true, adv });
 const VS = `#version 300 es
 in vec2 aCorner; in vec4 aA; in vec2 aB;          // aA: x, y, angle, glyph   aB: alpha, size
-uniform vec2 uRes, uAtlas; uniform float uScale;
+uniform vec2 uRes, uAtlas, uOff; uniform float uScale;
 out vec2 vUV; out float vA;
 void main() {
   float c = cos(aA.z), s = sin(aA.z), sz = aB.y * uScale;
-  vec2 q = aCorner * sz, p = aA.xy + vec2(c * q.x - s * q.y, s * q.x + c * q.y);
+  vec2 q = aCorner * sz, p = aA.xy - uOff + vec2(c * q.x - s * q.y, s * q.x + c * q.y);
   gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.);
   float g = aA.w; vUV = (vec2(mod(g, uAtlas.x), floor(g / uAtlas.x)) + aCorner + .5) / uAtlas; vA = aB.x;
 }`;
@@ -166,7 +182,7 @@ function program(vs, fs) {
   const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); return p;
 }
 const PR = program(VS, FS); gl.useProgram(PR);
-const U = {}; for (const k of ['uRes', 'uAtlas', 'uScale', 'uTex']) U[k] = gl.getUniformLocation(PR, k);
+const U = {}; for (const k of ['uRes', 'uAtlas', 'uScale', 'uTex', 'uOff']) U[k] = gl.getUniformLocation(PR, k);
 const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
 const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad);
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-.5, -.5, .5, -.5, -.5, .5, .5, .5]), gl.STATIC_DRAW);
@@ -191,7 +207,7 @@ function drawGlyphs(inst, n) {
   if (n * 6 > instCap) { instCap = Math.max(n * 6, instCap * 2); gl.bufferData(gl.ARRAY_BUFFER, instCap * 4, gl.DYNAMIC_DRAW); }
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst.subarray(0, n * 6));
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, atlas); gl.uniform1i(U.uTex, 0);
-  gl.uniform2f(U.uRes, W, H); gl.uniform2f(U.uAtlas, AC, AR); gl.uniform1f(U.uScale, CELL / FONT_PX);
+  gl.uniform2f(U.uRes, W, H); gl.uniform2f(U.uOff, OX, OY); gl.uniform2f(U.uAtlas, AC, AR); gl.uniform1f(U.uScale, CELL / FONT_PX);
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
 }
 
@@ -252,7 +268,7 @@ function drawHalls() {   // a red scroll naming each app's hall: a small sprite 
   }
   // each tag takes the first spot that's clear of every window, every other tag and the screen edge; it keeps its last spot while that stays clear
   const taken = [], rects = cur.filter(c => c.alive).map(c => [c.x - 4, c.y - 4, c.x + c.w + 4, c.y + c.h + 4]);
-  const clear = b => b[0] > 6 && b[1] > 6 && b[2] < W - 6 && b[3] < H - 6 && !rects.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]) && !taken.some(o => b[0] < o[2] + 26 && b[2] > o[0] - 26 && b[1] < o[3] + 4 && b[3] > o[1] - 4);
+  const clear = b => onOneW(b, 6) && !rects.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]) && !taken.some(o => b[0] < o[2] + 26 && b[2] > o[0] - 26 && b[1] < o[3] + 4 && b[3] > o[1] - 4);
   for (const c of [...best.values()].sort((a, b) => b.w * b.h - a.w * a.h)) {
     seen.add(c.owner);
     let el = hallTags.get(c.owner);
@@ -270,7 +286,7 @@ function drawHalls() {   // a red scroll naming each app's hall: a small sprite 
     const hide = k < 0; if (hide) k = el._spot ?? 0; el._spot = hide ? el._spot : k;
     const [cx, cy] = spots[k]; if (!hide) taken.push(box(spots[k]));
     if (el._leaving) { clearTimeout(el._leaving); el._leaving = 0; el.style.transition = ''; }
-    el.style.transform = `translate3d(${(cx - el._w / 2).toFixed(1)}px,${(cy - el._h / 2).toFixed(1)}px,0)`; el.style.transition = 'opacity .4s ease'; el.style.opacity = hide ? 0 : c.life.toFixed(3);
+    el.style.transform = `translate3d(${(cx - el._w / 2 - OX).toFixed(1)}px,${(cy - el._h / 2 - OY).toFixed(1)}px,0)`; el.style.transition = 'opacity .4s ease'; el.style.opacity = hide ? 0 : c.life.toFixed(3);
   }
   for (const [k, el] of hallTags) if (!seen.has(k) && !el._leaving) {
     el.style.transition = 'opacity .6s ease'; el.style.opacity = 0;
@@ -286,9 +302,14 @@ function maybeNewTown() {
   if (!booted || building) return;
   const key = cur.filter(c => c.alive && c.w * c.h >= 60000).map(c => `${c.owner}@${Math.round((c.x + c.w / 2) / 260)},${Math.round((c.y + c.h / 2) / 260)}:${Math.round(c.w / 300)}x${Math.round(c.h / 300)}`).sort().join('|');
   if (key === layoutKey) return;
+  if (Span.world && !Span.leader()) return;                         // one world: the leader decides when the town changes
   const first = layoutKey === ''; layoutKey = key;
-  if (!first) grow(hash(`${citySeed}|${key}`));
+  if (!first) { grow(hash(`${citySeed}|${key}`)); Span.post('town', { seed: townSeed }); }
 }
+// the leader says which town is standing (now and then, so a display that has just come back grows the same one)
+Span.on('town', m => { if (Span.leader() && m.from > Span.i) return;    // two leaders for a moment: the lower one's town wins
+  if (booted && m.seed !== townSeed && !(growQueued && growQueued.seed === m.seed)) grow(m.seed); });
+setInterval(() => { if (Span.world && booted && Span.leader() && !paused) Span.post('town', { seed: townSeed }); }, 2000);
 const ease3 = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
 const ST = { msgs: 0, draws: 0, lat: 0, latN: 0, rafs: 0 };
@@ -352,7 +373,7 @@ class Walker {
     if (liveSteps > 80) return;
     const img = document.createElement('img'); img.src = SHOES[this.side]; img.className = this.mine ? 'step mine' : 'step'; img.width = 8; img.height = 18;
     const o = this.side ? SPREAD : -SPREAD, nx = -Math.sin(ang) * o, ny = Math.cos(ang) * o;
-    img.style.transform = `translate3d(${(px + nx - 4).toFixed(2)}px,${(py + ny - 9).toFixed(2)}px,0) rotate(${(ang * 57.2958 + 90).toFixed(1)}deg)`;
+    img.style.transform = `translate3d(${(px + nx - 4 - OX).toFixed(2)}px,${(py + ny - 9 - OY).toFixed(2)}px,0) rotate(${(ang * 57.2958 + 90).toFixed(1)}deg)`;
     const done = () => { if (img.isConnected) { img.remove(); liveSteps--; } };
     img.addEventListener('animationend', done);
     document.body.insertBefore(img, document.querySelector('.tag')); liveSteps++; this.side ^= 1;
@@ -361,7 +382,7 @@ class Walker {
       while (this.prints.length > this.trail) { const old = this.prints.shift(); old.style.setProperty('--from', getComputedStyle(old).opacity); old.style.animation = 'gone .9s ease forwards'; }
     }
     this.tag.style.opacity = 1; const tw = parseFloat(this.tag.style.width) || 120, th = parseFloat(this.tag.style.height) || 28;   // the name stays on the page, whatever the walker does
-    this.tag.style.transform = `translate3d(${Math.min(px + 14, W - tw - 6).toFixed(1)}px,${Math.min(py + 10, H - th - 6).toFixed(1)}px,0)`;
+    this.tag.style.transform = `translate3d(${Math.min(px - OX + 14, W - tw - 6).toFixed(1)}px,${Math.min(py - OY + 10, H - th - 6).toFixed(1)}px,0)`;
     clearTimeout(this.timer); this.timer = setTimeout(() => this.tag.style.opacity = 0, 3000);
   }
   // walk in a straight segment to (nx, ny), laying prints every stride
@@ -385,9 +406,16 @@ function chase(now) {
   const dx = target.x - me.sm.x, dy = target.y - me.sm.y, d = Math.hypot(dx, dy);
   if (d < 1) { chasing = false; chaseT = 0; return; }
   const step = Math.min(d * (1 - Math.exp(-dt * 6)), 170 * dt);     // eased, but never faster than a brisk walk
-  me.move(me.sm.x + dx / d * step, me.sm.y + dy / d * step);
+  me.move(me.sm.x + dx / d * step, me.sm.y + dy / d * step); sendWalk();
   requestAnimationFrame(chase);
 }
+// one world: the leader walks everyone, the other displays lay the same prints from where they are
+let walkAt = 0;
+function sendWalk() { const now = performance.now(); if (!Span.world || now - walkAt < 40) return; walkAt = now;
+  Span.post('walk', { me: me && me.sm ? [me.sm.x, me.sm.y] : null, s: strangers.map(s => s.p ? [s.p.x, s.p.y] : null) }); }
+Span.on('walk', m => { if (Span.leader() || paused) return;
+  if (m.me && me) me.move(m.me[0], m.me[1]);
+  m.s.forEach((q, i) => { const st = strangers[i]; if (q && st) { st.p = { x: q[0], y: q[1] }; st.w.move(q[0], q[1]); } }); });
 // strangers: they walk the streets, turning onto the nearest connecting street at each end
 const strangers = [];
 function nearestOnRoads(p, skip) {
@@ -395,7 +423,7 @@ function nearestOnRoads(p, skip) {
   for (const r of roads) { if (r === skip) continue; for (let i = 0; i < r.length; i++) { const d = Math.hypot(r[i][0] - p.x, r[i][1] - p.y); if (d < bd) { bd = d; best = { r, i }; } } }
   return best ? { ...best, d: bd } : null;
 }
-function onScreen(q) { return q[0] > 10 && q[1] > 10 && q[0] < W - 10 && q[1] < H - 10; }
+function onScreen(q) { return onOneW([q[0], q[1], q[0], q[1]], 10); }
 function newRoute(s) {
   if (!roads.length) return;
   if (!s.p) { const r = roads[Math.floor(s.R() * roads.length)], i = Math.floor(s.R() * r.length); if (!onScreen(r[i])) return; s.p = { x: r[i][0], y: r[i][1] }; s.w.place(s.p.x, s.p.y); }
@@ -408,7 +436,7 @@ function startStrangers(seed) {
   let last = performance.now();
   setInterval(() => {
     const now = performance.now(), dt = Math.min((now - last) / 1000, .2); last = now;
-    if (paused || !roads.length) return;
+    if (paused || !roads.length || (Span.world && !Span.leader())) return;   // one world: the leader walks them
     for (const s of strangers) {
       if (!s.route) { newRoute(s); continue; }
       let budget = s.v * dt;
@@ -427,6 +455,7 @@ function startStrangers(seed) {
       if (!onScreen([s.p.x, s.p.y])) { s.dir = -s.dir; s.i += s.dir * 2; }
       s.w.move(s.p.x, s.p.y);
     }
+    sendWalk();
   }, 100);
 }
 
@@ -437,28 +466,34 @@ function size() {
   needFrame = true; if (typeof wake === 'function') wake();
 }
 size();
-let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { size(); worker.postMessage({ paper: true, W, H, K, seed: citySeed }); grow(); }, 250); });
+const paperMsg = () => Object.assign({ paper: true, W, H, K, seed: citySeed }, worldArgs());
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { size(); worker.postMessage(paperMsg()); grow(townSeed); }, 250); });
 let FB = null; function commit() { } function refresh() { }
 window.__dbg = () => `steps=${document.querySelectorAll('.step').length} me=${!!(me && me.sm)} town=${fieldMs}ms frame=${frameMs}ms wins=${cur.length}`;
-let booted = false;
+let booted = false, deskKey = '', meSeed = null, lastWinMsg = null;
+function cursorAt(x, y) {
+  if (paused || !me) return; target = { x, y };
+  if (!me.sm) me.place(target.x, target.y);
+  if (Span.world && !Span.leader()) return;                         // the leader walks you; the others lay your prints from its word
+  if (!chasing) { chasing = true; chaseT = 0; requestAnimationFrame(chase); }
+}
+Span.on('cur', m => cursorAt(m.x, m.y));
 const handle0 = m => {
-  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
-  if (m.t === 'desk') { deskI = m.i | 0; return; }
+  if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
+  if (m.t === 'desk') { const dk = [m.x, m.y, m.w, m.h, JSON.stringify(m.fr || [])].join('|'); if (dk === deskKey) return; deskKey = dk;
+    Span.desk(m); OX = Span.x; OY = Span.y; deskI = Span.world ? 0 : m.i | 0;      // one world: every display grows the same town
+    if (booted && meSeed != null) { citySeed = ((meSeed >>> 0) ^ Math.imul(deskI, 0x9E3779B9)) >>> 0 || 1; layoutKey = ''; size(); worker.postMessage(paperMsg()); grow(); }
+    if (lastWinMsg) handle0(lastWinMsg); return; }
   if (m.t === 'me') {
-    citySeed = ((m.seed >>> 0) ^ Math.imul(deskI, 0x9E3779B9)) >>> 0 || 1;   // each display grows its own town
-    if (!booted) { booted = true; worker.postMessage({ paper: true, W, H, K, seed: citySeed }); grow();
+    meSeed = m.seed; citySeed = ((m.seed >>> 0) ^ Math.imul(deskI, 0x9E3779B9)) >>> 0 || 1;   // each display grows its own town (one world: one town)
+    if (!booted) { booted = true; worker.postMessage(paperMsg()); grow();
     }
     if (!me) { me = new Walker(personName(rng(citySeed)), RED, { stride: 30, trail: 9, mine: true }); startStrangers(citySeed + 7); }
     return;
   }
-  if (m.t === 'cursor') {
-    if (paused || !me) return; target = { x: m.x / K, y: m.y / K };
-    if (!me.sm) me.place(target.x, target.y);
-    if (!chasing) { chasing = true; chaseT = 0; requestAnimationFrame(chase); }
-    return;
-  }
+  if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; Span.post('cur', { x, y }); cursorAt(x, y); return; }
   if (m.t === 'windows') { ST.msgs++; const nw = performance.now(); if (ST.lastMsg) ST.gap = Math.max(ST.gap || 0, nw - ST.lastMsg); ST.lastMsg = nw; liveUntil = m.live ? nw + 250 : 0; }
-  if (m.t === 'windows') setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })));
+  if (m.t === 'windows') { lastWinMsg = m; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] }))); }
 };
 const handle = m => { const t0 = performance.now(); handle0(m); ST.busy = (ST.busy || 0) + performance.now() - t0; };
 const host = window.chrome && window.chrome.webview;

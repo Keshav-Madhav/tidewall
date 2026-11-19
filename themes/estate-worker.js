@@ -161,16 +161,22 @@ self.onmessage = e => {
   if (m.recycle) { if (m.recycle.length === 6 * 60000 && POOL.length < 3) POOL.push(m.recycle); return; }
 };
 
-function buildTown({ W, H, K, seed, t: tNow = 1 }) {
-  const R = rng(seed), C = 3, wins = [];
+// One world across displays: the town is laid out over the whole world (WW×WH, same seed on every display), but each
+// display works out only its own part of it (W×H at OX, OY) plus a margin M, so its walls meet its neighbours' at the
+// seams. FR: every display's frame in the world (null when alone). Grid cell (gx, gy) is world point (X0 + gx·C, Y0 + gy·C).
+function onOneOf(FR, W, H, x0, y0, x1, y1) { return !FR ? x0 >= 0 && y0 >= 0 && x1 <= W && y1 <= H : FR.some(([fx, fy, fw, fh]) => x0 >= fx && y0 >= fy && x1 <= fx + fw && y1 <= fy + fh); }
+function buildTown({ W, H, K, seed, t: tNow = 1, OX = 0, OY = 0, WW = W, WH = H, CX = W * .09, CY = H * .15, FR = null, E = null, paperSeed = 1 }) {
+  const R = rng(seed), C = 3, wins = [], M = FR ? 160 : 0, X0 = Math.floor((OX - M) / C) * C, Y0 = Math.floor((OY - M) / C) * C;   // on the world's grid
+  const onOne = (x0, y0, x1, y1) => onOneOf(FR, W, H, x0, y0, x1, y1);
   const t0 = performance.now();
-  const gw = Math.ceil(W / C) + 2, gh = Math.ceil(H / C) + 2, N = gw * gh;
+  const gw = Math.ceil((OX + W + M - X0) / C) + 2, gh = Math.ceil((OY + H + M - Y0) / C) + 2, N = gw * gh;
   // roads (rasterised) → clearance distance
-  const roads = makeRoads(W, H, R);
+  const roads = makeRoads(WW, WH, R);
   const rings = [];
   for (let i = 0; i < 2; i++) {             // round towers with a circular road around them
     for (let tries = 0; tries < 30; tries++) {
-      const r = 70 + R() * 70, cx = r + 40 + R() * (W - 2 * r - 80), cy = r + 40 + R() * (H - 2 * r - 80);
+      const r = 70 + R() * 70, cx = r + 40 + R() * (WW - 2 * r - 80), cy = r + 40 + R() * (WH - 2 * r - 80);
+      if (FR && !onOne(cx - r - 30, cy - r - 30, cx + r + 30, cy + r + 50)) continue;      // a tower stands wholly on one display
       if (wins.some(w => cx + r > w.x - 60 && cx - r < w.x + w.w + 60 && cy + r > w.y - 60 && cy - r < w.y + w.h + 60)) continue;
       if (rings.some(o => Math.hypot(o.cx - cx, o.cy - cy) < o.r + r + 80)) continue;
       rings.push({ cx, cy, r });
@@ -181,23 +187,23 @@ function buildTown({ W, H, K, seed, t: tNow = 1 }) {
   const seedMask = new Uint8Array(N), halfW = new Float32Array(N);
   for (const rd of roads) for (let i = 1; i < rd.pts.length; i++) {
     const [ax, ay] = rd.pts[i - 1], [bx, by] = rd.pts[i], L = Math.hypot(bx - ax, by - ay), m = Math.ceil(L / C);
-    for (let s = 0; s <= m; s++) { const gx = Math.round((ax + (bx - ax) * s / m) / C), gy = Math.round((ay + (by - ay) * s / m) / C);
+    for (let s = 0; s <= m; s++) { const gx = Math.round((ax + (bx - ax) * s / m - X0) / C), gy = Math.round((ay + (by - ay) * s / m - Y0) / C);
       if (gx >= 0 && gy >= 0 && gx < gw && gy < gh) { const j = gy * gw + gx; seedMask[j] = 1; halfW[j] = Math.max(halfW[j], rd.width / 2); } }
   }
   const dRoad = distField(seedMask, gw, gh, C);
   // districts: each has its own street angle and lot size; their borders become streets
   const districts = [];
-  const nd = Math.max(5, Math.round(W * H / (80000 + R() * 70000)));
+  const nd = Math.max(5, Math.round(WW * WH / (80000 + R() * 70000)));
   for (let i = 0; i < nd; i++) { const a = (R() - .5) * 1.6 + (R() < .3 ? Math.PI / 4 : 0), k = R();
     // dense lanes / ordinary streets / grand halls
     const [su, sv] = k < .3 ? [36 + R() * 30, 26 + R() * 14] : k < .8 ? [64 + R() * 60, 40 + R() * 28] : [120 + R() * 90, 70 + R() * 40];
-    districts.push({ x: R() * W, y: R() * H, c: Math.cos(a), s: Math.sin(a), su, sv, id: i * 7919 }); }
+    districts.push({ x: R() * WW, y: R() * WH, c: Math.cos(a), s: Math.sin(a), su, sv, id: i * 7919 }); }
   for (const rg of rings) if (R() < .85) {          // crescents of buildings curving round a tower
     const band = 60 + R() * 70; districts.push({ polar: true, x: rg.cx, y: rg.cy, r0: rg.r + 34, band, su: 40 + R() * 40, sv: 26 + R() * 18, id: 99991 + (rg.cx | 0) }); }
   const lotHash = (a, b, c) => h2(a * 0.137 + c * 0.71, b * 0.311 + c * 0.19);
   const f = new Float32Array(N);
   for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
-    const x = gx * C, y = gy * C, i = gy * gw + gx;
+    const x = X0 + gx * C, y = Y0 + gy * C, i = gy * gw + gx;
     let d1 = 1e9, d2 = 1e9, D = null;
     for (const d of districts) {
       const dd = d.polar ? Math.max(0, Math.abs(Math.hypot(x - d.x, y - d.y) - d.r0 - d.band / 2) - d.band / 2) * 1.6 + 8 : Math.hypot(x - d.x, y - d.y);
@@ -224,29 +230,32 @@ function buildTown({ W, H, K, seed, t: tNow = 1 }) {
     const pk = vnoise(x * .0036 + 9, y * .0036 + 4) * .7 + vnoise(x * .009 + 2, y * .009 + 7) * .3; if (pk < .3) v = Math.min(v, (pk - .3) * 420);   // smooth noise → clean park edges
     // keep clear of windows (the halls draw their own walls there) and of the round towers
     for (const rg of rings) v = Math.min(v, Math.hypot(x - rg.cx, y - rg.cy) - rg.r - 30);
-    v = Math.min(v, Math.hypot(x - W * .09, y - H * .15) - 62);                  // compass rose
+    v = Math.min(v, Math.hypot(x - CX, y - CY) - 62);                            // compass rose
     f[i] = v;
   }
   // morph from the previous town (or from bare parchment)
   // morph from whatever is on screen right now (even mid-morph), or from bare parchment
-  if (G.B && G.gw === gw && G.gh === gh) {
+  if (G.B && G.gw === gw && G.gh === gh && G.X0 === X0 && G.Y0 === Y0) {
     if (tNow < 1 && G.A) { const m = new Float32Array(N); for (let i = 0; i < N; i++) m[i] = G.A[i] + (G.B[i] - G.A[i]) * tNow; G.A = m; } else G.A = G.B;
   } else { G.A = new Float32Array(N).fill(-14); }
-  G.B = f; G.gw = gw; G.gh = gh; G.W = W; G.H = H; G.C = C; G.gen = (G.gen || 0) + 1;
-  if (!G.WOB || G.WOB.length !== N) {   // wavy court edges: noise baked once, looked up per frame
-    G.WOB = new Float32Array(N);
-    for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) G.WOB[gy * gw + gx] = (vnoise(gx * C * .03, gy * C * .03) - .5) * 18;
+  G.B = f; G.gw = gw; G.gh = gh; G.W = W; G.H = H; G.C = C; G.X0 = X0; G.Y0 = Y0; G.gen = (G.gen || 0) + 1;
+  if (!G.WOB || G.WOB.length !== N || G.wobAt !== X0 + ',' + Y0) {   // wavy court edges: noise baked once, looked up per frame
+    G.WOB = new Float32Array(N); G.wobAt = X0 + ',' + Y0;
+    for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) G.WOB[gy * gw + gx] = (vnoise((X0 + gx * C) * .03, (Y0 + gy * C) * .03) - .5) * 18;
   }
   // the still parts of the plan: street names, round towers, little marks in open ground, ink splats
   const cv = new OffscreenCanvas(Math.round(W * K), Math.round(H * K)), x = cv.getContext('2d');
-  x.setTransform(K, 0, 0, K, 0, 0);
+  // the parchment goes in first (painted afresh: the page keeps no copy of it between towns, ~24 MB saved per display)
+  { const pb = buildPaper({ W, H, K, seed: paperSeed, OX, OY, WW, WH, E }); x.drawImage(pb, 0, 0, cv.width, cv.height); pb.close(); }
+  x.setTransform(K, 0, 0, K, -OX * K, -OY * K);                       // drawn in world coordinates, shifted to this display
   const TR = rng(seed + 5), stream = textStream(TR);
   // street names along some roads
   const NR = rng(seed + 9), labelled = [];
   for (const rd of roads) {
     if (rd.ring || rd.pts.length < 30 || NR() < .35) continue;
     const st = Math.floor(rd.pts.length * (.2 + NR() * .3)), seg = rd.pts.slice(st, st + 26);
-    if (seg.some(([px, py]) => px < 10 || py < 10 || px > W - 10 || py > H - 10)) continue;
+    { let a0 = 1e9, b0 = 1e9, a1 = -1e9, b1 = -1e9; for (const [px, py] of seg) { a0 = Math.min(a0, px); b0 = Math.min(b0, py); a1 = Math.max(a1, px); b1 = Math.max(b1, py); }
+      if (!onOne(a0 - 10, b0 - 10, a1 + 10, b1 + 10)) continue; }        // a street's name stays on one display
     const mid0 = seg[13]; if (labelled.some(([lx, ly]) => Math.hypot(lx - mid0[0], ly - mid0[1]) < 180)) continue;
     if (wins.some(w => mid0[0] > w.x - 40 && mid0[0] < w.x + w.w + 40 && mid0[1] > w.y - 40 && mid0[1] < w.y + w.h + 40)) continue;
     labelled.push(mid0);
@@ -256,9 +265,11 @@ function buildTown({ W, H, K, seed, t: tNow = 1 }) {
   // round towers: text band + radial stair + inner court with a title
   for (const rg of rings) drawRing(x, rg, K, stream, rng(seed + rg.cx | 0));
   // open-ground details: little wheels, trees, scribbles, footpaths
-  const DR = rng(seed + 13);
-  for (let n = 0; n < W * H / 9000; n++) {
-    const px = DR() * W, py = DR() * H, gi = Math.round(py / C) * gw + Math.round(px / C);
+  // each mark has its own dice (so every display draws the same marks, whichever it can check)
+  for (let n = 0; n < WW * WH / 9000; n++) {
+    const DR = rng(seed * 31 + n * 7919 + 13), px = DR() * WW, py = DR() * WH, gx = Math.round((px - X0) / C), gy = Math.round((py - Y0) / C);
+    if (gx < 0 || gy < 0 || gx >= gw || gy >= gh) continue;
+    const gi = gy * gw + gx;
     if (!(f[gi] < -14) || dRoad[gi] < 14) continue;
     if (wins.some(w => px > w.x - 34 && px < w.x + w.w + 34 && py > w.y - 34 && py < w.y + w.h + 34)) continue;
     const k = DR();
@@ -271,11 +282,11 @@ function buildTown({ W, H, K, seed, t: tNow = 1 }) {
     else { x.fillStyle = INK_SOFT; x.beginPath(); x.arc(px, py, .9, 0, 7); x.fill(); }
   }
   const SR = rng(seed + 21);
-  for (let n = 0; n < 2 + Math.floor(SR() * 3); n++) splat(x, 60 + SR() * (W - 120), 60 + SR() * (H - 120), 6 + SR() * 12, SR);
-  const spots = [], PR = rng(seed + 31);
+  for (let n = 0; n < (2 + Math.floor(SR() * 3)) * (FR ? FR.length : 1); n++) splat(x, 60 + SR() * (WW - 120), 60 + SR() * (WH - 120), 6 + SR() * 12, SR);
+  const spots = [], PR = rng(seed + 31 + Math.round(OX) * 7 + Math.round(OY) * 13);   // each display its own label spots
   for (let k = 0; k < 900 && spots.length < 160; k++) {
-    const px = 60 + PR() * (W - 120), py = 40 + PR() * (H - 80), gi = Math.round(py / C) * gw + Math.round(px / C);
-    if (f[gi] < -22 && dRoad[gi] > 14 && !rings.some(rg => Math.hypot(px - rg.cx, py - rg.cy) < rg.r + 50)) spots.push([px, py, -f[gi]]);
+    const px = OX + 60 + PR() * (W - 120), py = OY + 40 + PR() * (H - 80), gi = Math.round((py - Y0) / C) * gw + Math.round((px - X0) / C);   // this display's own open ground
+    if (f[gi] < -22 && dRoad[gi] > 14 && !rings.some(rg => Math.hypot(px - rg.cx, py - rg.cy) < rg.r + 50)) spots.push([px - OX, py - OY, -f[gi]]);
   }
   spots.sort((a, b) => b[2] - a[2]);
   const bitmap = cv.transferToImageBitmap();
@@ -300,7 +311,7 @@ function frame({ wins, t, sent, gen }) {
   e_sent = sent;
   if (gen !== undefined && gen !== G.gen) t = 0;      // the page hasn't seen this town yet: show where it starts
   if (!G.B || !G.adv) return self.postMessage({ frame: true, inst: new Float32Array(0), n: 0 });
-  const t0 = performance.now(), { gw, gh, C, A, B } = G, N = gw * gh;
+  const t0 = performance.now(), { gw, gh, C, A, B, X0 = 0, Y0 = 0 } = G, N = gw * gh;
   if (!F || F.length !== N) F = new Float32Array(N);
   // base (morphing between towns)
   if (t >= 1) F.set(B); else for (let i = 0; i < N; i++) F[i] = A[i] + (B[i] - A[i]) * t;
@@ -311,23 +322,24 @@ function frame({ wins, t, sent, gen }) {
     if (!G.CUT || G.CUT.length !== N) { G.CUT = new Float32Array(N).fill(1e9); G.cutBox = null; }
     const CUT = G.CUT;
     if (G.cutBox) { const [a0, a1, b0, b1] = G.cutBox; for (let gy = b0; gy <= b1; gy++) CUT.fill(1e9, gy * gw + a0, gy * gw + a1 + 1); }
-    let X0 = gw, X1 = -1, Y0 = gh, Y1 = -1;
+    let bx0 = gw, bx1 = -1, by0 = gh, by1 = -1;          // the cells this pass touched (not the world offsets X0/Y0)
     for (const w of wins) {
       if (w.life <= .002) continue;
       const hw = w.w / 2, hh = w.h / 2, L = w.life, m = (w.w * w.h < 60000 ? 8 : 18), cx = w.x + hw, cy = w.y + hh;
       const reach = Math.max(hw, hh) + m + 30, shrink = (1 - L) * Math.min(hw, hh) * 1.3 - m * L;
-      const x0 = Math.max(0, Math.floor((cx - hw - m - 30) / C)), x1 = Math.min(gw - 1, Math.ceil((cx + hw + m + 30) / C));
-      const y0 = Math.max(0, Math.floor((cy - hh - m - 30) / C)), y1 = Math.min(gh - 1, Math.ceil((cy + hh + m + 30) / C));
-      X0 = Math.min(X0, x0); X1 = Math.max(X1, x1); Y0 = Math.min(Y0, y0); Y1 = Math.max(Y1, y1);
-      for (let gy = y0; gy <= y1; gy++) { const ay = Math.abs(gy * C - cy) - hh, row = gy * gw;
+      const x0 = Math.max(0, Math.floor((cx - hw - m - 30 - X0) / C)), x1 = Math.min(gw - 1, Math.ceil((cx + hw + m + 30 - X0) / C));
+      const y0 = Math.max(0, Math.floor((cy - hh - m - 30 - Y0) / C)), y1 = Math.min(gh - 1, Math.ceil((cy + hh + m + 30 - Y0) / C));
+      if (x0 > x1 || y0 > y1) continue;
+      bx0 = Math.min(bx0, x0); bx1 = Math.max(bx1, x1); by0 = Math.min(by0, y0); by1 = Math.max(by1, y1);
+      for (let gy = y0; gy <= y1; gy++) { const ay = Math.abs(Y0 + gy * C - cy) - hh, row = gy * gw;
         for (let gx = x0; gx <= x1; gx++) {
-          const ax = Math.abs(gx * C - cx) - hw, ox = ax > 0 ? ax : 0, oy = ay > 0 ? ay : 0;
+          const ax = Math.abs(X0 + gx * C - cx) - hw, ox = ax > 0 ? ax : 0, oy = ay > 0 ? ay : 0;
           const d = Math.sqrt(ox * ox + oy * oy) + Math.min(Math.max(ax, ay), 0);
           const v = d + G.WOB[row + gx] * L + shrink, i = row + gx;
           if (v < CUT[i]) CUT[i] = v;
         } }
     }
-    G.cutBox = X1 >= 0 ? [X0, X1, Y0, Y1] : null; G.cutKey = key;
+    G.cutBox = bx1 >= 0 ? [bx0, bx1, by0, by1] : null; G.cutKey = key;
   }
   if (G.cutBox) { const [a0, a1, b0, b1] = G.cutBox, CUT = G.CUT;
     for (let gy = b0; gy <= b1; gy++) for (let i = gy * gw + a0, e = gy * gw + a1; i <= e; i++) if (CUT[i] < F[i]) F[i] = CUT[i]; }
@@ -338,7 +350,7 @@ function frame({ wins, t, sent, gen }) {
   const tB = performance.now();
   let n = 0;
   for (let loop of loops) {
-    loop = simplify(loop, .7);
+    loop = simplify(loop, .7); if (X0 || Y0) loop = loop.map(([x, y]) => [x + X0, y + Y0]);   // world coordinates: letters hash where they land on the map
     const per = perim(loop); if (per < 60) continue;
     // canonical start (top-most point) + orientation, so letters stay put while nothing moves
     let si = 0; for (let i = 1; i < loop.length; i++) if (loop[i][1] < loop[si][1] - .01 || (Math.abs(loop[i][1] - loop[si][1]) <= .01 && loop[i][0] < loop[si][0])) si = i;
@@ -446,12 +458,14 @@ function splat(x, cx, cy, r, R) {   // an ink blot with droplets and a short fli
 
 /* ---------- old parchment (built here too, so the page never stalls) ---------- */
 function ridge(x, y) { return 1 - Math.abs(vnoise(x, y) * 2 - 1); }
-function buildPaper({ W, H, K, seed }) {
+function buildPaper({ W, H, K, seed, OX = 0, OY = 0, WW = W, WH = H, E = null }) {
   const R = rng(seed + 77), S = 2, sw = Math.ceil(W / S), sh = Math.ceil(H / S);
+  // how far inside the sheet: to the world's outside edges (E: segments), else to this display's own edges
+  const edgeD = (X, Y) => { if (!E) return Math.min(X, Y, W - X, H - Y); let d = 1e9; for (const [ax, ay, bx, by] of E) { const px = X - ax, py = Y - ay, vx = bx - ax, vy = by - ay, h = Math.max(0, Math.min(1, (px * vx + py * vy) / (vx * vx + vy * vy || 1))); d = Math.min(d, Math.hypot(px - vx * h, py - vy * h)); } return d; };
   const small = new OffscreenCanvas(sw, sh), sx = small.getContext('2d'), img = sx.createImageData(sw, sh), d = img.data;
   const ox = R() * 100, oy = R() * 100;
   for (let j = 0; j < sh; j++) for (let i = 0; i < sw; i++) {
-    const X = i * S, Y = j * S;
+    const X = i * S + OX, Y = j * S + OY;
     // base: warm tan, lighter towards the middle, mottled
     const mott = fbm(X * .004 + ox, Y * .004 + oy), mott2 = fbm(X * .02 + 11, Y * .02 + 5);
     // crumple: a network of creases (ridged noise at two scales), lit from the top-left
@@ -459,7 +473,7 @@ function buildPaper({ W, H, K, seed }) {
     const c1b = Math.pow(ridge(X * .005 + ox + .02, Y * .005 + .02), 22), c2b = Math.pow(ridge(X * .013 + 3.03, Y * .013 + oy + .03), 26) * .6;
     const crease = (c1 + c2) * 13 - (c1b + c2b) * 9;
     // burnt, darkened edges with a ragged boundary
-    const e = Math.min(X, Y, W - X, H - Y) / Math.min(W, H) + (fbm(X * .01 + 50, Y * .01) - .5) * .07;
+    const e = edgeD(X, Y) / (E ? 1000 : Math.min(W, H)) + (fbm(X * .01 + 50, Y * .01) - .5) * .07;   // (a world: one burn width everywhere)
     const burn = Math.max(0, 1 - e / .2), burn2 = burn * burn;
     let r = 232 - 30 * mott - 10 * mott2, g = 212 - 40 * mott - 12 * mott2, b = 170 - 52 * mott - 14 * mott2;
     r += crease; g += crease * .92; b += crease * .8;
@@ -469,20 +483,21 @@ function buildPaper({ W, H, K, seed }) {
   }
   sx.putImageData(img, 0, 0);
   const cv = new OffscreenCanvas(Math.round(W * K), Math.round(H * K)), x = cv.getContext('2d');
-  x.imageSmoothingQuality = 'high'; x.drawImage(small, 0, 0, cv.width, cv.height); x.setTransform(K, 0, 0, K, 0, 0);
+  x.imageSmoothingQuality = 'high'; x.drawImage(small, 0, 0, cv.width, cv.height); x.setTransform(K, 0, 0, K, -OX * K, -OY * K);
   // fine fibre grain at full resolution
   const t = new OffscreenCanvas(128, 128), tx = t.getContext('2d'), ti = tx.createImageData(128, 128);
   for (let i = 0; i < ti.data.length; i += 4) { const v = R(); ti.data[i] = ti.data[i + 1] = ti.data[i + 2] = v < .5 ? 60 : 255; ti.data[i + 3] = 10 + v * 14; }
-  tx.putImageData(ti, 0, 0); x.fillStyle = x.createPattern(t, 'repeat'); x.fillRect(0, 0, W, H);
+  tx.putImageData(ti, 0, 0); x.fillStyle = x.createPattern(t, 'repeat'); x.fillRect(OX, OY, W, H);
   // stains: big soft blotches, water rings, a coffee ring
   x.globalCompositeOperation = 'multiply';
-  for (let i = 0; i < 9; i++) { const px = R() * W, py = R() * H, r = 40 + R() * 160, g = x.createRadialGradient(px, py, 0, px, py, r);
+  const many = E ? WW * WH / 1.5e6 : 1;                                   // a world: as many stains as its size calls for, the same count on every display
+  for (let i = 0; i < Math.round(9 * many); i++) { const px = R() * WW, py = R() * WH, r = 40 + R() * 160, g = x.createRadialGradient(px, py, 0, px, py, r);
     g.addColorStop(0, `rgba(170,120,70,${.06 + R() * .1})`); g.addColorStop(.7, `rgba(170,120,70,${.05 + R() * .06})`); g.addColorStop(1, 'rgba(170,120,70,0)');
     x.fillStyle = g; x.beginPath(); x.arc(px, py, r, 0, 7); x.fill(); }
-  for (let i = 0; i < 3; i++) { const px = R() * W, py = R() * H, r = 24 + R() * 50;
+  for (let i = 0; i < Math.round(3 * many); i++) { const px = R() * WW, py = R() * WH, r = 24 + R() * 50;
     x.strokeStyle = `rgba(140,90,45,${.12 + R() * .12})`;
     for (let k = 0; k < 3; k++) { x.lineWidth = 1.6 - k * .4; x.beginPath(); x.arc(px + k, py - k * .5, r - k * 1.5, R() * 1.5, Math.PI * (1.5 + R() * .5)); x.stroke(); } }
-  for (let i = 0; i < W * H / 6000; i++) { const px = R() * W, py = R() * H, r = R() < .92 ? .6 + R() * 2.4 : 4 + R() * 9;   // foxing
+  for (let i = 0; i < WW * WH / 6000; i++) { const px = R() * WW, py = R() * WH, r = R() < .92 ? .6 + R() * 2.4 : 4 + R() * 9;   // foxing
     const g = x.createRadialGradient(px, py, 0, px, py, r); g.addColorStop(0, `rgba(120,70,30,${.12 + R() * .2})`); g.addColorStop(1, 'rgba(120,70,30,0)');
     x.fillStyle = g; x.beginPath(); x.arc(px, py, r, 0, 7); x.fill(); }
   x.globalCompositeOperation = 'source-over';

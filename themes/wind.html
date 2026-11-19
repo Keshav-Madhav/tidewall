@@ -100,7 +100,7 @@ async function fetchWind() {
   });
   // the local clock: from the grid point nearest the capital
   let best = 0, bd = 1e9; arr.forEach((loc, k) => { const d = (loc.latitude - HOME.lat) ** 2 + (loc.longitude - HOME.lon) ** 2; if (d < bd) { bd = d; best = k; } });
-  return { g, key: gridKey(g), times, u, v, fetched: Date.now(), tz: { off: arr[best].utc_offset_seconds || 0, abbr: arr[best].timezone_abbreviation || '' } };
+  return { g, key: gridKey(g), times, u, v, fetched: Date.now(), tz: { off: arr[best].utc_offset_seconds || 0, abbr: arr[best].timezone_abbreviation || '', name: arr[best].timezone || '' } };
 }
 function loadCache() {
   try { const c = JSON.parse(localStorage.getItem('tidewall-wind-' + VARIANT) || 'null'); if (c && c.key === gridKey(gridSpec())) return c; } catch (_) { }
@@ -443,6 +443,8 @@ function palette() {
 const capCv = document.getElementById('cap');
 // a clock in the chosen country's local time (from the wind data's timezone), else this Mac's
 function localTime(ms, tz) { if (!tz) return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  // by the zone's name when we have it (an offset saved before a daylight-saving change would be an hour out after it)
+  if (tz.name) try { return new Intl.DateTimeFormat('en-GB', { timeZone: tz.name, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms)); } catch (_) { }
   const d = new Date(ms + tz.off * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }
 function drawCaption() {
   if (!PAL) palette();
@@ -453,7 +455,8 @@ function drawCaption() {
   x.fillStyle = ink; x.font = `11px ${SERIF}`; x.letterSpacing = '3px'; x.fillText(`SURFACE WIND · ${(COUNTRY ? COUNTRY.name : '').toUpperCase()} · LIVE`, 28, h - 46);
   x.letterSpacing = '0px'; x.font = `italic 11px ${SERIF}`; x.fillStyle = faint;
   const tz = DATA && DATA.tz, t = localTime(Date.now(), tz);
-  let line = `10 m above ground · ${t}${tz && tz.abbr ? ' ' + tz.abbr : ''}`;
+  const abbr = tz && (tz.name ? (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone: tz.name, timeZoneName: 'short' }).formatToParts(new Date()).find(x => x.type === 'timeZoneName').value; } catch (_) { return tz.abbr; } })() : tz.abbr);
+  let line = `10 m above ground · ${t}${abbr ? ' ' + abbr : ''}`;
   if (DATA) line += ` · Open-Meteo forecast of ${localTime(DATA.fetched, tz)}`;
   x.fillText(line, 28, h - 30);
   if (!DATA || dataNote.startsWith('offline')) x.fillText(dataNote, 28, h - 15);
@@ -591,7 +594,7 @@ function makeCard() {
 const rgbOf = a => `rgb(${a.map(v => Math.round(v * 255)).join(',')})`;
 // the report, inked straight onto the chart: no panel, just type in the map's own hand
 function paintCard(c, lat, lon) {
-  const e = wxFor(lat, lon), d = e.d, place = placeName(lat, lon), t = localTime(Date.now(), d && d.w ? { off: d.w.utc_offset_seconds || 0 } : (DATA && DATA.tz));
+  const e = wxFor(lat, lon), d = e.d, place = placeName(lat, lon), t = localTime(Date.now(), d && d.w ? { off: d.w.utc_offset_seconds || 0, name: d.w.timezone || '' } : (DATA && DATA.tz));
   const key = `${place}|${t}|${e.v || 0}|${dayF.toFixed(2)}`; if (key === c._key) return; c._key = key;
   const x = c.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); x.clearRect(0, 0, CW, CH);
   const ink = rgbOf(PAL.ink), soft = `rgba(${PAL.ink.map(v => Math.round(v * 255)).join(',')},.68)`;

@@ -35,10 +35,14 @@
 </head>
 <body>
 <canvas id="board" class="board"></canvas>
+<script src="span.js"></script>
 <script>
 'use strict';
 window.__noMask = true;
+window.__twCalm = 24;                                    // frames a second while nobody's working here (trains, cars and boats: a pixel or two a frame)
 let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
+// one world across displays (span.js): W×H is the whole world, OX/OY where this display sits in it, SW×SH its size
+let OX = 0, OY = 0, SW = innerWidth, SH = innerHeight;
 const P = { quality: 1 };                                              // read by the host's bench probe
 let FB = null; function commit() { } function refresh() { }          // hooks the host calls on every theme
 const post = s => { try { webkit.messageHandlers.host.postMessage(s); } catch (_) { console.log(s); } };
@@ -70,17 +74,18 @@ function eWin(x, y) { let e = 1e5; for (const s of slots) e = Math.min(e, sdRB(x
 function setTargets(list) {
   const key = list.map(t => `${t.x | 0},${t.y | 0},${t.w | 0},${t.h | 0},${t.owner},${t.sm}`).join(';');
   if (key === lastKey) return; lastKey = key;                        // nothing changed on this screen: nothing to redo
-  const sm = list.filter(t => t.sm), rest = list.filter(t => !t.sm && t.w >= 50 && t.h >= 40 && t.x > -20);
+  const obs = list.filter(t => t.owner === '__gap');                 // the world's gaps: kept clear, never a town
+  const sm = list.filter(t => t.sm), rest = list.filter(t => !t.sm && t.owner !== '__gap' && t.w >= 50 && t.h >= 40 && t.x > -20);
   if (sm.length) { const x0 = Math.min(...sm.map(t => t.x)), y0 = Math.min(...sm.map(t => t.y)), x1 = Math.max(...sm.map(t => t.x + t.w)), y1 = Math.max(...sm.map(t => t.y + t.h));
     rest.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, owner: 'Stage Manager', stage: true }); }
   const used = new Set();
-  for (const t of rest.slice(0, 16)) {
+  for (const t of rest.slice(0, 16).concat(obs)) {
     let best = null, bd = 1e9;
     for (const c of slots) { if (used.has(c) || !c.alive || c.owner !== t.owner) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
     if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
     else { const c = { id: nextId++, owner: t.owner, stage: !!t.stage, x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, life: 0, alive: true }; slots.push(c); used.add(c); }
   }
-  for (const c of slots) c.town = !c.stage && c.tw >= 200 && c.th >= 140 && c.owner !== 'Notification Centre';   // a town for a real app window; Stage Manager and widgets are just open ground
+  for (const c of slots) c.town = !c.stage && c.tw >= 200 && c.th >= 140 && c.owner !== 'Notification Centre' && c.owner !== '__gap';   // a town for a real app window; Stage Manager and widgets are just open ground
   for (const c of slots) if (!used.has(c)) c.alive = false;
   dirty = true; wake();
 }
@@ -733,7 +738,7 @@ function prep() {
 function speck(ctx) { let p = pats.get(ctx); if (!p) { p = ctx.createPattern(speckCv, 'repeat'); p.setTransform(new DOMMatrix().scale(1 / K)); pats.set(ctx, p); } return p; }
 function drawBoard(ctx) {
   const t0 = performance.now(); bx = ctx;
-  bx.setTransform(K, 0, 0, K, 0, 0); bx.globalAlpha = 1;
+  bx.setTransform(K, 0, 0, K, -OX * K, -OY * K); bx.globalAlpha = 1;   // the world, shifted so this display's part lands on its canvas
   bx.fillStyle = '#93c96b'; bx.fillRect(0, 0, W, H);
   bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = 'high'; bx.drawImage(washCv, 0, 0, W, H);
   bx.fillStyle = speck(bx); bx.fillRect(0, 0, W, H);
@@ -969,6 +974,7 @@ function drawSprites() {
   bx.globalAlpha = 1;
 }
 function drawFrame() {
+  if (Span.world) return drawWorldFrame();
   const f = FRAME;
   bx.fillStyle = '#b07a4e'; bx.fillRect(0, 0, W, f); bx.fillRect(0, H - f, W, f); bx.fillRect(0, 0, f, H); bx.fillRect(W - f, 0, f, H);
   bx.fillStyle = 'rgba(255,225,180,.35)'; bx.fillRect(0, 0, W, 2); bx.fillRect(0, 0, 2, H);
@@ -981,6 +987,31 @@ function drawFrame() {
   const g = bx.createLinearGradient(0, H - f + 2, 0, H - 2); g.addColorStop(0, '#f0d58a'); g.addColorStop(1, '#c9a24f');
   bx.fillStyle = g; bx.beginPath(); bx.roundRect(W / 2 - w / 2, H - f + 2, w, f - 5, 3.5); bx.fill();
   bx.fillStyle = '#5a3d12'; bx.font = '700 7px "Avenir Next", "Helvetica Neue", sans-serif'; bx.textAlign = 'center'; bx.textBaseline = 'middle'; bx.fillText(label, W / 2, H - f / 2 + .5);
+}
+function drawWorldFrame() {
+  const f = FRAME, fr = Span.frames();
+  for (const F of fr) for (const e of Span.edges(F)) {
+    const [x, y, w, h] = F, len = e.b - e.a;
+    const r = e.side === 'top' ? [e.a, y, len, f] : e.side === 'bottom' ? [e.a, y + h - f, len, f] : e.side === 'left' ? [x, e.a, f, len] : [x + w - f, e.a, f, len];
+    bx.fillStyle = '#b07a4e'; bx.fillRect(...r);
+    bx.fillStyle = e.side === 'top' || e.side === 'left' ? 'rgba(255,225,180,.35)' : 'rgba(90,50,20,.35)';
+    if (e.side === 'top') bx.fillRect(e.a, y, len, 2); else if (e.side === 'bottom') bx.fillRect(e.a, y + h - 2, len, 2);
+    else if (e.side === 'left') bx.fillRect(x, e.a, 2, len); else bx.fillRect(x + w - 2, e.a, 2, len);
+    bx.strokeStyle = 'rgba(60,35,15,.45)'; bx.lineWidth = 2; bx.beginPath();
+    if (e.side === 'top') { bx.moveTo(e.a, y + f + 1); bx.lineTo(e.b, y + f + 1); } else if (e.side === 'bottom') { bx.moveTo(e.a, y + h - f - 1); bx.lineTo(e.b, y + h - f - 1); }
+    else if (e.side === 'left') { bx.moveTo(x + f + 1, e.a); bx.lineTo(x + f + 1, e.b); } else { bx.moveTo(x + w - f - 1, e.a); bx.lineTo(x + w - f - 1, e.b); }
+    bx.stroke();
+  }
+  // the brass plaque: under the main display, on its bottom edge (or the longest open bottom edge)
+  const [mx, my] = Span.main, bottoms = fr.flatMap(F => Span.edges(F).filter(e => e.side === 'bottom').map(e => ({ e, F })));
+  const pick = bottoms.find(({ e, F }) => mx > e.a && mx < e.b && my > F[1] && my < F[1] + F[3]) || bottoms.sort((p, q) => (q.e.b - q.e.a) - (p.e.b - p.e.a))[0];
+  if (!pick) return;
+  const cxp = clamp(pick.e === bottoms[0]?.e && !(mx > pick.e.a && mx < pick.e.b) ? (pick.e.a + pick.e.b) / 2 : mx, pick.e.a + 110, pick.e.b - 110), yb = pick.F[1] + pick.F[3];
+  const label = 'TIDEWALL & DISTRICT RAILWAY', w = 200;
+  bx.fillStyle = 'rgba(60,35,15,.3)'; bx.beginPath(); bx.roundRect(cxp - w / 2 + 1, yb - f + 3, w, f - 5, 3.5); bx.fill();
+  const g = bx.createLinearGradient(0, yb - f + 2, 0, yb - 2); g.addColorStop(0, '#f0d58a'); g.addColorStop(1, '#c9a24f');
+  bx.fillStyle = g; bx.beginPath(); bx.roundRect(cxp - w / 2, yb - f + 2, w, f - 5, 3.5); bx.fill();
+  bx.fillStyle = '#5a3d12'; bx.font = '700 7px "Avenir Next", "Helvetica Neue", sans-serif'; bx.textAlign = 'center'; bx.textBaseline = 'middle'; bx.fillText(label, cxp, yb - f / 2 + .5);
 }
 // presenting the board: drawn straight in when it's the first picture; otherwise into the hidden canvas, which then
 // blends in over the old one. While windows move this runs a few times a second, so the land morphs at almost no cost.
@@ -1004,7 +1035,9 @@ function sprite(w, h, draw) {
   const c = document.createElement('canvas'), k = K * 2; c.width = Math.ceil(w * k); c.height = Math.ceil(h * k); c.style.width = w + 'px'; c.style.height = h + 'px'; c.className = 'sprite';
   const x = c.getContext('2d'); x.scale(k, k); x.translate(w / 2, h / 2); draw(x); document.body.appendChild(c); c._w = w; c._h = h; c._o = 1; return c;
 }
-const place = (el, x, y, a, o) => { el.style.transform = `translate3d(${(x - el._w / 2).toFixed(1)}px,${(y - el._h / 2).toFixed(1)}px,0) rotate(${a.toFixed(3)}rad)`;
+const place = (el, x, y, a, o) => { x -= OX; y -= OY;                // world → this display
+  if (x < -80 || y < -80 || x > SW + 80 || y > SH + 80) o = 0;           // on another display: nothing to show here
+  el.style.transform = `translate3d(${(x - el._w / 2).toFixed(1)}px,${(y - el._h / 2).toFixed(1)}px,0) rotate(${a.toFixed(3)}rad)`;
   if (o !== el._o && (Math.abs(o - el._o) > .02 || o === 0 || o === 1)) { el._o = o; el.style.opacity = o.toFixed(2); } };
 const rr = (x, X, Y, w, h, r) => { x.beginPath(); x.roundRect(X, Y, w, h, r); };
 
@@ -1069,6 +1102,7 @@ function puff(x, y, a, big) {
   if (puffs > 40) return; puffs++;
   const d = document.createElement('div'); d.className = 'puff'; if (big) d.style.width = d.style.height = '16px';
   const dx = (Math.random() - .5) * 7 - Math.cos(a) * 7, dy = (Math.random() - .5) * 7 - Math.sin(a) * 7;
+  x -= OX; y -= OY;                                                    // world → this display
   d.style.setProperty('--x0', `${x}px`); d.style.setProperty('--y0', `${y}px`); d.style.setProperty('--x1', `${x + dx}px`); d.style.setProperty('--y1', `${y + dy - 5}px`);
   d.addEventListener('animationend', () => { d.remove(); puffs--; }); document.body.appendChild(d);
 }
@@ -1195,7 +1229,7 @@ function layCrossings() {
 const zoneOf2 = (L, s) => L === mainL && stations.some(st => st.ok && st.kind === 'main' && Math.abs(rel(mainL, s - st.s)) < LOOP_HALF + 20);
 function setBarrier(cr, snap) {
   const rd = [Math.cos(cr.ra), Math.sin(cr.ra)], rn = [-rd[1], rd[0]];
-  cr.sp.arms.forEach((el, j) => { const along = j ? 1 : -1, edge = j ? 1 : -1, P = [cr.x + rd[0] * along * 10 + rn[0] * edge * 4.8, cr.y + rd[1] * along * 10 + rn[1] * edge * 4.8];
+  cr.sp.arms.forEach((el, j) => { const along = j ? 1 : -1, edge = j ? 1 : -1, P = [cr.x - OX + rd[0] * along * 10 + rn[0] * edge * 4.8, cr.y - OY + rd[1] * along * 10 + rn[1] * edge * 4.8];   // (world → this display)
     const down = Math.atan2(-rn[1] * edge, -rn[0] * edge), upA = Math.atan2(rd[1] * along, rd[0] * along), up = down + Math.atan2(Math.sin(upA - down), Math.cos(upA - down));
     if (snap) el.style.transition = 'none';
     el.style.transform = `translate3d(${(P[0] - 1).toFixed(1)}px,${(P[1] - 2.5).toFixed(1)}px,0) rotate(${(cr.down ? down : up).toFixed(3)}rad)`;
@@ -1212,9 +1246,12 @@ function stepCrossings() {
 
 /* ---------- cars on the country roads: village to village, waiting at closed crossings ---------- */
 let rcars = [];
-function stepRoadCars(dt) {
+function ensureRcars() {
   if (!rcars.length && roads.length) { const n = Math.min(14, roads.length + 2);
     for (let i = 0; i < n; i++) { const r = roads[i % roads.length]; rcars.push({ r, s: h1(i * 3.3 + SEED) * r.len, dir: i % 2 ? 1 : -1, v: 0, vmax: 14 + 6 * h1(i + SEED), el: sprite(12, 8, carPic(CAR_COLORS[(i + 3) % CAR_COLORS.length])) }); } }
+}
+function stepRoadCars(dt) {
+  ensureRcars();
   for (const c of rcars) {
     let limit = 1e9;
     for (const cr of crossings) if (cr.r === c.r && cr.down) { const d = (cr.rs - c.s) * c.dir - 15; if (d > -8) limit = Math.min(limit, Math.max(0, d)); }
@@ -1225,8 +1262,7 @@ function stepRoadCars(dt) {
       const node = rnodes[c.s < 0 ? c.r.a : c.r.b], opts = node.kind === 'vil' ? node.roads.filter(r => r !== c.r) : [];
       if (!opts.length) { c.dir = -c.dir; c.s = clamp(c.s, 0, c.r.len); }
       else { const nr = opts[Math.floor(Math.random() * opts.length)], fromA = nr.a === node.i; c.r = nr; c.dir = fromA ? 1 : -1; c.s = fromA ? 0 : nr.len; } }
-    const p = at(c.r, c.s), a = tangent(c.r, c.s) + (c.dir < 0 ? Math.PI : 0), ex = Math.min(p[0], p[1], W - p[0], H - p[1]);
-    c.f = Math.min(1, (c.f || 0) + dt * 1.5); place(c.el, p[0] - Math.sin(a) * 2, p[1] + Math.cos(a) * 2, a, c.f * clamp((ex - 8) / 16, 0, 1) * clamp((twAt(p[0], p[1]) - OM + 2) / 6, 0, 1));
+    c.f = Math.min(1, (c.f || 0) + dt * 1.5); placeRcar(c);
   }
 }
 
@@ -1237,14 +1273,21 @@ const boatPic = (hull, sail) => x => { x.scale(.85, .85);
   x.fillStyle = hull; x.beginPath(); x.moveTo(7, 0); x.quadraticCurveTo(3, -3.4, -6, -2.8); x.lineTo(-6, 2.8); x.quadraticCurveTo(3, 3.4, 7, 0); x.fill();
   x.fillStyle = '#c99a62'; x.beginPath(); x.moveTo(5, 0); x.quadraticCurveTo(2, -2.2, -4.8, -1.8); x.lineTo(-4.8, 1.8); x.quadraticCurveTo(2, 2.2, 5, 0); x.fill();
   x.fillStyle = sail; x.beginPath(); x.moveTo(1, -.5); x.lineTo(-4, -6.5); x.lineTo(-4.5, -.5); x.closePath(); x.fill(); };
+function placeRcar(c) {
+  const p = at(c.r, c.s), a = tangent(c.r, c.s) + (c.dir < 0 ? Math.PI : 0), ex = Math.min(p[0], p[1], W - p[0], H - p[1]);
+  place(c.el, p[0] - Math.sin(a) * 2, p[1] + Math.cos(a) * 2, a, c.f * clamp((ex - 8) / 16, 0, 1) * clamp((twAt(p[0], p[1]) - OM + 2) / 6, 0, 1));
+}
 let boats = [];
-function stepBoats(dt) {
+function ensureBoats() {
   if (!boats.length && rivers.length) boats = rivers.slice(0, 2).map((r, i) => ({ r, s: h1(SEED + i) * r.len, dir: i ? -1 : 1, v: 7 + 3 * i, el: sprite(26, 14, boatPic(i ? '#f2f2ee' : '#e2533d', i ? '#4a90d9' : '#fff8e8')) }));
+}
+const placeBoat = b => { const [x, y, a] = riverAt(b.r, b.s), o = clamp(Math.min(b.s, b.r.len - b.s) / 30, 0, 1); place(b.el, x, y, a + (b.dir < 0 ? Math.PI : 0), o); };
+function stepBoats(dt) {
+  ensureBoats();
   for (const b of boats) {
     b.s += b.v * b.dir * dt;
     if (b.s < 0 || b.s > b.r.len) { b.dir = -b.dir; b.s = clamp(b.s, 0, b.r.len); }
-    const [x, y, a] = riverAt(b.r, b.s), o = clamp(Math.min(b.s, b.r.len - b.s) / 30, 0, 1);
-    place(b.el, x, y, a + (b.dir < 0 ? Math.PI : 0), o);
+    placeBoat(b);
   }
 }
 function clearMovers() { for (const b of boats) b.el.remove(); boats = []; for (const c of rcars) c.el.remove(); rcars = []; for (const [, sp] of crSprites) { sp.arms.forEach(e => e.remove()); sp.lights.forEach(e => e.remove()); } crSprites.clear(); crossings = []; }
@@ -1261,16 +1304,21 @@ const balPic = x => { x.scale(.85, .85);
 let balloon = null, nextBalloon = performance.now() + 45000;
 const balEl = sprite(32, 40, balPic), balSh = sprite(32, 18, x => { x.fillStyle = 'rgba(30,60,20,.22)'; x.beginPath(); x.ellipse(0, 0, 13, 7, 0, 0, 7); x.fill(); });
 balEl.style.opacity = balSh.style.opacity = 0; balEl._o = balSh._o = 0; balEl.style.zIndex = 4;
+function placeBalloon() { const b = balloon; if (!b) { place(balEl, -9e3, -9e3, 0, 0); place(balSh, -9e3, -9e3, 0, 0); return; }
+  place(balEl, b.x, b.y + Math.sin(b.t * .7) * 2.2, Math.sin(b.t * .3) * .05, 1); place(balSh, b.x + 46, b.y + 74, 0, 1); }
 function stepBalloon(dt, now) {
   if (!balloon && now > nextBalloon) { const left = h1(now) < .5; balloon = { x: left ? -40 : W + 40, y: H * (.2 + .5 * h1(now + 1)), vx: left ? 13 : -13, vy: (h1(now + 2) - .5) * 4, t: 0 }; }
   if (!balloon) return;
   const b = balloon; b.t += dt; b.x += b.vx * dt; b.y += b.vy * dt;
-  place(balEl, b.x, b.y + Math.sin(b.t * .7) * 2.2, Math.sin(b.t * .3) * .05, 1); place(balSh, b.x + 46, b.y + 74, 0, 1);
+  placeBalloon();
   if (b.x < -80 || b.x > W + 80) { balloon = null; place(balEl, -200, -200, 0, 0); place(balSh, -200, -200, 0, 0); nextBalloon = now + 150000 + h1(now) * 150000; }
 }
 
 /* ======================= the signal: rest your cursor beside a line ======================= */
-let cur = { x: -1e4, y: -1e4, on: false, t: 0 }, signal = null;
+let cur = { x: -1e4, y: -1e4, on: false, t: 0 }, signal = null, curFrom = -1;
+function curAt(x, y, from) { if (Math.hypot(x - cur.x, y - cur.y) > 2) cur.t = performance.now(); cur.x = x; cur.y = y; cur.on = true; curFrom = from; }
+Span.on('cur', m => curAt(m.x, m.y, m.from));
+Span.on('curoff', m => { if (curFrom === m.from) cur.on = false; });
 const sigEl = sprite(12, 24, () => {});
 function drawSignal(red) {
   const x = sigEl.getContext('2d'), k = K * 2; x.setTransform(k, 0, 0, k, 0, 0); x.clearRect(0, 0, 12, 24); x.translate(6, 12); x.scale(.85, .85);
@@ -1287,13 +1335,34 @@ function stepSignal() {
     let best = null; for (const L of (mainL ? [mainL] : []).concat(branches)) { const n = nearestS(L, cur.x, cur.y); if (n.d < 34 && !L.tun[n.i] && (!best || n.d < best.d)) best = { L, s: n.s, d: n.d }; }
     if (best) { signal = { L: best.L, s: best.s, red: true, until: now + 7000, ax: cur.x, ay: cur.y }; drawSignal(true);
       const p = at(best.L, best.s), a = tangent(best.L, best.s), side = ((cur.x - p[0]) * -Math.sin(a) + (cur.y - p[1]) * Math.cos(a)) > 0 ? 1 : -1;
-      sigEl.style.transform = `translate3d(${(p[0] - Math.sin(a) * side * 12 - 6).toFixed(1)}px,${(p[1] + Math.cos(a) * side * 12 - 12).toFixed(1)}px,0)`; sigEl.style.opacity = 1; }
+      sigEl.style.transform = `translate3d(${(p[0] - Math.sin(a) * side * 12 - 6 - OX).toFixed(1)}px,${(p[1] + Math.cos(a) * side * 12 - 12 - OY).toFixed(1)}px,0)`; sigEl.style.opacity = 1; }
   }
   if (signal) {
     if (signal.red && now > signal.until) { signal.red = false; signal.until = now + 4000; drawSignal(false); }
     else if (!signal.red && now > signal.until) { sigEl.style.opacity = 0; signal = null; }
     if (signal && cur.on && Math.hypot(cur.x - signal.ax, cur.y - signal.ay) > 120 && signal.red) { signal.red = false; signal.until = now + 2500; drawSignal(false); }
   }
+}
+
+/* ======================= one world: the leader's movers ======================= */
+const trainKey = t => t.spec.kind === 'shuttle' ? 'b' + t.bid : t.spec.kind;
+let remote = null, sentAt = 0;
+function sendMovers(now) {
+  if (!Span.world || now - sentAt < 30) return; sentAt = now;
+  Span.post('movers', { lk: layoutKey(), tr: trains.map(t => [trainKey(t), t.s, t.v, t.dir]), rc: rcars.map(c => [roads.indexOf(c.r), c.s, c.dir, c.f || 0]),
+    bt: boats.map(b => [b.s, b.dir]), bl: balloon && { x: balloon.x, y: balloon.y, vx: balloon.vx, vy: balloon.vy, t: balloon.t } });
+}
+Span.on('movers', m => { remote = m; });
+function applyMovers() {
+  // (not only when this page's layout key matches the leader's: mid-drag the two are a step apart, and the movers
+  // would freeze; positions along a line that has just moved a little still land on it)
+  const m = remote; if (!m) { for (const t of trains) t.els.forEach(el => place(el, -9e3, -9e3, 0, 0)); return; }
+  const have = new Set();
+  for (const [k, s_, v, dir] of m.tr) { const t = trains.find(t => trainKey(t) === k); if (t) { have.add(t); t.s = s_; t.v = v; t.dir = dir; placeCars(t); } }
+  for (const t of trains) if (!have.has(t)) t.els.forEach(el => place(el, -9e3, -9e3, 0, 0));   // the leader has no such train (yet)
+  ensureRcars(); m.rc.forEach(([ri, s_, dir, f], i) => { const c = rcars[i]; if (!c || !roads[ri]) return; c.r = roads[ri]; c.s = s_; c.dir = dir; c.f = f; placeRcar(c); });
+  ensureBoats(); m.bt.forEach(([s_, dir], i) => { const b = boats[i]; if (!b) return; b.s = s_; b.dir = dir; placeBoat(b); });
+  balloon = m.bl; placeBalloon();
 }
 
 /* ======================= loop: rebuild a few times a second at most, only while something changes ======================= */
@@ -1323,22 +1392,32 @@ function loop0(now) {
   else if (roadJob) { lastWork = 'roads'; if (roadJob.key !== layoutKey()) roadJob = null; else stepRoadJob(6); }
   else if (!needLand && now - lastMoveT > 450 && H0 && layoutKey() !== roadKey) { startRoads(); if (!roads.length) while (roadJob && !stepRoadJob(1e9)); }
   freeBack();
-  stepTrains(dt, false); stepCrossings(); stepCars(dt); stepRoadCars(dt); stepBoats(dt); stepBalloon(dt, now); stepSignal();
+  if (Span.leader()) { stepTrains(dt, false); stepRoadCars(dt); stepBoats(dt); stepBalloon(dt, now); sendMovers(now); }   // one world: one page runs them
+  else applyMovers();
+  stepCrossings(); stepCars(dt); stepSignal();
   requestAnimationFrame(loop);
 }
 
 /* ======================= boot + host protocol ======================= */
 let lastWinMsg = null, frameDT = 1 / 30;               // frameDT: the real frame time (steam puffs used a fixed 1/30 s, so their rate followed the frame rate)
-function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; cv.width = Math.round(W * K); cv.height = Math.round(H * K); prep(); clearMovers(); buildStatic(); first = true; dirty = true; wake();
+function build() { SW = innerWidth; SH = innerHeight; W = Span.uw; H = Span.uh; OX = Span.x; OY = Span.y; K = devicePixelRatio;
+  cv.width = Math.round(SW * K); cv.height = Math.round(SH * K); prep(); clearMovers(); buildStatic(); first = true; dirty = true; wake();
   if (lastWinMsg) handle(lastWinMsg); }                                // the screen's scale may have changed
 let deskKey = '';
 const handle = m => {
-  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
-  if (m.t === 'desk') { const k = [m.i, m.n, m.w, m.h].join('|'); if (k === deskKey) return; deskKey = k;
-    SEED = m.i | 0; prep(); clearMovers(); buildStatic(); VIS.clear(); visOf = [null, null, null]; dirty = true; wake(); return; }
-  if (m.t === 'cursor') { const x = m.x / K, y = m.y / K; if (Math.hypot(x - cur.x, y - cur.y) > 2) cur.t = performance.now(); cur.x = x; cur.y = y; cur.on = true; return; }
-  if (m.t === 'cursorOff') { cur.on = false; return; }
-  if (m.t === 'windows') { lastWinMsg = m; const K = devicePixelRatio; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
+  if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
+  if (m.t === 'desk') { const k = [m.i, m.n, m.w, m.h, m.x, m.y, JSON.stringify(m.fr || [])].join('|'); if (k === deskKey) return; deskKey = k;
+    Span.desk(m); SEED = Span.world ? 7 : m.i | 0;                     // one world: every page the same seed (it lays out the same board)
+    VIS.clear(); visOf = [null, null, null]; lastKey = ''; build(); return; }
+  if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; curAt(x, y, -1); Span.post('cur', { x, y }); return; }
+  if (m.t === 'cursorOff') { if (curFrom === -1) { cur.on = false; Span.post('curoff', {}); } return; }
+  if (m.t === 'windows') { lastWinMsg = m; const K = devicePixelRatio;
+    const list = m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }));
+    if (Span.world) {                                                  // what no display shows, and each lower display's menu bar
+      for (const g of Span.gaps()) list.push({ x: g.x, y: g.y, w: g.w, h: g.h, owner: '__gap' });
+      for (const F of Span.frames()) if (F[1] > 1) list.push({ x: F[0], y: F[1], w: F[2], h: MENU, owner: '__gap' });
+    }
+    setTargets(list); }
 };
 build();
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { lastKey = ''; build(); }, 200); });

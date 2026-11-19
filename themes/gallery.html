@@ -49,6 +49,7 @@
 </style>
 </head>
 <body>
+<script src="span.js"></script>
 <div id="room">
 <div class="layer" id="Lniche"></div>
 <div class="layer" id="Lshadow"></div>
@@ -61,6 +62,19 @@
 'use strict';
 window.__noMask = true;
 let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
+// one world across displays (span.js): W×H is the whole wall, OX/OY where this display sits on it
+let OX = 0, OY = 0, FR = [[0, 0, W, H]];
+function worldWall() {
+  W = Span.uw; H = Span.uh; OX = Span.x; OY = Span.y; FR = Span.frames();
+  const r = document.getElementById('room');
+  if (Span.world) Object.assign(r.style, { inset: 'auto', left: -OX + 'px', top: -OY + 'px', width: W + 'px', height: H + 'px' });
+  else Object.assign(r.style, { inset: '', left: '', top: '', width: '', height: '' });
+}
+// the display a box hangs on (by its centre), and whether the box lies wholly on it
+const frameOf = b => { const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2; return FR.find(([x, y, w, h]) => cx >= x && cy >= y && cx <= x + w && cy <= y + h) || null; };
+const within = (b, F, m) => F && b[0] >= F[0] + m && b[1] >= F[1] + m && b[2] <= F[0] + F[2] - m && b[3] <= F[1] + F[3] - m;
+// the skirting: on the lowest displays the wall meets the floor; higher up, a display's own bottom edge
+const floorOf = F => !F ? H * .935 : F[1] + F[3] >= H - 2 ? H * .935 : F[1] + F[3] - 10;
 const P = { quality: 1 }, cv = document.createElement('canvas');       // read by the host's bench probe
 let FB = null; function commit() { } function refresh() { }          // hooks the host calls on every theme
 const post = s => { try { webkit.messageHandlers.host.postMessage(s); } catch (_) { console.log(s); } };
@@ -130,7 +144,7 @@ function removePiece(p, lift) {
 // geometry: the inner rect is what shows (a window, or a painting); the frame wraps it; the plate hangs beside it
 function frameWidth(w, h, kind) { return Math.round(clamp(Math.min(w, h) * (kind === 'art' ? .075 : .05), 16, 58)); }
 const hit = (a, bs) => bs.some(b => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]);
-const FLOOR = () => H * .935;                                          // the skirting: nothing is hung below it
+const FLOOR = F => floorOf(F);                                        // the skirting: nothing is hung below it
 function setFrame(p, x, y, w, h, opt) {
   const F = opt.F, tuck = opt.kind === 'win' ? 3 : 0;                  // the frame's lip tucks under the window's edge
   const fx = x - F + tuck, fy = y - F + tuck, fw = w + 2 * (F - tuck), fh = h + 2 * (F - tuck);
@@ -146,13 +160,13 @@ function setPlate(p, label, claimed) {
   p.plateBox = null;
   if (label) { const [a, t, m] = p.plate.children; a.textContent = label.artist; t.textContent = label.title; m.textContent = label.medium; }
   if (!label) { p.plate.style.opacity = 0; return; }
-  const [fx, fy, fx1, fy1] = p.box, fw = fx1 - fx, g = 14;
+  const [fx, fy, fx1, fy1] = p.box, fw = fx1 - fx, g = 14, PF = frameOf(p.box) || [0, 0, W, H], X0 = PF[0], X1 = PF[0] + PF[2], Y0 = PF[1], Y1 = PF[1] + PF[3];
   for (const sc of [1, .84, .72]) {
-    const pw = clamp(fw * .3, 170, 240) * sc, ph = pw * .4, mid = clamp(fx + fw / 2 - pw / 2, 8, W - pw - 8);
+    const pw = clamp(fw * .3, 170, 240) * sc, ph = pw * .4, mid = clamp(fx + fw / 2 - pw / 2, X0 + 8, X1 - pw - 8);
     const cands = [[mid, fy1 + g], [mid, fy - g - ph], [fx1 + g, fy1 - ph], [fx - g - pw, fy1 - ph], [fx1 + g, fy], [fx - g - pw, fy]];
     for (const [px, py] of cands) {
       const b = [px, py, px + pw, py + ph];
-      if (px < 8 || px + pw > W - 8 || py < 8 || py + ph > FLOOR() || hit(b, claimed)) continue;
+      if (px < X0 + 8 || px + pw > X1 - 8 || py < Y0 + 8 || py + ph > FLOOR(PF) || hit(b, claimed)) continue;
       Object.assign(p.plate.style, { left: px + 'px', top: py + 'px', width: pw + 'px', height: ph + 'px', opacity: 1, fontSize: '' });
       p.plate.classList.toggle('sm', sc < .8); p.plate.classList.remove('rail');
       p.plateBox = b; claimed.push([b[0] - 6, b[1] - 6, b[2] + 6, b[3] + 6]); return;
@@ -164,7 +178,7 @@ function setPlate(p, label, claimed) {
     const rw = rh * 6.4, px = (fx + fx1) / 2 - rw / 2;
     for (const py of [fy1 - F / 2 - rh / 2, fy + F / 2 - rh / 2]) {
       const b = [px, py, px + rw, py + rh];
-      if (px < 8 || px + rw > W - 8 || py < 4 || py + rh > H - 4 || hit(b, claimed.filter(c => !(c[0] >= fx - 6 && c[1] >= fy - 6 && c[2] <= fx1 + 6 && c[3] <= fy1 + 6))))   /* its own window and frame don't count */ continue;
+      if (px < X0 + 8 || px + rw > X1 - 8 || py < Y0 + 4 || py + rh > Y1 - 4 || hit(b, claimed.filter(c => !(c[0] >= fx - 6 && c[1] >= fy - 6 && c[2] <= fx1 + 6 && c[3] <= fy1 + 6))))   /* its own window and frame don't count */ continue;
       Object.assign(p.plate.style, { left: px + 'px', top: py + 'px', width: rw + 'px', height: rh + 'px', opacity: 1 });
       p.plate.classList.add('rail'); p.plateBox = b; claimed.push(b); return;
     }
@@ -181,7 +195,7 @@ function stageStrip(list) {
   for (const n of niches) { n.el.remove(); n.plate.remove(); } niches = [];
   const groups = []; for (const t of list.filter(t => t.sm).sort((a, b) => a.x - b.x)) { const g = groups.find(g => Math.abs(g.cx - (t.x + t.w / 2)) < 60); if (g) g.items.push(t); else groups.push({ cx: t.x + t.w / 2, items: [t] }); }
   for (const g of groups) {
-    const x0 = Math.max(4, Math.min(...g.items.map(t => t.x)) - 16), y0 = Math.max(4, Math.min(...g.items.map(t => t.y)) - 18), x1 = Math.max(...g.items.map(t => t.x + t.w)) + 16, y1 = Math.min(FLOOR() - 4, Math.max(...g.items.map(t => t.y + t.h)) + 18);
+    const x0 = Math.max(4, Math.min(...g.items.map(t => t.x)) - 16), y0 = Math.max(4, Math.min(...g.items.map(t => t.y)) - 18), x1 = Math.max(...g.items.map(t => t.x + t.w)) + 16, y1 = Math.min(FLOOR(frameOf([g.items[0].x, g.items[0].y, g.items[0].x + g.items[0].w, g.items[0].y + g.items[0].h])) - 4, Math.max(...g.items.map(t => t.y + t.h)) + 18);
     const el = $('div', 'niche', L.niche); Object.assign(el.style, { left: x0 + 'px', top: y0 + 'px', width: x1 - x0 + 'px', height: y1 - y0 + 'px' });
     const plate = $('div', 'plate', L.plate);
     plate.innerHTML = '<div class="a">Stage Manager</div><div class="t">In Reserve</div><div class="m">' + g.items.length + ' work' + (g.items.length > 1 ? 's' : '') + ' awaiting display</div>';
@@ -193,12 +207,13 @@ function stageStrip(list) {
 const isWidget = t => /notification cent/i.test(t.app);
 function standWidgets(widgets, all) {
   for (const s of stands) s.els.forEach(e => e.remove()); stands = [];
-  const PL = FRAMES.plinth, floorY = H * .978;
+  const PL = FRAMES.plinth;
   for (const t of widgets) {
+    const WF = frameOf([t.x, t.y, t.x + t.w, t.y + t.h]), low = !WF || WF[1] + WF[3] >= H - 2, floorY = low ? H * .978 : -1e9;   // plinths stand on the floor, which only the lowest displays show
     const pw = t.w * 1.08, k = pw / PL.size[0], top = t.y + t.h - 3 - PL.front * k, colX0 = t.x + t.w / 2 - pw / 2, col = [colX0, t.y + t.h + 2, colX0 + pw, floorY];
     const blocked = all.some(o => o !== t && hit([o.x, o.y, o.x + o.w, o.y + o.h], [col]));
     const els = [];
-    if (t.y + t.h > H * .93) {                                          // already down at the floor: it stands there
+    if (low && t.y + t.h > H * .93) {                                          // already down at the floor: it stands there
       const fs = $('div', 'floorshadow', L.niche); Object.assign(fs.style, { left: t.x - t.w * .06 + 'px', top: t.y + t.h - 12 + 'px', width: t.w * 1.12 + 'px', height: '22px' });
       els.push(fs); stands.push({ els, box: [t.x, t.y + t.h - 12, t.x + t.w, t.y + t.h + 10] });
     } else if (!blocked && t.y + t.h > H * .42 && floorY - top > (PL.front + PL.reveal) * k + 30) {
@@ -252,7 +267,7 @@ function setWindows(all) {
   // the Stage Manager label last: below its niche, else above, else not at all
   for (const n of niches) {
     const pw = clamp(n.box[2] - n.box[0] + 10, 130, 200), ph = pw * .38, px = clamp((n.box[0] + n.box[2]) / 2 - pw / 2, 8, W - pw - 8);
-    const spot = [[px, n.box[3] + 10], [px, n.box[1] - 10 - ph]].find(([x, y]) => y > 8 && y + ph < FLOOR() && !hit([x, y, x + pw, y + ph], claimed));
+    const NF = frameOf(n.box); const spot = [[px, n.box[3] + 10], [px, n.box[1] - 10 - ph]].find(([x, y]) => y > (NF ? NF[1] : 0) + 8 && y + ph < FLOOR(NF) && !hit([x, y, x + pw, y + ph], claimed));
     if (spot) { Object.assign(n.plate.style, { left: spot[0] + 'px', top: spot[1] + 'px', width: pw + 'px', height: ph + 'px', opacity: 1 }); claimed.push([spot[0], spot[1], spot[0] + pw, spot[1] + ph]); n.plateBox = [spot[0], spot[1], spot[0] + pw, spot[1] + ph]; }
     else n.plate.style.opacity = 0;
   }
@@ -277,15 +292,15 @@ function footprint(art, x, y, h) {
   const fw = w + 2 * (F + mat), fh = h + 2 * (F + mat), pw = clamp(fw * .3, 170, 240), ph = pw * .4;
   return { w, h, F, mat, fw, fh, box: [x - F - mat, y - F - mat, x + w + F + mat, y + h + F + mat + 16 + ph] };
 }
-function bestSpot(art, obstacles) {
-  const top = H * .07, floor = H * .935, step = 14; let best = null;
+function bestSpot(art, obstacles, F) {
+  const [FX, FY, FW, FH] = F, top = FY + FH * .07, floor = Math.min(FY + FH * .935, floorOf(F)), step = 14; let best = null;
   for (const hf of [.42, .37, .32, .28, .24, .2]) {
-    const h = H * hf, fp0 = footprint(art, 0, 0, h), fw = fp0.box[2] - fp0.box[0], fh = fp0.box[3] - fp0.box[1];
-    if (fw > W - 60 || fh > floor - top) continue;
-    // prefer a spot near the wall's comfortable eye line, then the centre
-    for (let y = top; y + fh <= floor; y += step) for (let x = 30; x + fw <= W - 30; x += step) {
+    const h = FH * hf, fp0 = footprint(art, 0, 0, h), fw = fp0.box[2] - fp0.box[0], fh = fp0.box[3] - fp0.box[1];
+    if (fw > FW - 60 || fh > floor - top) continue;
+    // prefer a spot near the display's comfortable eye line, then its centre
+    for (let y = top; y + fh <= floor; y += step) for (let x = FX + 30; x + fw <= FX + FW - 30; x += step) {
       const b = [x, y, x + fw, y + fh]; if (hit(b, obstacles)) continue;
-      const score = h * 10 - Math.abs((y + fh * .45) - H * .45) * .6 - Math.abs((x + fw / 2) - W / 2) * .15;
+      const score = h * 10 - Math.abs((y + fh * .45) - (FY + FH * .45)) * .6 - Math.abs((x + fw / 2) - (FX + FW / 2)) * .15;
       if (!best || score > best.score) best = { score, x: x - fp0.box[0], y: y - fp0.box[1], h, box: b };
     }
     if (best) return best;
@@ -301,12 +316,12 @@ function hangCollection() {
   if (!ART.length || !FRAMES) return;
   const obstacles = boxes(), keep = [];
   // works already on the wall stay where they are if they're still clear; otherwise they're taken down
-  for (const h of hung) { if (!hit(h.box, obstacles) && h.box[2] < W && h.box[3] < H) { keep.push(h); obstacles.push(pad(h.box)); } else removePiece(h.p, true); }
+  for (const h of hung) { if (!hit(h.box, obstacles) && within(h.box, frameOf(h.box), 0)) { keep.push(h); obstacles.push(pad(h.box)); } else removePiece(h.p, true); }
   hung = keep;
-  for (const art of order()) {
-    if (hung.length >= 4) break;
+  for (const F of FR) for (const art of order()) {
+    if (hung.filter(h => frameOf(h.box) === F).length >= 4) break;        // up to four works on each display
     if (hung.some(h => h.art.id === art.id)) continue;
-    const s = bestSpot(art, obstacles); if (!s) continue;
+    const s = bestSpot(art, obstacles, F); if (!s) continue;
     const p = makePiece('art'), fp = footprint(art, s.x, s.y, s.h);
     const img = $('img', 'art', p.frame); img.src = art.file; img.decoding = 'async';
     if (fp.mat) { const m = $('div', 'mat', p.frame); m.style.inset = '0'; p.frame.insertBefore(m, img); Object.assign(img.style, { left: fp.mat + 'px', top: fp.mat + 'px', width: fp.w + 'px', height: fp.h + 'px' }); }
@@ -331,12 +346,16 @@ function houseLights() {
 }
 
 /* ======================= host protocol ======================= */
-let settle = null, lastAll = [];
+let settle = null, lastAll = [], lastRaw = [], deskKey = '';
+const toWorld = t => Object.assign({}, t, { x: t.x + OX, y: t.y + OY });
 const handle = m => {
-  if (m.t === 'desk') { if (m.i !== DESK.i) { DESK = m; for (const h of hung) removePiece(h.p, false); hung = []; hangCollection(); } return; }
+  if (m.t === 'desk') { const k = [m.i, m.n, m.x, m.y, JSON.stringify(m.fr || [])].join('|'); if (k === deskKey) return; deskKey = k;
+    Span.desk(m); worldWall(); DESK = Span.world ? { i: 0, n: 1 } : m;                 // one wall: every display hangs from the same collection
+    for (const h of hung) removePiece(h.p, false); hung = []; setWindows(lastAll = lastRaw.map(toWorld)); hangCollection(); return; }
   if (m.t === 'pause') { paused = !!m.v; return; }
   if (m.t === 'windows') {
-    lastAll = m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, app: (m.n || [])[i] || '', sm: (m.sm || [])[i] === 1 })); setWindows(lastAll);
+    lastRaw = m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, app: (m.n || [])[i] || '', sm: (m.sm || [])[i] === 1 }));
+    lastAll = lastRaw.map(toWorld); setWindows(lastAll);
     clearTimeout(settle); settle = setTimeout(hangCollection, m.live ? 900 : 350);   // re-hang once you've stopped moving things
   }
 };
@@ -344,10 +363,15 @@ function setTargets() { }
 async function boot() {
   [FRAMES, ART] = await Promise.all([fetch('gallery/frames.json').then(r => r.json()), fetch('gallery/art/art.json').then(r => r.json())]);
   houseLights(); setInterval(houseLights, 60e3); setWindows(lastAll);
+  // a new day, a new selection: the works on the wall are taken down gently and the day's hang goes up (it used to wait
+  // for a window to move)
+  let day = new Date().toDateString();
+  setInterval(() => { const d = new Date().toDateString(); if (d === day || paused) return; day = d;
+    for (const h of hung) removePiece(h.p, true); hung = []; setTimeout(hangCollection, 1400); }, 60e3);
   hangCollection();
 }
 boot().catch(e => post('JSERR boot ' + e.message));
-addEventListener('resize', () => { W = innerWidth; H = innerHeight; K = devicePixelRatio; hangCollection(); });
+addEventListener('resize', () => { K = devicePixelRatio; if (Span.world) worldWall(); else { W = innerWidth; H = innerHeight; FR = [[0, 0, W, H]]; } hangCollection(); });
 window.__dbg = () => `windows=${wins.length} hung=${hung.map(h => h.art.id).join(',')}`;
 const host = window.chrome && window.chrome.webview;
 if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('nocursor'); host.postMessage('ready'); }

@@ -20,10 +20,14 @@
 </head>
 <body>
 <canvas id="gl"></canvas>
+<script src="span.js"></script>
 <script>
 'use strict';
 window.__noMask = true;      // translucent windows show the wallpaper behind them, so nothing may be left undrawn
 let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
+// one world across displays (span.js): W×H is the whole lagoon, OX/OY where this display sits in it, SW×SH its size
+let OX = 0, OY = 0, SW = innerWidth, SH = innerHeight, walls = [];
+const worldU = p => { if (p.u.uWO) gl.uniform2f(p.u.uWO, OX, OY); if (p.u.uWS) gl.uniform2f(p.u.uWS, W, H); };
 const P = { quality: 2 };
 const cv = document.getElementById('gl');
 let FB = null; function commit() { } function refresh() { }
@@ -84,7 +88,7 @@ vec3 water(vec3 c, float D) { vec3 T = exp(-D * vec3(2.7, .62, .44)); return c *
 
 /* ---------- 1. sand (painted once per size) ---------- */
 const SAND = prog(VS_FULL, `#version 300 es
-precision highp float; in vec2 vUV; out vec4 o; uniform vec2 uRes; uniform float uK; uniform vec4 uMd[8]; uniform int uNM;
+precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o; uniform vec2 uRes; uniform float uK; uniform vec4 uMd[8]; uniform int uNM;
 ${NOISE}
 // one blade per 5px cell, rooted at a random point and lying downstream (+x in the current's frame)
 vec4 seagrass(vec2 p, float dens, float s) {
@@ -114,7 +118,7 @@ float sandH(vec2 p) {
   return rip * amp + fbm(p * .045) * .4;
 }
 void main() {
-  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes;
+  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO;
   float e = .6, h = sandH(p), hx = sandH(p + vec2(e, 0)), hy = sandH(p + vec2(0, e));
   vec3 n = normalize(vec3(-(hx - h) / e * 2.6, -(hy - h) / e * 2.6, 1.));
   float dif = dot(n, LIGHT);
@@ -476,7 +480,7 @@ void main() {
   o = vec4(clamp(nh, -4., 4.), s.r, 0., 1.);
 }`, 'ripple');
 const NRM = prog(VS_FULL, `#version 300 es
-precision highp float; in vec2 vUV; out vec4 o;
+precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o;
 uniform sampler2D uRip; uniform vec2 uRes, uRipTex; uniform float uT, uRipK;
 ${NOISE}
 vec2 ripGrad(vec2 uv) {
@@ -497,12 +501,12 @@ vec2 ambGrad(vec2 p, float t) {
   return g + vec2(nx - n0, ny - n0) * .4;
 }
 void main() {
-  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes, gr = ripGrad(vUV);
+  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO, gr = ripGrad(vUV);
   o = vec4(gr + ambGrad(p, uT), ripLap(vUV) * uRipK, dot(gr, vec2(-.64, -.77)));
 }`, 'normals');
 // sunlight focused by the surface onto the floor, plus the blurred shadows (quarter res; all of it is soft)
 const LIGHT = prog(VS_FULL, `#version 300 es
-precision highp float; in vec2 vUV; out vec4 o; uniform vec2 uRes; uniform float uT; uniform sampler2D uNrm, uShadow; uniform vec2 uShTex;
+precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o; uniform vec2 uRes; uniform float uT; uniform sampler2D uNrm, uShadow; uniform vec2 uShTex;
 ${NOISE}
 float caustic(vec2 uv, float time) {
   vec2 p = mod(uv * 6.2832, 6.2832) - 250.; vec2 i = p; float c = 1., inten = .005;
@@ -512,7 +516,7 @@ float caustic(vec2 uv, float time) {
   c /= 5.; c = 1.17 - pow(c, 1.4); return pow(abs(c), 8.);
 }
 void main() {
-  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes; vec4 N = texture(uNrm, vUV);
+  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO; vec4 N = texture(uNrm, vUV);
   vec2 w = (vec2(noise(p * .0035 + uT * .03), noise(p * .0035 + 5.3 - uT * .025)) - .5) * 90. + N.xy * 10.;
   float c1 = caustic((p + w) / 360., uT * .32 + 23.);
   float c2 = caustic(mat2(.8, .6, -.6, .8) * (p - w) / 270. + 3.7, uT * .26 + 11.);
@@ -536,7 +540,7 @@ vec2 suv(vec2 p) { return vec2(p.x / uRes.x, 1. - p.y / uRes.y); }
 `;
 // reef rock, fixed to the seabed (painted once): albedo, and in alpha the noise it emerges from as a reef grows
 const ROCK = prog(VS_FULL, `#version 300 es
-precision highp float; in vec2 vUV; out vec4 o; uniform vec2 uRes;
+precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o; uniform vec2 uRes;
 ${NOISE}
 vec3 rock(vec2 l, float s) {
   float n = fbm(l * .07 + s), e = 1.2;
@@ -548,17 +552,17 @@ vec3 rock(vec2 l, float s) {
   c *= .9 + .2 * hash(floor(l * 2.));
   return c * (.5 + .62 * max(dot(nn, LIGHT), 0.) / LIGHT.z * .75);
 }
-void main() { vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes; o = vec4(rock(p, 3.7), fbm3(p * .034 + 9.)); }`, 'rock');
+void main() { vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO; o = vec4(rock(p, 3.7), fbm3(p * .034 + 9.)); }`, 'rock');
 // where reef grows: R = the reef itself, G = the shallows around it. Each eases towards where the windows are now,
 // so a moved window's reef spreads in around it and dies back where it was
 const GROW = prog(VS_FULL, `#version 300 es
-precision highp float; in vec2 vUV; out vec4 o;
+precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o;
 uniform sampler2D uPrev; uniform vec4 uR[32]; uniform vec4 uB[32]; uniform int uN; uniform vec4 uBm[16]; uniform int uNB; uniform vec2 uRes; uniform float uDt;
 ${NOISE}
 float sdBox(vec2 p, vec2 c, vec2 hs) { vec2 d = abs(p - c) - hs; return length(max(d, 0.)) + min(max(d.x, d.y), 0.); }
 float smin(float a, float b, float k) { float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
 void main() {
-  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes;
+  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO;
   float bw = (.35 + .9 * clamp(.5 + .3 * sin(p.x * .0123 + 1.7) * cos(p.y * .0101 + .4) + .2 * sin((p.x + p.y) * .0071 + 2.9), 0., 1.));          // wide in places, a thin rim in others
   float sd = 1e5;
   for (int i = 0; i < 32; i++) { if (i >= uN) break; vec4 r = uR[i]; sd = smin(sd, sdBox(p, (r.xy + r.zw) * .5, (r.zw - r.xy) * .5) - uB[i].x * bw, 40.); }
@@ -570,13 +574,13 @@ void main() {
   o = vec4(mix(prev, tgt, mix(dn, up, step(prev, tgt))), 0., 1.);
 }`, 'grow');
 const BED = prog(VS_FULL, `#version 300 es
-precision highp float; in vec2 vUV; out vec4 o; uniform sampler2D uSand, uRock, uGrow;
+precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o; uniform sampler2D uSand, uRock, uGrow;
 ${NOISE}${WATER}${BED_COMMON}
 void main() {
-  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes;
+  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO;
   vec4 n = texture(uNrm, vUV);
   float D = mix(.5 + .3 * noise(p * .0016 + 11.), .09, texture(uGrow, vUV).g);
-  vec2 pr = p + n.xy * (6. + 24. * D), uv = suv(pr), dx = vec2(1.4 / uRes.x, 0.);
+  vec2 pr = p + n.xy * (6. + 24. * D), uv = suv(pr - uWO), dx = vec2(1.4 / uRes.x, 0.);   // this display's textures: local position
   vec4 sa = texture(uSand, uv), ro = texture(uRock, uv); vec2 f = texture(uGrow, uv).rg;
   // rock breaks through the sand where its noise peaks first, then fills in as the reef matures
   float reefM = smoothstep(.42, .6, ro.a + f.r * .55 - .27) * smoothstep(.02, .3, f.r);
@@ -722,10 +726,10 @@ void main() {
 }`, 'fish');
 
 const SURF = prog(VS_FULL, `#version 300 es
-precision highp float; in vec2 vUV; out vec4 o; uniform sampler2D uRuf;
+precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o; uniform sampler2D uRuf;
 ${BED_COMMON}
 void main() {
-  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes;
+  vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO;
   vec4 N = texture(uNrm, vUV);
   vec2 r1 = texture(uRuf, p / 70. + vec2(uT * .035, uT * .026)).rg - .5, r2 = texture(uRuf, mat2(.8, .6, -.6, .8) * p / 53. - vec2(uT * .03, -uT * .02)).rg - .5;
   vec3 n = normalize(vec3(-(N.xy + (r1 + r2) * .16), 1.));
@@ -734,7 +738,7 @@ void main() {
   float rip = N.a * 1.4;
   vec3 add = vec3(1., .99, .95) * spec + vec3(.85, 1., 1.) * max(rip, 0.) * .18;
   float dark = clamp(-rip * .12, 0., .25);
-  vec2 uv = p / uRes; add += vec3(.9, .97, 1.) * .035 * (1. - smoothstep(0., 1.1, length(uv - vec2(.15, .1))));
+  vec2 uv = p / uWS; add += vec3(.9, .97, 1.) * .035 * (1. - smoothstep(0., 1.1, length(uv - vec2(.15, .1))));
   dark += .12 * smoothstep(.55, 1.15, length((uv - .5) * vec2(1.25, 1.)));
   o = vec4(add * (1. - dark), dark);
 }`, 'surface');
@@ -743,15 +747,15 @@ void main() {
 let sandTex = null, rockTex = null, grow = [null, null], growF = [null, null], gi = 0, growReset = true, rip = [null, null], ripF = [null, null], ri = 0, gw = 1, gh = 1, nrmTex = null, nrmF = null, litTex = null, litF = null, shTex = null, shF = null, rufTex = null;
 function paintSand() {
   const sf = fbo(sandTex); gl.bindFramebuffer(gl.FRAMEBUFFER, sf); gl.viewport(0, 0, sandTex.w, sandTex.h); gl.disable(gl.BLEND);
-  gl.useProgram(SAND); gl.uniform2f(SAND.u.uRes, W, H); gl.uniform1f(SAND.u.uK, K);
+  gl.useProgram(SAND); gl.uniform2f(SAND.u.uRes, SW, SH); worldU(SAND); gl.uniform1f(SAND.u.uK, K);
   gl.uniform4fv(SAND.u.uMd, uMd); gl.uniform1i(SAND.u.uNM, meadows.length);
   gl.bindVertexArray(emptyVao); gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(sf);
-  const rf = fbo(rockTex); gl.bindFramebuffer(gl.FRAMEBUFFER, rf); gl.useProgram(ROCK); gl.uniform2f(ROCK.u.uRes, W, H); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const rf = fbo(rockTex); gl.bindFramebuffer(gl.FRAMEBUFFER, rf); gl.useProgram(ROCK); gl.uniform2f(ROCK.u.uRes, SW, SH); worldU(ROCK); gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(rf);
 }
 function buildTargets() {
-  const dw = Math.round(W * K), dh = Math.round(H * K); cv.width = dw; cv.height = dh;
+  const dw = Math.round(SW * K), dh = Math.round(SH * K); cv.width = dw; cv.height = dh;   // this display's slice
   for (const t of [sandTex, rockTex, grow[0], grow[1], rip[0], rip[1], nrmTex, litTex, shTex]) if (t) gl.deleteTexture(t);
   for (const f of [...ripF, ...growF, nrmF, litF, shF]) if (f) gl.deleteFramebuffer(f);
   sandTex = tex(dw, dh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR); rockTex = tex(dw, dh, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR);
@@ -917,28 +921,30 @@ function koiW(u) {          // half width as a fraction of length
   return .118 * (.2 + 1.25 * Math.pow((u - 1) / .3, .85));
 }
 function reefW(u) { return u <= 1 ? .13 * (u < .14 ? .5 + .5 * Math.sqrt(u / .14) : 1 - Math.pow((u - .14) / .86, 1.5) * .78) : .13 * (.25 + 1.1 * (u - 1) / .25); }
-function openSpot(R) { for (let i = 0; i < 40; i++) { const x = 40 + R() * (W - 80), y = 40 + R() * (H - 80); if (!inWindow(x, y, BAND)) return [x, y]; } return [R() * W, R() * H]; }
+const inWall = (x, y, pad) => walls.some(g => x > g.x - pad && x < g.x + g.w + pad && y > g.y - pad && y < g.y + g.h + pad);
+function openSpot(R) { for (let i = 0; i < 60; i++) { const x = 40 + R() * (W - 80), y = 40 + R() * (H - 80); if (!inWindow(x, y, BAND) && !inWall(x, y, 60)) return [x, y]; } return [W / 2, H / 2]; }
 function makeSpine(n, x, y, ang, len) { const s = new Float32Array(n * 2); for (let i = 0; i < n; i++) { s[i * 2] = x - Math.cos(ang) * len * i / (n - 1); s[i * 2 + 1] = y - Math.sin(ang) * len * i / (n - 1); } return s; }
 function makeFish() {
   const R = rng(1234); koi = [];
   const n = Math.round(clamp(W * H / 190000, 5, 11)), kinds = [0, 0, 0, 1, 1, 2, 2, 3, 4, 5, 6, 7, 8, 9];
   for (let i = 0; i < n; i++) {
-    const L = 80 + R() * 38, [x, y] = openSpot(R), ang = R() * 6.283;
+    const L = 80 + R() * 38, [x, y] = openSpot(rng(4321 + i * 977)), ang = R() * 6.283;   // (the spot's own dice: every display gives each koi the same looks)
     koi.push({ L, kind: kinds[Math.floor(R() * kinds.length)], seed: R() * 50, x, y, ang, av: 0, v: 20, cruise: 18 + R() * 14, ph: R() * 6.28, fin: R() * 6.28, wob: R() * 100,
       sp: makeSpine(KOI_NS, x, y, ang, L * KOI_U), feed: false, nib: R() * 2, wake: 0 });
   }
   schools = [];
   for (const [kind, cnt, lo, hi] of [[0, 14, 12, 16], [1, 6, 20, 25], [2, 6, 21, 27], [3, 4, 17, 21], [5, 9, 11, 14]]) {
     const sc = { kind, home: null, t: R(), dir: R() < .5 ? -1 : 1, speed: 10 + R() * 8, tx: 0, ty: 0, wx: R() * 100, nextHome: 0, fish: [] };
-    const [x, y] = openSpot(R);
+    const [x, y] = openSpot(rng(8765 + kind * 131));
     for (let i = 0; i < cnt; i++) { const L = lo + R() * (hi - lo), a = R() * 6.28;
       sc.fish.push({ L, x: x + (R() - .5) * 60, y: y + (R() - .5) * 60, vx: Math.cos(a) * 10, vy: Math.sin(a) * 10, ang: a, ph: R() * 6.28, ox: (R() - .5) * 2, oy: (R() - .5) * 2, sp: makeSpine(REEF_NS, x, y, a, L * REEF_U) }); }
     schools.push(sc);
   }
 }
 function clownPair(coral, win) {
-  for (let i = 0; i < 2; i++) { const L = 13 + Math.random() * 4, a = Math.random() * 6.28;
-    clowns.push({ coral, win, L, x: 0, y: 0, vx: 0, vy: 0, ang: a, ph: Math.random() * 6.28, orb: Math.random() * 6.28, spd: (.5 + Math.random() * .4) * (i ? -1 : 1), sp: null }); }
+  const R = rng(((Math.round(coral.x) * 73856093) ^ (Math.round(coral.y) * 19349663)) >>> 0);   // dice from where the coral is: the same pair on every display
+  for (let i = 0; i < 2; i++) { const L = 13 + R() * 4, a = R() * 6.28;
+    clowns.push({ coral, win, L, x: 0, y: 0, vx: 0, vy: 0, ang: a, ph: R() * 6.28, orb: R() * 6.28, spd: (.5 + R() * .4) * (i ? -1 : 1), sp: null }); }
 }
 function follow(sp, n, len) {
   const seg = len / (n - 1);
@@ -951,6 +957,11 @@ function boxGrad(x, y, c, pad) {
 }
 let food = null;
 const cur = { x: -1e4, y: -1e4, on: false, moveT: 0, px: 0, py: 0, sp: 0, ax: -1e4, ay: -1e4 };
+// one cursor across the world: whichever display has it tells the others
+let curFrom = -1;
+function curAt(x, y, from) { if (!cur.on) { cur.px = x; cur.py = y; } if (Math.hypot(x - cur.ax, y - cur.ay) > 1.5) { cur.moveT = performance.now(); cur.ax = x; cur.ay = y; } cur.x = x; cur.y = y; cur.on = true; curFrom = from; }
+Span.on('cur', m => curAt(m.x, m.y, m.from));
+Span.on('curoff', m => { if (curFrom === m.from) cur.on = false; });
 function stepKoi(dt, now) {
   // food: a still hand in open water
   const still = cur.on && now - cur.moveT > 450 && !inWindow(cur.x, cur.y, 6);
@@ -970,6 +981,7 @@ function stepKoi(dt, now) {
     for (const c of wins) { if (!c.alive) continue;
       const [gx, gy, d] = boxGrad(lx, ly, c, 16); if (d < 50) { const f = (50 - d) / 50 * 3.2; sx += gx * f; sy += gy * f; }
       const [hx, hy, hd] = boxGrad(k.x, k.y, c, 4); if (hd < 0) { sx += hx * 6; sy += hy * 6; } }
+    for (const g of walls) { const [gx, gy, d] = boxGrad(lx, ly, g, 30); if (d < 60) { const f = (60 - d) / 60 * 4; sx += gx * f; sy += gy * f; } }   // the edge of the world's water
     // screen edges
     const m = 50; if (k.x < m) sx += (m - k.x) / m * 3; if (k.x > W - m) sx -= (k.x - W + m) / m * 3; if (k.y < m) sy += (m - k.y) / m * 3; if (k.y > H - m) sy -= (k.y - H + m) / m * 3;
     for (const o of koi) { if (o === k) continue; const dx = k.x - o.x, dy = k.y - o.y, d = Math.hypot(dx, dy); if (d < k.L * .8 && d > 0) { sx += dx / d * (1 - d / (k.L * .8)) * 2; sy += dy / d * (1 - d / (k.L * .8)) * 2; } }
@@ -1006,6 +1018,7 @@ function steerFish(f, tx, ty, dt, maxV, now) {
   const fleeing = cur.on && now - cur.moveT < 350;
   if (fleeing) { const dx = f.x - cur.x, dy = f.y - cur.y, d = Math.hypot(dx, dy); if (d < 110 && d > 0) { const s = (1 - d / 110) * 900; dvx += dx / d * s; dvy += dy / d * s; maxV = 170; } }
   for (const c of wins) { if (!c.alive) continue; const [gx, gy, d] = boxGrad(f.x, f.y, c, 2); if (d < 8) { dvx += gx * (8 - d) * 12; dvy += gy * (8 - d) * 12; } }
+  for (const g of walls) { const [gx, gy, d] = boxGrad(f.x, f.y, g, 10); if (d < 20) { dvx += gx * (20 - d) * 12; dvy += gy * (20 - d) * 12; } }
   const l = Math.hypot(dvx, dvy); if (l > maxV) { dvx *= maxV / l; dvy *= maxV / l; }
   f.vx += (dvx - f.vx) * Math.min(1, dt * 2.6); f.vy += (dvy - f.vy) * Math.min(1, dt * 2.6);
   f.x += f.vx * dt; f.y += f.vy * dt;
@@ -1016,6 +1029,10 @@ function steerFish(f, tx, ty, dt, maxV, now) {
   f.sp[0] = f.x; f.sp[1] = f.y; follow(f.sp, REEF_NS, f.L * REEF_U);
 }
 function stepReef(dt, now) {
+  if (Span.leader()) stepSchools(dt, now);
+  stepClowns(dt);
+}
+function stepSchools(dt, now) {
   let homes = null;   // built only when a school needs a new home
   for (const sc of schools) {
     if (!sc.home || !sc.home.alive || now > sc.nextHome) {
@@ -1033,6 +1050,8 @@ function stepReef(dt, now) {
       steerFish(f, tx + ox, ty + oy, dt, 42, now);
     }
   }
+}
+function stepClowns(dt) {
   for (const f of clowns) {
     const c = f.coral; if (c.vis < .3) { f.x = c.x; f.y = c.y; continue; }
     if (!f.sp) { f.x = c.x; f.y = c.y; }
@@ -1044,7 +1063,7 @@ function stepReef(dt, now) {
 
 /* ---------- ripples ---------- */
 let drops = [];
-function drop(x, y, r, a) { if (drops.length < 16) drops.push([x / W, 1 - y / H, r, a]); }
+function drop(x, y, r, a) { x -= OX; y -= OY; if (drops.length < 16 && x > -20 && y > -20 && x < SW + 20 && y < SH + 20) drops.push([x / SW, 1 - y / SH, r, a]); }
 let nextRain = 3;
 function stepWater(dt) {
   // the hand in the water
@@ -1055,7 +1074,7 @@ function stepWater(dt) {
   }
   cur.px = cur.x; cur.py = cur.y;
   // now and then something touches the surface
-  nextRain -= dt; if (nextRain < 0) { nextRain = 3 + Math.random() * 6; const [x, y] = openSpot(Math.random); drop(x, y, 1.8, -.45); }
+  nextRain -= dt; if (nextRain < 0) { nextRain = 3 + Math.random() * 6; const x = OX + 40 + Math.random() * (SW - 80), y = OY + 40 + Math.random() * (SH - 80); if (!inWindow(x, y, BAND)) drop(x, y, 1.8, -.45); }
 }
 
 /* ======================= render ======================= */
@@ -1072,7 +1091,8 @@ let nR = 0, allCorals = null;
 function gatherCorals() {
   if (!allCorals) { allCorals = floor.concat(sites).sort((a, b) => a.key - b.key); for (const c of floor) c.sc = 1; }
   if (allCorals.length * 8 > cArr.length) cArr = new Float32Array(allCorals.length * 8);
-  let o = 0, n = 0; for (const c of allCorals) { if (c.vis <= .003) continue; n++; cArr[o++] = c.x; cArr[o++] = c.y; cArr[o++] = c.size * c.sc; cArr[o++] = c.rot; cArr[o++] = c.cell; cArr[o++] = c.vis; cArr[o++] = c.ph; cArr[o++] = c.tint; }
+  const x0 = OX - 120, y0 = OY - 120, x1 = OX + SW + 120, y1 = OY + SH + 120;
+  let o = 0, n = 0; for (const c of allCorals) { if (c.vis <= .003 || c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue; n++; cArr[o++] = c.x; cArr[o++] = c.y; cArr[o++] = c.size * c.sc; cArr[o++] = c.rot; cArr[o++] = c.cell; cArr[o++] = c.vis; cArr[o++] = c.ph; cArr[o++] = c.tint; }
   nC = n;
   nR = 0;
   for (const w of reefWins) { const b = BAND * (w.sm ? .55 : 1); uR.set([w.x, w.y, w.x + w.w, w.y + w.h], nR * 4); uB.set([b, w.sh, w.life, 0], nR * 4); nR++; }
@@ -1109,10 +1129,12 @@ function fin(ax, ay, dx, dy, len, bw, tw, kind, seed) {
 }
 function buildFish() {
   nF = 0;
-  for (const sc of schools) for (const f of sc.fish) pushFish(f.sp, REEF_NS, f.L, REEF_U, reefW, f.ph, .06, sc.kind, 0, 2, 1);
+  const near = (x, y, m) => x > OX - m && x < OX + SW + m && y > OY - m && y < OY + SH + m;
+  for (const sc of schools) for (const f of sc.fish) if (near(f.x, f.y, 80)) pushFish(f.sp, REEF_NS, f.L, REEF_U, reefW, f.ph, .06, sc.kind, 0, 2, 1);
   for (const f of clowns) if (f.sp && f.coral.vis > .3) pushFish(f.sp, REEF_NS, f.L, REEF_U, reefW, f.ph, .06, 4, 0, 2, Math.min(1, (f.coral.vis - .3) * 2));
   nFr = nF;
   for (const k of koi) {
+    if (!near(k.x, k.y, 260)) continue;
     const sp = k.sp, L = k.L;
     // fins first, so the body lies over their roots
     for (const [ui, flen, base, flap, bw, tw] of [[3, .2, .95, .35, .025, .075], [7, .11, .6, .2, .015, .045]]) {
@@ -1131,7 +1153,7 @@ function bindTex(p, list) {
   list.forEach(([nm, t], i) => { if (p.u[nm] !== undefined) { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(p.u[nm], i); } });
 }
 function common(p) {
-  gl.uniform2f(p.u.uRes, W, H); if (p.u.uT) gl.uniform1f(p.u.uT, TG);
+  gl.uniform2f(p.u.uRes, SW, SH); worldU(p); if (p.u.uT) gl.uniform1f(p.u.uT, TG);
   bindTex(p, [['uNrm', nrmTex], ['uLight', litTex], ['uShadow', shTex], ['uSand', sandTex], ['uA', atlasA], ['uNm', atlasN], ['uRuf', rufTex], ['uRock', rockTex], ['uGrow', grow[gi]]]);
 }
 const full = () => { gl.bindVertexArray(emptyVao); gl.drawArrays(gl.TRIANGLES, 0, 3); };
@@ -1140,48 +1162,70 @@ function render() {
   gl.disable(gl.BLEND);
   // the reefs grow towards where the windows are now
   gl.bindFramebuffer(gl.FRAMEBUFFER, growF[1 - gi]); gl.viewport(0, 0, gw, gh); gl.useProgram(GROW);
-  bindTex(GROW, [['uPrev', grow[gi]]]); gl.uniform2f(GROW.u.uRes, W, H); gl.uniform1f(GROW.u.uDt, growReset ? 100 : DT); growReset = false;
+  bindTex(GROW, [['uPrev', grow[gi]]]); gl.uniform2f(GROW.u.uRes, SW, SH); worldU(GROW); gl.uniform1f(GROW.u.uDt, growReset ? 100 : DT); growReset = false;
   gl.uniform4fv(GROW.u.uR, uR); gl.uniform4fv(GROW.u.uB, uB); gl.uniform1i(GROW.u.uN, nR);
   gl.uniform4fv(GROW.u.uBm, uBm); gl.uniform1i(GROW.u.uNB, bommies.length); full(); gi = 1 - gi;
-  // ripples: one step per frame
-  gl.bindFramebuffer(gl.FRAMEBUFFER, ripF[1 - ri]); gl.viewport(0, 0, gw, gh); gl.useProgram(RIPPLE);
-  bindTex(RIPPLE, [['uPrev', rip[ri]]]); gl.uniform2f(RIPPLE.u.uTex, 1 / gw, 1 / gh);
+  // ripples: 60 steps a second whatever the frame rate (the wave travels and dies away at the same pace at 30 fps)
+  ripAcc = Math.min(ripAcc + DT, 4 / 60);
   const dd = DROPS; dd.fill(0); drops.forEach((d, i) => dd.set(d, i * 4));            // radius in ripple texels
-  gl.uniform4fv(RIPPLE.u.uDrops, dd); gl.uniform1i(RIPPLE.u.uN, drops.length); drops = [];
-  full(); ri = 1 - ri;
+  let ripStepped = false;
+  for (let k = 0; ripAcc >= 1 / 60 - 1e-4; k++) { ripStepped = true;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, ripF[1 - ri]); gl.viewport(0, 0, gw, gh); gl.useProgram(RIPPLE);
+    bindTex(RIPPLE, [['uPrev', rip[ri]]]); gl.uniform2f(RIPPLE.u.uTex, 1 / gw, 1 / gh);
+    gl.uniform4fv(RIPPLE.u.uDrops, dd); gl.uniform1i(RIPPLE.u.uN, k ? 0 : drops.length);   // new drops land once
+    full(); ri = 1 - ri; ripAcc -= 1 / 60;
+  }
+  if (ripStepped) drops = [];                                          // (a frame with no step keeps them for the next)
+  gl.viewport(0, 0, gw, gh);
   // surface slopes (ripples + swell)
   gl.bindFramebuffer(gl.FRAMEBUFFER, nrmF); gl.useProgram(NRM); bindTex(NRM, [['uRip', rip[ri]]]);
-  gl.uniform2f(NRM.u.uRes, W, H); gl.uniform2f(NRM.u.uRipTex, 1 / gw, 1 / gh); gl.uniform1f(NRM.u.uT, TG); gl.uniform1f(NRM.u.uRipK, .5); full();
+  gl.uniform2f(NRM.u.uRes, SW, SH); worldU(NRM); gl.uniform2f(NRM.u.uRipTex, 1 / gw, 1 / gh); gl.uniform1f(NRM.u.uT, TG); gl.uniform1f(NRM.u.uRipK, .5); full();
   // shadows (max-blended): corals in red, fish in green
   gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, null);
   gl.bindFramebuffer(gl.FRAMEBUFFER, shF); gl.viewport(0, 0, gw, gh); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
   gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.blendFunc(gl.ONE, gl.ONE);
-  gl.useProgram(CORAL); gl.uniform1i(CORAL.u.uMode, 1); gl.uniform2f(CORAL.u.uRes, W, H); gl.uniform2f(CORAL.u.uOff, 4, 6); if (CORAL.u.uT) gl.uniform1f(CORAL.u.uT, TG);
+  gl.useProgram(CORAL); gl.uniform1i(CORAL.u.uMode, 1); gl.uniform2f(CORAL.u.uRes, SW, SH); gl.uniform2f(CORAL.u.uOff, 4 - OX, 6 - OY); if (CORAL.u.uT) gl.uniform1f(CORAL.u.uT, TG);
   bindTex(CORAL, [['uNrm', nrmTex], ['uLight', null], ['uShadow', null], ['uSand', null], ['uA', atlasA], ['uNm', atlasN]]);
   gl.bindVertexArray(cVao); gl.bindBuffer(gl.ARRAY_BUFFER, cBuf); gl.bufferData(gl.ARRAY_BUFFER, cArr.subarray(0, nC * 8), gl.DYNAMIC_DRAW);
   if (nC) gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nC);
-  gl.useProgram(FISH); gl.uniform1i(FISH.u.uMode, 1); gl.uniform2f(FISH.u.uRes, W, H); gl.uniform2f(FISH.u.uOff, 13, 17);
+  gl.useProgram(FISH); gl.uniform1i(FISH.u.uMode, 1); gl.uniform2f(FISH.u.uRes, SW, SH); gl.uniform2f(FISH.u.uOff, 13 - OX, 17 - OY);
   bindTex(FISH, [['uNrm', nrmTex], ['uLight', null]]);
   gl.bindVertexArray(fVao); gl.bindBuffer(gl.ARRAY_BUFFER, fBuf); gl.bufferData(gl.ARRAY_BUFFER, fArr.subarray(0, nF * 10), gl.DYNAMIC_DRAW);
   if (nF) gl.drawArrays(gl.TRIANGLES, 0, nF);
   gl.blendEquation(gl.FUNC_ADD); gl.disable(gl.BLEND);
   // sunlight on the floor + soft shadows
   gl.bindFramebuffer(gl.FRAMEBUFFER, litF); gl.useProgram(LIGHT);
-  gl.uniform2f(LIGHT.u.uRes, W, H); gl.uniform1f(LIGHT.u.uT, TG); gl.uniform2f(LIGHT.u.uShTex, 1 / gw, 1 / gh);
+  gl.uniform2f(LIGHT.u.uRes, SW, SH); worldU(LIGHT); gl.uniform1f(LIGHT.u.uT, TG); gl.uniform2f(LIGHT.u.uShTex, 1 / gw, 1 / gh);
   bindTex(LIGHT, [['uNrm', nrmTex], ['uShadow', shTex]]); full();
   // the lagoon
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, dw, dh);
   gl.useProgram(BED); common(BED); full();
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  gl.useProgram(CORAL); common(CORAL); gl.uniform1i(CORAL.u.uMode, 0); gl.uniform2f(CORAL.u.uOff, 0, 0);
+  gl.useProgram(CORAL); common(CORAL); gl.uniform1i(CORAL.u.uMode, 0); gl.uniform2f(CORAL.u.uOff, -OX, -OY);
   gl.bindVertexArray(cVao); if (nC) gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nC);
-  gl.useProgram(FISH); common(FISH); gl.uniform1i(FISH.u.uMode, 0); gl.uniform2f(FISH.u.uOff, 0, 0);
+  gl.useProgram(FISH); common(FISH); gl.uniform1i(FISH.u.uMode, 0); gl.uniform2f(FISH.u.uOff, -OX, -OY);
   gl.bindVertexArray(fVao); if (nF) gl.drawArrays(gl.TRIANGLES, 0, nF);
   gl.useProgram(SURF); common(SURF); full();
 }
 
+/* ======================= one world: the leader's fish ======================= */
+let remote = null, sentAt = 0;
+function sendFish(now) {
+  if (!Span.world || now - sentAt < 30) return; sentAt = now;
+  Span.post('fish', { koi: koi.map(k => [k.x, k.y, k.ang, k.v, k.ph, k.fin, k.feed ? 1 : 0]), sc: schools.map(sc => sc.fish.map(f => [f.x, f.y, f.ang, f.ph])) });
+}
+Span.on('fish', m => { remote = m; });
+function applyFish(dt) {
+  const m = remote; if (!m) return;
+  m.koi.forEach(([x, y, ang, v, ph, fin, feed], i) => { const k = koi[i]; if (!k) return;
+    Object.assign(k, { x, y, ang, v, ph, fin, feed: !!feed }); k.sp[0] = x; k.sp[1] = y; follow(k.sp, KOI_NS, k.L * KOI_U);
+    k.wake -= dt; if (k.wake < 0 && v > 14) { k.wake = .22; drop(x + Math.cos(ang) * 3, y + Math.sin(ang) * 3, 2, -.035); } });
+  m.sc.forEach((list, j) => { const sc = schools[j]; if (!sc) return; list.forEach(([x, y, ang, ph], i) => { const f = sc.fish[i]; if (!f) return;
+    f.x = x; f.y = y; f.ang = ang; f.ph = ph; if (!f.sp) f.sp = makeSpine(REEF_NS, x, y, ang, f.L * REEF_U); f.sp[0] = x; f.sp[1] = y; follow(f.sp, REEF_NS, f.L * REEF_U); }); });
+}
+
 /* ======================= loop ======================= */
-let running = false, lastT = 0, DT = 1 / 60;
+let running = false, lastT = 0, DT = 1 / 60, ripAcc = 0;
 function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
 function loop(now) { try { loop0(now); } catch (e) { post('JSERR loop ' + e.message + ' ' + (e.stack || '').split('\n')[0]); running = false; setTimeout(wake, 1000); } }   // one bad frame mustn't freeze the reef
 function loop0(now) {
@@ -1189,26 +1233,32 @@ function loop0(now) {
   if (lastT && now - lastT < 15.5) { requestAnimationFrame(loop); return; }
   const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now;
   fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
-  T += dt; TG = (TG + dt) % 16384;   // wraps once every ~4.5 h (it was every 34 min, jumping caustics, swell and sway at once); float32 still ~0.002 rad at the top
+  T += dt; TG = Span.secs(16384);   // the world's clock (every display's water in step); wraps once every ~4.5 h, float32 still ~0.002 rad at the top
   const t0 = performance.now();
-  DT = dt; stepWins(dt); stepSites(dt); stepWater(dt); stepKoi(dt, now); stepReef(dt, now);
+  DT = dt; stepWins(dt); stepSites(dt); stepWater(dt);
+  if (Span.leader()) { stepKoi(dt, now); stepReef(dt, now); sendFish(now); } else { applyFish(dt); stepReef(dt, now); }   // one world: one page swims the fish
   gatherCorals(); buildFish(); render();
   fieldMs = fieldMs * .9 + (performance.now() - t0) * .1;
   requestAnimationFrame(loop);
 }
 
 /* ======================= boot + host protocol ======================= */
-function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; buildTargets(); }
+function build() { SW = innerWidth; SH = innerHeight; W = Span.uw; H = Span.uh; OX = Span.x; OY = Span.y; K = devicePixelRatio;
+  walls = Span.gaps(); buildTargets(); }
+let deskKey = '';
+function rebuildWorld() { remote = null; build(); makeFloor(); paintSand(); makeSites(); makeFish(); siteKey = ''; instant = true; for (const sc of schools) sc.home = null; if (lastWinMsg) handle(lastWinMsg); }
+let lastWinMsg = null;
 const handle = m => {
-  if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
-  if (m.t === 'cursor') { const x = m.x / K, y = m.y / K; if (!cur.on) { cur.px = x; cur.py = y; } if (Math.hypot(x - cur.ax, y - cur.ay) > 1.5) { cur.moveT = performance.now(); cur.ax = x; cur.ay = y; } cur.x = x; cur.y = y; cur.on = true; return; }
-  if (m.t === 'cursorOff') { cur.on = false; return; }
-  if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
-    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
+  if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
+  if (m.t === 'desk') { const k = JSON.stringify([m.x, m.y, m.uw, m.uh, m.fr]); if (k === deskKey) return; deskKey = k; Span.desk(m); rebuildWorld(); return; }
+  if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; curAt(x, y, -1); Span.post('cur', { x, y }); return; }
+  if (m.t === 'cursorOff') { if (curFrom === -1) { cur.on = false; Span.post('curoff', {}); } return; }
+  if (m.t === 'windows') { lastWinMsg = m; if (m.live) liveUntil = performance.now() + 250;
+    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
 };
 try { build(); paintAtlas(); makeFloor(); paintSand(); makeSites(); makeFish(); } catch (e) { post('JSERR boot ' + e.message); }
 wake();
-let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { build(); makeFloor(); paintSand(); makeSites(); siteKey = ''; instant = true; for (const sc of schools) sc.home = null; }, 200); });
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(rebuildWorld, 200); });
 window.__dbg = () => `run=${running} paused=${paused} fps=${fpsEMA | 0} ms=${fieldMs.toFixed(2)} wins=${wins.length} corals=${nC} koi=${koi.length} verts=${nF} float=${hasFloat}`;
 const host = window.chrome && window.chrome.webview;
 if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }

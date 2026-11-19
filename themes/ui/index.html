@@ -67,7 +67,36 @@
   .now .th span { position: absolute; left: 9px; bottom: 7px; color: #fff; font-weight: 600; font-size: 12.5px; z-index: 1; text-shadow: 0 1px 3px rgba(0,0,0,.4); }
   .now .th small { position: absolute; left: 9px; top: 7px; color: rgba(255,255,255,.92); font-size: 10px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; z-index: 1;
     background: rgba(0,0,0,.35); padding: 2px 6px; border-radius: 4px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  [hidden] { display: none !important; }                    /* the hidden attribute wins over any display rule */
   .now .bar { padding: 9px 10px 10px; }
+  /* several displays: one row each in the sidebar */
+  .nlist { padding: 6px 6px 0; display: grid; gap: 3px; }
+  .nlist small.hd { font-size: 10px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); padding: 3px 4px 2px; }
+  .nrow { display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 4px; border-radius: 8px; text-align: left; color: var(--text); width: 100%; font: inherit; }
+  .nrow:hover { background: var(--hover); }
+  .nrow .nth { width: 40px; height: 26px; border-radius: 5px; background: #666 center / cover; flex: none; box-shadow: 0 0 0 .5px rgba(0,0,0,.2); }
+  .nrow b { display: block; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nrow small { display: block; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nrow .tx { min-width: 0; }
+  /* where a theme goes: All displays, or one of them */
+  .tgt { display: grid; gap: 4px; margin-bottom: 12px; }
+  .tgt button { display: flex; align-items: center; gap: 9px; border: 1px solid var(--line); background: none; border-radius: 9px; padding: 6px 8px; text-align: left; color: var(--text); font: inherit; }
+  .tgt button:hover { background: var(--hover); }
+  .tgt button.on { border-color: var(--accent); background: var(--accent-soft); }
+  .tgt .nth { width: 34px; height: 22px; border-radius: 4px; background: #666 center / cover; flex: none; box-shadow: 0 0 0 .5px rgba(0,0,0,.2); }
+  .tgt .all { width: 34px; height: 22px; flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+  .tgt .all i { border-radius: 2px; background: var(--chip); }
+  .tgt b { font-size: 12px; font-weight: 600; display: block; line-height: 1.2; } .tgt small { font-size: 10.5px; color: var(--muted); display: block; }
+  .world-note { font-size: 11.5px; color: var(--accent); margin: -4px 0 12px; display: flex; gap: 6px; align-items: center; }
+  /* the Displays page: a theme picker per display */
+  .tpick { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; padding: 12px 14px 14px; }
+  .tpick button { border: 0; background: none; padding: 0; text-align: left; color: var(--text); font: inherit; }
+  .tpick .th { aspect-ratio: 16 / 10; border-radius: 8px; background: #888 center / cover; box-shadow: 0 0 0 .5px rgba(0,0,0,.15); transition: transform .15s; }
+  .tpick button:hover .th { transform: translateY(-1px); }
+  .tpick button.on .th { box-shadow: 0 0 0 2.5px var(--accent); }
+  .tpick span { display: block; font-size: 11.5px; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tpick .def .th { display: grid; place-items: center; background: var(--chip); color: var(--muted); font-size: 11px; text-align: center; padding: 6px; }
+  .disp .world { position: absolute; right: 6px; top: 6px; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 20px; background: rgba(0,0,0,.55); color: #fff; }
   .now .row { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--muted); }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(47,179,107,.18); flex: none; }
   .dot.off { background: var(--faint); box-shadow: none; }
@@ -228,6 +257,7 @@
   <div class="side-foot">
     <div class="now" id="nowCard" title="Show this theme">
       <div class="th" id="nowTh"><small>Now showing</small><span id="nowName">–</span></div>
+      <div class="nlist" id="nowList" hidden></div>
       <div class="bar">
         <div class="row"><span class="dot" id="liveDot"></span><span id="liveTxt">Live</span></div>
         <div class="meters" title="What the wallpaper costs (this window is counted apart, in Settings)"><div><b id="mCpu">–</b>CPU</div><div><b id="mGpu">–</b>GPU</div><div><b id="mMem">–</b>Memory</div></div>
@@ -263,7 +293,7 @@
         <p id="dDesc"></p>
         <div class="tags" id="dTags"></div>
         <div id="varBox"><label class="f" id="varLbl">Variant</label><div class="sw8" id="varSw"></div><select id="varSel"></select></div>
-        <div id="dispBox"><label class="f">Show on</label><select id="dispSel"></select></div>
+        <div id="dispBox"><label class="f">Show on</label><div class="tgt" id="tgt"></div><div class="world-note" id="worldNote" hidden></div></div>
         <div class="actions"><button class="btn primary big" id="applyBtn">Set as Wallpaper</button></div>
         <div class="status" id="dStatus"></div>
         <div class="kbd"><b>←</b> <b>→</b> browse · <b>Return</b> set as wallpaper</div>
@@ -276,7 +306,7 @@
   </section>
 
   <section id="displays">
-    <div class="head"><div><h1>Displays</h1><div class="sub">Every display can show its own theme. Celestial Atlas, Snowfall and Wind Map continue across screens.</div></div></div>
+    <div class="head"><div><h1>Displays</h1><div class="sub">Choose a theme for each display, or one for all of them. Themes that span displays draw one world across every display that shows them.</div></div></div>
     <div class="desk" id="desk"></div>
     <div class="group" id="dispPanel"></div>
   </section>
@@ -289,9 +319,13 @@
       <div class="rowx"><div class="tx"><b>Rest when idle</b><span>Pause after 3 minutes without input, and let go of memory 10 minutes after that.</span></div><div class="sw" data-k="restWhenIdle" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>Pause wallpaper</b><span>Freeze the scene where it is.</span></div><div class="sw" data-k="paused" role="switch" tabindex="0"></div></div>
     </div>
+    <div class="group-t" id="dispSetT">Displays</div>
+    <div class="group" id="dispSet">
+      <div class="rowx"><div class="tx"><b>One world across displays</b><span>Every theme except Lava Lamp and Wind Tunnel draws one continuous scene across the displays that show it: trains run, koi swim and boats sail from screen to screen, one garden, one castle, one museum wall. Off: each display draws its own.</span></div><div class="sw" data-k="spanWorlds" role="switch" tabindex="0"></div></div>
+    </div>
     <div class="group-t">Performance</div>
     <div class="group">
-      <div class="rowx"><div class="tx"><b>Frame rate</b><span>Lower is gentler on battery; most themes are calm at 20.</span></div><div class="seg" data-k="fps"><button data-v="0">Auto</button><button data-v="30">30</button><button data-v="20">20</button><button data-v="15">15</button></div></div>
+      <div class="rowx"><div class="tx"><b>Frame rate</b><span>Auto runs each theme at a calm pace (30 or less) and smooths up to 60 while you're working on the wallpaper. A fixed rate holds it there; lower is gentler on battery.</span></div><div class="seg" data-k="fps"><button data-v="0">Auto</button><button data-v="30">30</button><button data-v="20">20</button><button data-v="15">15</button></div></div>
       <div class="rowx"><div class="tx"><b>Space around windows</b><span>How far the scene keeps back from each window edge.</span></div><div class="seg" data-k="margin"><button data-v="60">60</button><button data-v="100">100</button><button data-v="140">140</button><button data-v="200">200</button></div></div>
     </div>
     <div class="group-t">The wallpaper, right now</div>
@@ -328,19 +362,19 @@
 'use strict';
 /* ======================= catalog ======================= */
 const THEMES = [
-  { id: 'railway', name: 'Model Railway', page: 'railway', cost: 1, f: ['low', 'play'], desc: 'A toy railway diorama. Your windows become towns; trains run between them, cars wait at the level crossings.', tags: ['Cursor stops trains'] },
-  { id: 'garden', name: 'Garden Plan', page: 'garden', cost: 1, f: ['low', 'play'], desc: 'A landscape architect’s planting plan. Windows become flowerbeds; gardeners tend the paths around them.', tags: ['Gardeners come to your cursor'] },
-  { id: 'estate', name: 'Marauders', page: 'estate', cost: 1, f: ['low', 'play'], desc: 'An enchanted ink plan of an old castle on stained parchment. Footprints wander, and follow your cursor.', tags: ['Footprints follow you'] },
-  { id: 'gallery', name: 'Gallery', page: 'gallery', cost: 0, f: ['low'], desc: 'A museum wall. Every window hangs in a real frame with a brass label; public-domain masterpieces fill the wall.', tags: ['Paintings from The Met'] },
-  { id: 'inkmap', name: 'Ink Map', page: 'inkmap', cost: 1, f: ['low', 'play'], desc: 'A pen-and-ink archipelago. Your windows are islands, and a little boat sails to your cursor.', tags: ['A boat follows you'] },
+  { id: 'railway', name: 'Model Railway', page: 'railway', cost: 1, f: ['low', 'play', 'span'], desc: 'A toy railway diorama. Your windows become towns; trains run between them, cars wait at the level crossings.', tags: ['Cursor stops trains'] },
+  { id: 'garden', name: 'Garden Plan', page: 'garden', cost: 1, f: ['low', 'play', 'span'], desc: 'A landscape architect’s planting plan. Windows become flowerbeds; gardeners tend the paths around them.', tags: ['Gardeners come to your cursor'] },
+  { id: 'estate', name: 'Marauders', page: 'estate', cost: 1, f: ['low', 'play', 'span'], desc: 'An enchanted ink plan of an old castle on stained parchment. Footprints wander, and follow your cursor.', tags: ['Footprints follow you'] },
+  { id: 'gallery', name: 'Gallery', page: 'gallery', cost: 0, f: ['low', 'span'], desc: 'A museum wall. Every window hangs in a real frame with a brass label; public-domain masterpieces fill the wall.', tags: ['Paintings from The Met'] },
+  { id: 'inkmap', name: 'Ink Map', page: 'inkmap', cost: 1, f: ['low', 'play', 'span'], desc: 'A pen-and-ink archipelago. Your windows are islands, and a little boat sails to your cursor.', tags: ['A boat follows you'] },
   { id: 'celestial', name: 'Celestial Atlas', page: 'celestial', cost: 0, f: ['low', 'live', 'span'], desc: 'The real sky overhead right now, drawn as an antique star chart. Windows are black holes.', tags: ['Tonight’s real sky'] },
   { id: 'snow', name: 'Snowfall', page: 'snow', cost: 2, f: ['low', 'span'], desc: 'A painted moonlit valley. Snow drifts down and settles on the tops of your windows.', tags: ['Painted panorama'] },
   { id: 'lava', name: 'Lava Lamp', page: 'lava', cost: 2, f: ['low'], desc: 'Soft-body wax with real buoyancy, heat and coalescence, in nine colourways.', tags: ['Real physics'] },
   { id: 'wind', name: 'Wind Map', page: 'wind', cost: 3, f: ['live', 'span'], desc: 'Live surface wind over any country, on hand-inked relief, following day and night.', tags: ['Live weather'] },
-  { id: 'reef', name: 'Koi Reef', page: 'reef', cost: 3, f: ['play'], desc: 'A sunlit lagoon that grows and recedes around your windows; koi and reef fish under rippling caustics.', tags: ['Fish follow you'] },
+  { id: 'reef', name: 'Koi Reef', page: 'reef', cost: 3, f: ['play', 'span'], desc: 'A sunlit lagoon that grows and recedes around your windows; koi and reef fish under rippling caustics.', tags: ['Fish follow you'] },
   { id: 'tunnel', name: 'Wind Tunnel', page: 'tunnel', cost: 4, f: ['play'], desc: 'A real fluid simulation: smoke streams past museum-scanned models, and around your windows and your cursor.', tags: ['GPU fluid simulation'] },
-  { id: 'meadow', name: 'Meadow', page: 'meadow', cost: 4, f: [], desc: 'A painted meadow under drifting clouds that part around your windows.', tags: ['Painted'] },
-  { id: 'beach', name: 'Beach', page: 'flat', cost: 3, f: [], desc: 'Painted sand and a turquoise sea that laps around your windows.', tags: ['Painted'] },
+  { id: 'meadow', name: 'Meadow', page: 'meadow', cost: 4, f: ['span'], desc: 'A painted meadow under drifting clouds that part around your windows.', tags: ['Painted'] },
+  { id: 'beach', name: 'Beach', page: 'flat', cost: 3, f: ['span'], desc: 'Painted sand and a turquoise sea that laps around your windows.', tags: ['Painted'] },
 ];
 const COST = [['No ongoing cost', '#2fb36b'], ['Very low cost', '#2fb36b'], ['Low cost', '#8cc63f'], ['Medium cost', '#e9a23b'], ['High cost', '#e5603b']];
 const SHORT = ['None', 'Very low', 'Low', 'Medium', 'High'];
@@ -357,7 +391,7 @@ let S = { current: 'railway', displays: [], settings: {}, variants: {}, seed: 1,
 /* ======================= navigation ======================= */
 function go(p) { $$('nav a').forEach(a => a.classList.toggle('on', a.dataset.p === p)); $$('section').forEach(s => s.classList.toggle('on', s.id === p));
   $('#main').scrollTop = 0;
-  if (p === 'themes') { loadPreview(); send({ t: 'desktop' }); } else unloadPreview(); if (p === 'displays') drawDesk();
+  if (p === 'themes') { loadPreview(); askDesk(); } else unloadPreview(); if (p === 'displays') drawDesk();
   if (p === 'whatsnew') { drawNotes(); setTimeout(markNotesSeen, 1200); } }
 $$('nav a').forEach(a => a.addEventListener('click', e => { e.preventDefault(); go(a.dataset.p); }));
 $$('[data-url]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); send({ t: 'open', url: a.dataset.url }); }));
@@ -378,7 +412,7 @@ const shown = () => THEMES.filter(t => filter === 'all' || t.f.includes(filter))
 function drawGrid() {
   const list = shown();
   $('#grid').innerHTML = list.length ? list.map(t => `<div class="card${t.id === sel ? ' sel' : ''}" data-id="${t.id}" tabindex="0" role="button" aria-label="${t.name}${inUse(t.id) ? ', in use' : ''}">
-      <div class="th" style="background-image:url(thumbs/${t.id}.jpg)">${inUse(t.id) ? '<span class="badge"><span class="dot"></span>In use</span>' : ''}</div>
+      <div class="th" style="background-image:url(thumbs/${t.id}.jpg)">${inUse(t.id) ? `<span class="badge"><span class="dot"></span>${S.displays.length > 1 ? (n => n === S.displays.length ? 'On all displays' : `On ${n} of ${S.displays.length}`)(S.displays.filter(d => d.theme === t.id).length) : 'In use'}</span>` : ''}</div>
       <div class="meta"><b>${t.name}</b><span><span class="c dot" style="width:6px;height:6px;box-shadow:none;background:${COST[t.cost][1]}"></span>${SHORT[t.cost]}</span></div></div>`).join('')
     : '<div class="empty">No themes match.</div>';
   $$('.card').forEach(c => { c.addEventListener('click', () => select(c.dataset.id)); c.addEventListener('dblclick', apply);
@@ -388,6 +422,16 @@ $$('.chip').forEach(c => c.addEventListener('click', () => { filter = c.dataset.
 function drawNow() {
   const t = byId[mainTheme()]; if (!t) return;
   $('#nowTh').style.backgroundImage = `url(thumbs/${t.id}.jpg)`; $('#nowName').textContent = t.name;
+  // several displays: a row each (theme, display), main first; a theme spanning displays says so
+  const multi = S.displays.length > 1; $('#nowTh').hidden = multi; $('#nowList').hidden = !multi;
+  if (!multi) return;
+  // one row per display; the displays of one spanning world share a row
+  const ds = S.displays.slice().sort((a, b) => (b.main - a.main) || a.x - b.x), rows = [];
+  for (const d of ds) { const w = d.world || [d.id]; if (w.length > 1 && rows.some(r => r.world.includes(d.id))) continue; rows.push({ d, world: w }); }
+  $('#nowList').innerHTML = '<small class="hd">Now showing</small>' + rows.map(({ d, world }) => { const th = byId[d.theme] || { name: d.theme }, n = world.length;
+    return `<button class="nrow" data-d="${d.id}" title="${esc(th.name)} on ${n > 1 ? world.map(id => esc(dname(S.displays.find(x => x.id === id) || d))).join(', ') : esc(dname(d))}"><span class="nth" style="background-image:url(thumbs/${esc(d.theme)}.jpg)"></span>
+      <span class="tx"><b>${esc(th.name)}</b><small>${n > 1 ? n + ' displays · one world' : esc(dname(d))}</small></span></button>`; }).join('');
+  $$('#nowList .nrow').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); const d = S.displays.find(x => String(x.id) === b.dataset.d); if (!d) return; go('themes'); setTarget(String(d.id)); select(d.theme); }));
 }
 function select(id, keepPreview) {
   if (!byId[id]) return;
@@ -396,11 +440,7 @@ function select(id, keepPreview) {
   $('#dName').textContent = t.name; $('#dDesc').textContent = t.desc;
   $('#dTags').innerHTML = `<span class="tag">${costTag(t.cost)}</span>` + t.tags.map(x => `<span class="tag">${esc(x)}</span>`).join('');
   drawVariants();
-  const multi = S.displays.length > 1;
-  $('#dispBox').style.display = multi ? '' : 'none';
-  if (multi) { const keep = $('#dispSel').value;
-    $('#dispSel').innerHTML = `<option value="all">All displays</option>` + S.displays.map(d => `<option value="${d.id}">${esc(dname(d))}${d.main ? ' (main)' : ''}</option>`).join('');
-    if ([...$('#dispSel').options].some(o => o.value === keep)) $('#dispSel').value = keep; }
+  drawTargets();
   updateStatus();
   if (!keepPreview) loadPreview();
 }
@@ -420,13 +460,30 @@ function drawVariants() {
 }
 function setVariant(v) { S.variants[sel] = v; send({ t: 'variant', theme: sel, id: v }); drawVariants(); loadPreview(); }
 $('#varSel').addEventListener('change', () => setVariant($('#varSel').value));
-function where() { return S.displays.length > 1 ? $('#dispSel').value : 'all'; }
+/* where Set as Wallpaper sends the theme: every display, or one; the preview shows that display */
+let target = 'all';
+function where() { return S.displays.length > 1 && S.displays.some(d => String(d.id) === target) ? target : 'all'; }
+const targetDisp = () => S.displays.find(d => String(d.id) === where()) || mainDisp();
+function setTarget(t) { if (t === target) return; target = t; drawTargets(); updateStatus(); askDesk(); }
+function askDesk() { const d = targetDisp(); send({ t: 'desktop', display: d ? d.id : undefined }); }
+function drawTargets() {
+  const multi = S.displays.length > 1; $('#dispBox').style.display = multi ? '' : 'none'; if (!multi) return;
+  const w = where(), ds = S.displays.slice().sort((a, b) => (b.main - a.main) || a.x - b.x);
+  $('#tgt').innerHTML = `<button data-t="all" class="${w === 'all' ? 'on' : ''}"><span class="all">${ds.map(() => '<i></i>').join('')}</span><span><b>All displays</b><small>${ds.length} displays</small></span></button>` +
+    ds.map(d => `<button data-t="${d.id}" class="${w === String(d.id) ? 'on' : ''}"><span class="nth" style="background-image:url(thumbs/${esc(d.theme)}.jpg)"></span><span><b>${esc(dname(d))}${d.main ? ' · main' : ''}</b><small>Now: ${esc((byId[d.theme] || { name: d.theme }).name)}</small></span></button>`).join('');
+  $$('#tgt button').forEach(b => b.addEventListener('click', () => setTarget(b.dataset.t)));
+  // a theme that spans: say how its world will look
+  const spans = (S.spanThemes || []).includes(sel), n = w === 'all' ? ds.length : ds.filter(d => d.theme === sel || String(d.id) === w).length;
+  const note = $('#worldNote'); note.hidden = !(spans && S.settings.spanWorlds !== false && n > 1);
+  note.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="4" width="6" height="8" rx="1.2"/><rect x="9" y="4" width="6" height="8" rx="1.2"/><path d="M5 8h6"/></svg>One world across ${n} displays`;
+}
 function updateStatus() {
   const on = S.displays.filter(d => d.theme === sel), w = where();
   const all = S.displays.length && on.length === S.displays.length;
   $('#dStatus').innerHTML = on.length ? `<span class="dot"></span>${all ? (S.displays.length > 1 ? 'On all your displays' : 'This is your wallpaper') : 'On ' + on.map(d => esc(dname(d))).join(', ')}` : '';
   const done = w === 'all' ? all : on.some(d => String(d.id) === w);
   const b = $('#applyBtn'); b.classList.toggle('done', !!done);
+  drawTargets();
   b.innerHTML = done ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>In use' : 'Set as Wallpaper';
 }
 function apply() {
@@ -436,7 +493,6 @@ function apply() {
   toast(`${byId[sel].name} is now your wallpaper${w === 'all' ? '' : ' on ' + dname(S.displays.find(d => String(d.id) === w) || { name: 'that display' })}`, sel);
 }
 $('#applyBtn').addEventListener('click', apply);
-$('#dispSel').addEventListener('change', updateStatus);
 let toastT = 0;
 function toast(txt, id) { $('#toastTxt').textContent = txt; $('#toastImg').src = `thumbs/${id}.jpg`; $('#toast').classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => $('#toast').classList.remove('on'), 2600); }
 // keyboard: arrows browse the gallery, Return applies
@@ -466,7 +522,7 @@ $('#resetBtn').addEventListener('click', () => setMode(mode));
 function sizeScreen() {
   stageEl.style.aspectRatio = `${VW} / ${VH}`;
   Object.assign(screenEl.style, { width: VW + 'px', height: VH + 'px' }); Object.assign(pv.style, { width: VW + 'px', height: VH + 'px' });
-  $('#notch').style.display = VW / VH < 1.58 ? '' : 'none';          // a laptop's screen (16:10.4): it has a notch
+  $('#notch').style.display = (DESK && DESK.notch !== undefined ? DESK.notch : VW / VH < 1.58) ? '' : 'none';   // a display with a notch (the host knows)
   fit();
 }
 function fit() { const k = stageEl.clientWidth / VW; screenEl.style.transform = `scale(${k})`; screenEl._k = k; }
@@ -496,6 +552,13 @@ function loadPreview() {
 }
 function unloadPreview() { clearTimeout(pvTimer); clearTimeout(pvShowT); pvGen++; pv.src = 'about:blank'; pvKey = null; pvReady = false; }
 const toFrame = s => pv.contentWindow && pv.contentWindow.postMessage({ __tw: s }, '*');
+// the preview is a live theme: while this window sits in the background (another app in front) it rests, a few seconds
+// after you leave; hidden or minimised it rests at once; it carries on the moment you're back
+let pvRest = false, pvRestT = 0;
+const pvResting = on => { if (on === pvRest) return; pvRest = on; toFrame(JSON.stringify({ t: 'pause', v: on })); };
+addEventListener('blur', () => { clearTimeout(pvRestT); pvRestT = setTimeout(() => pvResting(true), 8000); });
+addEventListener('focus', () => { clearTimeout(pvRestT); pvResting(false); });
+document.addEventListener('visibilitychange', () => { clearTimeout(pvRestT); pvResting(document.hidden || !document.hasFocus()); });
 function sendWins(live) {
   if (!pvReady) return; const k = pdpr(), m = MARGIN(), R = r => r.map(v => Math.round(v * k));
   toFrame(JSON.stringify({ t: 'windows', live, r: wins.map(w => R([w.x, w.y, w.x + w.w, w.y + w.h])), n: wins.map(w => w.name || ''), sm: wins.map(w => w.sm ? 1 : 0) }));
@@ -508,6 +571,7 @@ addEventListener('message', e => {
   toFrame(JSON.stringify({ t: 'desk', x: 0, y: 0, w: VW, h: VH, uw: VW, uh: VH, i: 0, n: 1, mx: VW / 2, my: VH / 2, mw: VW, mh: VH }));
   toFrame(JSON.stringify({ t: 'me', seed: S.seed }));
   sendWins(false);
+  if (pvRest) toFrame(JSON.stringify({ t: 'pause', v: true }));       // a new preview while the window rests: it rests too
   const gen = pvGen; clearTimeout(pvShowT);
   pvShowT = setTimeout(() => { if (gen !== pvGen) return; pv.classList.add('shown'); $('#loading').style.display = 'none'; }, 700);
 });
@@ -540,12 +604,15 @@ function drawDesk() {
   const bw = box.clientWidth - 60, bh = box.clientHeight - 60, k = Math.min(bw / (x1 - x0), bh / (y1 - y0)), ox = (box.clientWidth - (x1 - x0) * k) / 2, oy = (box.clientHeight - (y1 - y0) * k) / 2;
   if (selDisp == null || !ds.some(d => d.id === selDisp)) selDisp = (mainDisp() || ds[0]).id;
   box.innerHTML = ds.map(d => `<div class="disp${d.id === selDisp ? ' sel' : ''}" data-id="${d.id}" style="left:${ox + (d.x - x0) * k + 3}px;top:${oy + (d.y - y0) * k + 3}px;width:${d.w * k - 6}px;height:${d.h * k - 6}px;background-image:url(thumbs/${esc(d.theme)}.jpg)">
-    ${d.main ? '<div class="menu-notch"></div>' : ''}<div class="lbl" title="${esc(dname(d))} · ${byId[d.theme] ? byId[d.theme].name : esc(d.theme)}"><b>${esc(dname(d))}</b> · ${byId[d.theme] ? byId[d.theme].name : esc(d.theme)}</div></div>`).join('');
+    ${d.main ? '<div class="menu-notch"></div>' : ''}${(d.world || []).length > 1 ? `<span class="world">One world · ${d.world.length}</span>` : ''}<div class="lbl" title="${esc(dname(d))} · ${byId[d.theme] ? byId[d.theme].name : esc(d.theme)}"><b>${esc(dname(d))}</b> · ${byId[d.theme] ? byId[d.theme].name : esc(d.theme)}</div></div>`).join('');
   $$('.disp').forEach(el => el.addEventListener('click', () => { selDisp = +el.dataset.id; drawDesk(); }));
   const d = ds.find(x => x.id === selDisp);
-  $('#dispPanel').innerHTML = `<div class="rowx"><div class="tx"><b>${esc(dname(d))}${d.main ? ' · main' : ''}</b><span>${d.own ? 'Has its own theme' : (d.main ? 'Shows the default theme' : 'Shows the main theme')} · ${Math.round(d.w)}×${Math.round(d.h)} pt</span></div>
-    <select id="dTheme" style="width:230px;margin:0"><option value="">${d.main ? 'Default' : 'Same as main'} (${byId[S.current] ? byId[S.current].name : esc(S.current)})</option>${THEMES.map(t => `<option value="${t.id}"${d.own && d.theme === t.id ? ' selected' : ''}>${t.name}</option>`).join('')}</select></div>`;
-  $('#dTheme').addEventListener('change', e => { send({ t: 'applyDisplay', display: d.id, theme: e.target.value || null }); toast(`${dname(d)}: ${e.target.value ? byId[e.target.value].name : (d.main ? 'the default theme' : 'same as main')}`, e.target.value || S.current); });
+  const others = (d.world || []).filter(id => id !== d.id).map(id => S.displays.find(x => x.id === id)).filter(Boolean);
+  const curName = byId[S.current] ? byId[S.current].name : esc(S.current);
+  $('#dispPanel').innerHTML = `<div class="rowx"><div class="tx"><b>${esc(dname(d))}${d.main ? ' · main' : ''}</b><span>${d.own ? 'Has its own theme' : (d.main ? 'Shows the default theme' : 'Shows the main theme')} · ${Math.round(d.w)}×${Math.round(d.h)} pt${others.length ? ' · one world with ' + others.map(x => esc(dname(x))).join(', ') : ''}</span></div></div>
+    <div class="tpick"><button data-t="" class="def${d.own ? '' : ' on'}"><div class="th">${d.main ? 'Default' : 'Same as main'}<br>${curName}</div><span>${d.main ? 'Default' : 'Same as main'}</span></button>${THEMES.map(t => `<button data-t="${t.id}" class="${d.own && d.theme === t.id ? 'on' : ''}"><div class="th" style="background-image:url(thumbs/${t.id}.jpg)"></div><span>${t.name}</span></button>`).join('')}</div>`;
+  $$('#dispPanel .tpick button').forEach(b => b.addEventListener('click', () => { const v = b.dataset.t || null;
+    send({ t: 'applyDisplay', display: d.id, theme: v }); toast(`${dname(d)}: ${v ? byId[v].name : (d.main ? 'the default theme' : 'same as main')}`, v || S.current); }));
 }
 
 /* ======================= settings ======================= */
@@ -619,7 +686,7 @@ window.tw = { receive(m) {
   } else if (m.t === 'desktop') {
     const firstDesk = !DESK; DESK = m.d;
     if (firstDesk && !DESK.windows.some(w => !w.sm && !w.widget)) { mode = 'sample'; $$('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.m === 'sample')); }   // nothing of yours to drag: start with the sample
-    if (firstDesk || !drag) { wins = layoutFor(mode); sizeScreen(); drawWins(); if (firstDesk) loadPreview(); else sendWins(false); }
+    if (firstDesk || !drag) { wins = layoutFor(mode); sizeScreen(); drawWins(); loadPreview(); sendWins(false); }   // another display: another shape
   } else if (m.t === 'notes') { NOTES = m.md || ''; drawNotes();
   } else if (m.t === 'usage') {
     const pct = v => v.toFixed(v < 10 ? 1 : 0) + '%';

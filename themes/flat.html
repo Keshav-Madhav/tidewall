@@ -102,6 +102,7 @@
   .hint { margin-top: 10px; opacity: .5; font-size: 11px; line-height: 1.6; }
   #nogl { position: fixed; inset: 0; display: none; place-items: center; color: #fff; font-size: 16px; }
 </style>
+<script src="span.js"></script>
 <script src="companion.js"></script>
 </head>
 <body>
@@ -293,6 +294,11 @@ function makeNoiseImage() {
    陆地场（CPU）：s = 到海岸的有符号距离（<0 陆地）
    ====================================================================== */
 let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
+// one world across displays (span.js): W×H is the whole world, OX/OY where this display sits in it
+let OX = 0, OY = 0, GAPS = [];
+const gapD = (x, y) => { let s = 1e9; for (const g of GAPS) { const qx = Math.abs(x - g.x - g.w / 2) - g.w / 2, qy = Math.abs(y - g.y - g.h / 2) - g.h / 2;
+  s = Math.min(s, Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0)); } return s; };
+window.__visible = (x, y, m = 0) => gapD(x, y) > m;                     // palms and the like: never in a gap
 function buildNoise() {
   const N = Gw * Gh;
   NZ = { wx: new Float32Array(N), wy: new Float32Array(N) };
@@ -350,7 +356,7 @@ void main() {
 const FS = `#version 300 es
 precision highp float;
 uniform sampler2D uNoise, uFA, uFB, uSand;   // Tidewall: uSand = painted sand (generated for this theme), tiling
-uniform vec2 uRes, uGrid;
+uniform vec2 uRes, uGrid, uOff;
 uniform float uScale, uSeed, uStep, uMix, uTime, uSpeed, uRunup, uShallow, uShoal, uGrain, uDebug, uWave, uSigma, uSpacing, uWaves;
 uniform float uKayN;
 uniform vec4 uKay[4];          // x, y, 朝向, 划桨相位
@@ -438,7 +444,7 @@ vec3 gullSD(vec2 q, float span) {
 }
 
 void main() {
-  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale;
+  vec2 p = vec2(gl_FragCoord.x, uRes.y * uScale - gl_FragCoord.y) / uScale + uOff;
   float t = uTime;
   // 喷绘颗粒：约 1.3px 的随机点（静止，像印刷纸面上的颗粒）
   vec2 gp = floor(p * (0.78 * max(uScale, 1.0)));   // 按屏幕的实际像素取颗粒（高分屏上不会变成一块块的小方块）
@@ -787,7 +793,7 @@ function refresh() {
    ====================================================================== */
 const kayaks = [];
 let curMix = 1;
-const curS = (x, y) => FB ? sampleArr(FA.s, x, y) * (1 - curMix) + sampleArr(FB.s, x, y) * curMix : 999;
+const curS = (x, y) => FB ? Math.min(sampleArr(FA.s, x, y) * (1 - curMix) + sampleArr(FB.s, x, y) * curMix, gapD(x, y)) : 999;
 function spawnKayak() {
   for (let t = 0; t < 400; t++) {
     const x = 60 + Math.random() * (W - 120), y = 60 + Math.random() * (H - TASKBAR - 120);
@@ -797,7 +803,7 @@ function spawnKayak() {
   return null;
 }
 function syncKayaks() {
-  const want = Math.max(0, Math.min(4, Math.round(P.kayaks)));
+  const want = Math.max(0, Math.min(4, Math.round(P.kayaks * Span.n)));
   while (kayaks.length > want) kayaks.pop();
   while (kayaks.length < want) { const k = spawnKayak(); if (!k) break; kayaks.push(k); }
 }
@@ -889,7 +895,7 @@ function spawnBird(fromEdge) {
   return { x, y, h, v: 36 + Math.random() * 16, mode: 0, modeT: 2 + Math.random() * 4, ph: 0, flap: false, flapT: Math.random() * 3, wander: Math.random() * 100 };
 }
 function syncBirds(fromEdge = true) {
-  const want = Math.max(0, Math.min(8, Math.round(P.birds)));
+  const want = Math.max(0, Math.min(8, Math.round(P.birds * Span.n)));
   while (birds.length > want) birds.pop();
   while (birds.length < want) birds.push(spawnBird(fromEdge));
 }
@@ -1038,13 +1044,13 @@ function applyLayout(kind) {
    尺寸 / 主循环
    ====================================================================== */
 function resize() {
-  W = innerWidth; H = innerHeight;
+  W = Span.uw; H = Span.uh; OX = Span.x; OY = Span.y; GAPS = Span.gaps();
   // 预览模式：页面按整块桌面的尺寸排版、再整体缩小显示，所以画布只需要很低的分辨率
   const scale = PREVIEW ? 0.45 : Math.min(devicePixelRatio || 1, P.quality);
   // 按画布实际占的大小算（带小数：2560 宽的屏幕 150% 缩放是 1706.67，innerWidth 取整成 1707），
   // 不然画布比屏幕多出一个像素，浏览器会把整幅画缩放一下贴上去，又发糊
   const box = cv.getBoundingClientRect();
-  cv.width = Math.round((box.width || W) * scale); cv.height = Math.round((box.height || H) * scale); cv._scale = scale;
+  cv.width = Math.round((box.width || innerWidth) * scale); cv.height = Math.round((box.height || innerHeight) * scale); cv._scale = scale;
   Gw = Math.ceil(W / STEP) + 2; Gh = Math.ceil(H / STEP) + 2;
   buildNoise();
   allocField();
@@ -1065,10 +1071,20 @@ function frame(now) {
   lastT = now;
   const e = Math.min((now - morphT0) / morphDur, 1);
   curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
-  stepKayaks(dt, now);
-  stepBirds(dt);
+  if (Span.leader()) { stepKayaks(dt, now); stepBirds(dt); sendSea(now); } else applySea();
   draw(now);
   if (++frameN % 10 === 0) updateStats();
+}
+let remoteSea = null, seaSent = 0;
+Span.on('sea', m => { remoteSea = m; });
+function sendSea(now) {
+  if (!Span.world || now - seaSent < 30) return; seaSent = now;
+  Span.post('sea', { k: kayaks.map(k => [k.x, k.y, k.h, k.ph]), b: birds.map(b => [b.x, b.y, b.h, b.ph]) });
+}
+function applySea() {
+  const m = remoteSea; if (!m) return;
+  kayaks.length = m.k.length; m.k.forEach((a, i) => { kayaks[i] = Object.assign(kayaks[i] || { v: 8, wander: 0, fade: 1 }, { x: a[0], y: a[1], h: a[2], ph: a[3] }); });
+  birds.length = m.b.length; m.b.forEach((a, i) => { birds[i] = Object.assign(birds[i] || { v: 40, mode: 0, modeT: 3, flap: false, flapT: 2, wander: 0 }, { x: a[0], y: a[1], h: a[2], ph: a[3] }); });
 }
 function draw(now) {
   ripBuf.fill(0);
@@ -1095,12 +1111,12 @@ function configureBeachPass(now, pass) {
   gl.uniform1i(U.uNoise, 0); gl.uniform1i(U.uFA, 1); gl.uniform1i(U.uFB, 2);
   gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, sandTex); gl.uniform1i(U.uSand, 4);
   gl.uniform2f(U.uRes, cv.width / cv._scale, cv.height / cv._scale);   // 和画布的实际像素对齐（innerWidth、innerHeight 是取整过的）
-  gl.uniform2f(U.uGrid, Gw, Gh);
+  gl.uniform2f(U.uGrid, Gw, Gh); if (U.uOff) gl.uniform2f(U.uOff, OX, OY);
   gl.uniform1f(U.uScale, cv._scale);
   gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
   gl.uniform1f(U.uStep, STEP);
   gl.uniform1f(U.uMix, curMix);
-  gl.uniform1f(U.uTime, (now - T0) / 1000);
+  gl.uniform1f(U.uTime, Span.secs(16384));                            // the world's clock: every display's waves in step
   gl.uniform1f(U.uSpeed, P.speed); gl.uniform1f(U.uRunup, P.runup);
   gl.uniform1f(U.uShallow, P.shallow); gl.uniform1f(U.uShoal, P.shoal); gl.uniform1f(U.uGrain, P.grain);
   gl.uniform1f(U.uWave, P.wave); gl.uniform1f(U.uSigma, P.sigma);
@@ -1263,19 +1279,26 @@ function startHostedMode() {
   icons = [];
   commit(true);                                   // 先是一片海
   syncBirds(false);
-  let first = true;
+  let first = true, deskKey = '', lastIconsMsg = null;
   const settlePaused = () => {
     if (!paused || !iconsSeen) return;
     curMix = 1; morphT0 = -1e9;                  // 暂停只冻结动画，首次地形和图标布局仍要完成
     draw(performance.now());
   };
   const handle = m => {
-    if (m.t === 'pause') { paused = PREVIEW ? false : m.v; settlePaused(); if (!paused && !looping) { looping = true; requestAnimationFrame(frame); } return; }
+    if (m.t === 'pause') { paused = PREVIEW ? false : m.v; Span.paused(!!paused); settlePaused(); if (!paused && !looping) { looping = true; requestAnimationFrame(frame); } return; }
     if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'desk') { const dk = [m.x, m.y, m.w, m.h, m.uw, m.uh, JSON.stringify(m.fr || [])].join('|'); if (dk === deskKey) return; deskKey = dk;
+      Span.desk(m);
+      if (Span.world && seed !== 4242) { seed = 4242; if (noiseTex) gl.deleteTexture(noiseTex); buildNoiseTex(); }   // one sea: the same noise on every display
+      resize(); kayaks.length = 0; birds.length = 0; remoteSea = null; syncBirds(false);
+      if (lastIconsMsg) { first = true; handle(lastIconsMsg); } else commit(true);
+      return; }
     if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
     if (m.t !== 'icons') return;
+    lastIconsMsg = m;
     const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
-    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k })) : [];
     if (PREVIEW) drawGhosts();
     iconsSeen = true;
     commit(first);                                // 第一次：陆地从海里"长"出来；之后：岸线平滑移动

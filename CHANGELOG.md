@@ -1,5 +1,51 @@
 # Changelog
 
+## [1.1.0]
+
+### One world across your displays
+- **Every theme but Lava Lamp and Wind Tunnel now spans displays.** Show one on several displays and it becomes one
+  world: one railway network whose trains run from screen to screen, one lagoon whose koi swim between your monitors,
+  one archipelago your boat sails across, one garden whose walks join beds on different screens, one sea of sandy
+  islands with kayaks crossing it, one meadow under one drifting sky, one enchanted castle plan, one long museum wall
+  with its floor along your lowest displays. The gaps between displays are the edge of the world (nothing is laid
+  where you can't see it), and frames and borders run along the outline you can actually see.
+- Animated water, waves and clouds keep to one clock across displays, so they meet seamlessly at the edges.
+- Ink Map's boat now finds its way round islands to reach you (and when it truly can't, it slips out of sight and
+  comes back near your cursor), and its islands now carry their names.
+- Celestial Atlas, Snowfall and Wind Map span only the displays that show them (they used to treat the whole desk as
+  their canvas, so Celestial on one of three displays drew a third of the sky).
+- One page runs what moves and the others follow; if its display is covered or paused, another takes over without a
+  jump. Settings ▸ Displays ▸ **One world across displays** turns it off (each display draws its own).
+
+### The app, with several displays
+- The sidebar shows **what each display is showing** (a spanning world is one row).
+- Themes ▸ **Show on**: All displays, or one of them, with what each is showing now; the live preview follows the
+  display you pick (its shape, its windows, its notch).
+- Displays: a **picker of every theme** for the selected display, and worlds marked on the map.
+- The menu bar has a Theme menu for **each display** when you have several, plus All Displays.
+
+### Lighter
+- **Calmer frame pacing.** Every theme now draws at a calm 30 frames a second (slow scenes less: Ink Map's ships and
+  Garden Plan's gardeners 20, Model Railway and Lava Lamp 24, Meadow's clouds 15) and at 60 only while you're working
+  on the wallpaper itself: the pointer over it, a window being dragged. Before, they drew at the display's refresh,
+  up to 120 times a second on a ProMotion display. A frame rate picked in Settings still overrides it.
+- **The soft scenes draw a little under retina** (Koi Reef, Beach, Meadow, Snowfall, Wind Map, Wind Tunnel at 1.5×,
+  Lava Lamp at 1.25×): they look the same, with roughly half the pixels to draw and noticeably less memory. Ink,
+  lettering and sprites stay fully sharp.
+- Meadow rebuilds its clouds 15 times a second instead of every frame, and skips frames where nothing moved.
+- Watching your windows costs less: a lighter read of the window list, a look four times a second when nothing is
+  moving (the moment you touch the mouse it's back to every frame), and the pointer sent at 60 Hz.
+- Koi Reef's ripples spread at the same pace at any frame rate.
+
+### Steadier
+- Tidewall now always keeps a log at `~/Library/Logs/Tidewall.log`, and if it ever crashes it writes down how
+  (the error and where it happened), so a problem can be found and fixed.
+- Ink Map's island names were never placed (a label-size bug); they are now.
+- Gallery hangs the day's new selection at midnight (it used to wait until a window moved).
+- Wind Map's clock keeps the right hour across a daylight-saving change.
+- A few rare ways to crash closed off: a menu item that rebuilt its own menu mid-click, a display reconfiguring, the
+  usage meter on a system call that fails; and pages share one web process again after you change theme.
+
 ## [1.0.4]
 
 - **No more blank screens after sleep.** When displays sleep and wake (external monitors reconnecting after you

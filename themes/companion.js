@@ -98,11 +98,19 @@ if (send0) {
 
 /* ---------------- cursor companions ---------------- */
 let cursor = null, started = false;
-function companionCursor(m) {
-  const k = devicePixelRatio || 1, x = m.x / k, y = m.y / k, moved = !cursor || Math.hypot(x - cursor.x, y - cursor.y) > 2;
+// where this display sits in a world of several (span.js); the cursor is kept in world coordinates
+const offX = () => typeof OX !== 'undefined' ? OX : 0, offY = () => typeof OY !== 'undefined' ? OY : 0;
+const W0 = () => window.Span && Span.world;
+function cursorAt(x, y) {
+  const moved = !cursor || Math.hypot(x - cursor.x, y - cursor.y) > 2;
   cursor = { x, y, t: moved ? performance.now() : cursor.t };
   if (!started && document.readyState !== 'loading') start();
 }
+function companionCursor(m) {
+  const k = devicePixelRatio || 1, x = m.x / k + offX(), y = m.y / k + offY();
+  cursorAt(x, y); if (W0()) Span.post('ccur', { x, y });
+}
+if (window.Span) Span.on('ccur', m => cursorAt(m.x, m.y));
 function sprite(w, h) {
   const c = document.createElement('canvas'), k = devicePixelRatio || 1;
   c.width = Math.round(w * k); c.height = Math.round(h * k);
@@ -138,7 +146,14 @@ function kayak() {
   const tick = now => {
     const dt = last ? Math.min((now - last) / 1000, .05) : 1 / 60; last = now;
     if (typeof FB === 'undefined' || !FB || (typeof paused !== 'undefined' && paused)) { last = 0; return later(); }
-    if (!B.on) { [B.x, B.y] = toWater(W * .5, H * .75, 120); B.on = true; S.c.style.opacity = 1; }
+    if (W0() && !Span.leader()) {                                       // another display paddles it: show where it is
+      const r = remoteKayak;
+      if (r && r !== shownK) { shownK = r; quietK = 0; B.x = r[0]; B.y = r[1]; B.a = r[2]; B.ph = r[3]; const sp = r[4]; B.on = true; S.c.style.opacity = 1;
+        draw(Math.sin(B.ph * 2.2) * .55 * Math.min(1, sp / 40 + .15)); place(sp, now); }
+      else if (++quietK > 30) { wake.draw(now); return later(); }        // nothing new for a while: look in now and then
+      return requestAnimationFrame(tick);
+    }
+    if (!B.on) { const [mx, my, , mh] = W0() ? Span.main : [W * .5, H * .5, 0, H * .5]; [B.x, B.y] = toWater(mx, my + mh * .25, 120); B.on = true; S.c.style.opacity = 1; }
     const [tx, ty] = cursor ? toWater(cursor.x, cursor.y, 60) : [B.x, B.y];
     const dx = tx - B.x, dy = ty - B.y, d = Math.hypot(dx, dy), maxV = 140;
     const want = d < 10 ? 0 : Math.min(maxV, (d - 10) * 1.6);
@@ -149,14 +164,18 @@ function kayak() {
     B.vx += ex; B.vy += ey; B.x += B.vx * dt; B.y += B.vy * dt;
     const sp = Math.hypot(B.vx, B.vy);
     if (sp > 6) { let da = Math.atan2(B.vy, B.vx) - B.a; da = Math.atan2(Math.sin(da), Math.cos(da)); B.a += da * Math.min(1, dt * 5); }
-    if (sp < .3 && d < 12) { if (rest++ > 2) return later(); } else rest = 0;   // at rest: last frame already shows it
+    if (sp < .3 && d < 12) { if (rest++ > 2) { if (W0()) Span.post('ckay', { b: [B.x, B.y, B.a, B.ph, 0] }); return later(); } } else rest = 0;   // at rest: last frame already shows it (and a display that just came back learns where it is)
     B.ph += dt * (2 + sp / 30);
     draw(Math.sin(B.ph * 2.2) * .55 * Math.min(1, sp / 40 + .15));
-    S.c.style.transform = `translate3d(${(B.x - 28).toFixed(1)}px,${(B.y - 15).toFixed(1)}px,0) rotate(${B.a.toFixed(3)}rad)`;
-    if (sp > 22) wake.feed(B.x - Math.cos(B.a) * 20, B.y - Math.sin(B.a) * 20, B.a, now); else wake.reset();
-    wake.draw(now);
+    place(sp, now);
+    if (W0() && now - sentK > 30) { sentK = now; Span.post('ckay', { b: [B.x, B.y, B.a, B.ph, sp] }); }
     requestAnimationFrame(tick);
   };
+  let remoteKayak = null, sentK = 0, shownK = null, quietK = 0; if (window.Span) Span.on('ckay', m => { remoteKayak = m.b; });
+  const place = (sp, now) => { const x = B.x - offX(), y = B.y - offY();
+    S.c.style.transform = `translate3d(${(x - 28).toFixed(1)}px,${(y - 15).toFixed(1)}px,0) rotate(${B.a.toFixed(3)}rad)`;
+    if (sp > 22) wake.feed(x - Math.cos(B.a) * 20, y - Math.sin(B.a) * 20, B.a, now); else wake.reset();
+    wake.draw(now); };
   requestAnimationFrame(tick);
 }
 
@@ -164,7 +183,8 @@ function kayak() {
 function butterfly() {
   const S = sprite(34, 30), sh = sprite(34, 30);
   sh.c.style.filter = 'blur(1.5px)';
-  const B = { x: innerWidth * .6, y: innerHeight * .4, vx: 0, vy: 0, a: 0, t: 0 };
+  const B = { x: innerWidth * .6 + offX(), y: innerHeight * .4 + offY(), vx: 0, vy: 0, a: 0, t: 0 };
+  let remoteB = null, sentB = 0, shownB = null, quietB = 0; if (window.Span) Span.on('cfly', m => { remoteB = m.b; });
   const wings = (x, flap, shadow) => {
     x.clearRect(0, 0, 34, 30); x.save(); x.translate(17, 15);
     const sx = .25 + .75 * Math.abs(Math.cos(flap));
@@ -187,10 +207,16 @@ function butterfly() {
   const tick = now => {
     const dt = last ? Math.min((now - last) / 1000, .05) : 1 / 60; last = now;
     if (typeof paused !== 'undefined' && paused) { last = 0; return later(); }
+    if (W0() && !Span.leader()) {                                       // another display flies it: show where it is
+      const r = remoteB;
+      if (r && r !== shownB) { shownB = r; quietB = 0; [B.x, B.y, B.a, B.t] = r; const fl = r[4] ? Math.PI / 2 : B.t * (14 + Math.min(10, r[5] / 25)); wings(S.x, fl, false); wings(sh.x, fl, true); placeB(); }
+      else if (++quietB > 30) return later();                            // landed, or nothing new: rest
+      return requestAnimationFrame(tick);
+    }
     // your cursor has been still for a while: it settles, wings folded, and stops drawing until the cursor moves
     const quiet = !cursor || now - (cursor.t || 0) > 20000;
-    if (quiet && landed) { last = 0; return later(); }
-    if (quiet && Math.hypot(B.vx, B.vy) < 40) { landed = true; wings(S.x, Math.PI / 2, false); wings(sh.x, Math.PI / 2, true); return later(); }
+    if (quiet && landed) { last = 0; if (W0() && Span.leader()) Span.post('cfly', { b: [B.x, B.y, B.a, B.t, 1, 0] }); return later(); }
+    if (quiet && Math.hypot(B.vx, B.vy) < 40) { landed = true; wings(S.x, Math.PI / 2, false); wings(sh.x, Math.PI / 2, true); if (W0()) Span.post('cfly', { b: [B.x, B.y, B.a, B.t, 1, 0] }); return later(); }
     landed = false;
     B.t += dt;
     // aim a little off the cursor, drifting round it, so it hovers rather than sitting on the pointer
@@ -203,11 +229,13 @@ function butterfly() {
     let da = Math.atan2(B.vy, B.vx) + Math.PI / 2 - B.a; da = Math.atan2(Math.sin(da), Math.cos(da)); B.a += da * Math.min(1, dt * 4);
     const flap = B.t * (14 + Math.min(10, sp / 25));
     wings(S.x, flap, false); wings(sh.x, flap, true);
-    const tilt = Math.max(-.6, Math.min(.6, B.a));
-    S.c.style.transform = `translate3d(${(B.x - 17).toFixed(1)}px,${(B.y - 15).toFixed(1)}px,0) rotate(${B.a.toFixed(3)}rad)`;
-    sh.c.style.transform = `translate3d(${(B.x - 17 + 22).toFixed(1)}px,${(B.y - 15 + 28).toFixed(1)}px,0) rotate(${B.a.toFixed(3)}rad) scale(.85)`;
+    placeB();
+    if (W0() && now - sentB > 30) { sentB = now; Span.post('cfly', { b: [B.x, B.y, B.a, B.t, 0, sp] }); }
     requestAnimationFrame(tick);
   };
+  const placeB = () => { const x = B.x - offX(), y = B.y - offY();
+    S.c.style.transform = `translate3d(${(x - 17).toFixed(1)}px,${(y - 15).toFixed(1)}px,0) rotate(${B.a.toFixed(3)}rad)`;
+    sh.c.style.transform = `translate3d(${(x - 17 + 22).toFixed(1)}px,${(y - 15 + 28).toFixed(1)}px,0) rotate(${B.a.toFixed(3)}rad) scale(.85)`; };
   requestAnimationFrame(tick);
 }
 })();
