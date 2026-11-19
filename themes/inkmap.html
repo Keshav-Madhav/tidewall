@@ -61,14 +61,20 @@ function buildNoise() {
     NZ.wy[i] = fbm(x * 0.0035, y * 0.0035, 2) - 0.47 + 0.45 * (fbm(x * 0.017, y * 0.017, 4) - 0.47);
   }
 }
-function computeField(rects) {
+// reg: [gx0, gy0, gx1, gy1] grid cells to compute (inclusive); everything else is copied from base. Across several
+// displays the field covers the whole world, and recomputing all of it on every window update (3840 × 2062 points:
+// ~45 ms, on each display, in one shared web process) left no time to draw while a window was dragged.
+function computeField(rects, reg = null, base = null) {
   const t0 = performance.now();
   const N = Gw * Gh, f1 = new Float32Array(N);
+  const [rx0, ry0, rx1, ry1] = reg && base ? reg : [0, 0, Gw - 1, Gh - 1];
   const sig = P.sigma, is1 = 1 / (sig * sig), wa = P.warp * 2.2, wmax = wa * 0.5;
   for (const r of rects) {
-    const R = 5.5 * sig + Math.max(r.hw, r.hh) * 0.5 + wmax;
-    const gx0 = Math.max(0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(Gw - 1, Math.ceil((r.cx + R) / STEP));
-    const gy0 = Math.max(0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + R) / STEP));
+    // the whole rect and its falloff: it used to reach only half the rect's size from its centre, which cut a straight
+    // channel of sea into the land of any window wider than ~1670 pt (a maximized window on a 1920 monitor)
+    const Rx = r.hw + 5.5 * sig + wmax, Ry = r.hh + 5.5 * sig + wmax;
+    const gx0 = Math.max(rx0, Math.floor((r.cx - Rx) / STEP)), gx1 = Math.min(rx1, Math.ceil((r.cx + Rx) / STEP));
+    const gy0 = Math.max(ry0, Math.floor((r.cy - Ry) / STEP)), gy1 = Math.min(ry1, Math.ceil((r.cy + Ry) / STEP));
     // coast (f = 0.35) lands on the rect edge: core = rect shrunk by σ·√(−ln 0.35)
     const chw = Math.max(r.hw - 1.025 * sig, 0), chh = Math.max(r.hh - 1.025 * sig, 0), wgt = r.w || 1;
     for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
@@ -79,8 +85,8 @@ function computeField(rects) {
       f1[i] += wgt * Math.exp(-(dx * dx + dy * dy) * is1);
     }
   }
-  const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
-  for (let i = 0; i < N; i++) {
+  const c0 = Math.sqrt(-Math.log(0.35)), s = reg && base ? base.s.slice() : new Float32Array(N), fMin = Math.exp(-30);
+  for (let gy = ry0; gy <= ry1; gy++) for (let gx = rx0, i = gy * Gw + rx0; gx <= rx1; gx++, i++) {
     const g = Math.log(Math.max(f1[i], fMin));
     s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
   }
@@ -192,6 +198,9 @@ void main() {
   float s = S(pw);
   vec2 g = vec2(S(pw + vec2(2, 0)) - S(pw - vec2(2, 0)), S(pw + vec2(0, 2)) - S(pw - vec2(0, 2)));
   vec2 n = g / max(length(g), 1e-4);         // points out to sea
+  // the field is a distance (slope 1) except where two coasts blend: at the saddle between them its slope sinks
+  // toward 0 and every line drawn at a fixed |s| swelled into an ink blot. Measured in true distance, lines keep their weight.
+  float sd = s / clamp(length(g) * 0.25, 0.15, 1.6);
 
   // parchment
   float st = fbm(p * 0.0022), st2 = fbm(p * 0.011 + 3.0);
@@ -203,15 +212,15 @@ void main() {
 
   float ink = 0.0;
   // coastline: bold line + inner shadow line + hatching on the lee (south-east) side
-  ink = max(ink, line(abs(s), 1.25));
-  ink = max(ink, line(abs(s + 4.5), 0.5) * 0.85);
+  ink = max(ink, line(abs(sd), 1.25));
+  ink = max(ink, line(abs(sd + 4.5), 0.5) * 0.85);
   float lee = smoothstep(0.1, 0.7, dot(-n, normalize(vec2(-1.0, -1.0))));
   if (s < -5.5 && s > -13.0) ink = max(ink, lee * line(abs(fract((p.x - p.y) * 0.28) - 0.5) * 3.6, 0.42) * smoothstep(-13.0, -7.0, s));
   // ripple rings around the coast: dotted then dashed
   float dots = step(0.55, vn(p * 0.55));
-  ink = max(ink, line(abs(s - 11.0), 0.6) * dots * 0.8);
+  ink = max(ink, line(abs(sd - 11.0), 0.6) * dots * 0.8);
   float dash = step(0.45, fract(dot(p, vec2(-n.y, n.x)) * 0.09));
-  ink = max(ink, line(abs(s - 22.0), 0.45) * dash * 0.55);
+  ink = max(ink, line(abs(sd - 22.0), 0.45) * dash * 0.55);
 
   // rocks in the shallows
   vec2 rc = floor(p / 13.0), rq = p - (rc + 0.5) * 13.0 - (h22(rc) - 0.5) * 6.0;
@@ -304,7 +313,7 @@ function uploadField(i, F) {
 }
 
 /* ---------- morph state (same contract as the Deskland pages: commit / refresh / FB) ---------- */
-let fromI = 0, toI = 0, morphT0 = -1e9, morphDur = MORPH_MS, FA = null, FB = null, mixNow = 1;
+let fromI = 0, toI = 0, morphT0 = -1e9, morphDur = MORPH_MS, FA = null, FB = null, mixNow = 1, chase = false, growing = false;
 let ISLETS = [];
 function seedIslets() {
   let z = 1337; const rnd = () => (z = (z * 16807) % 2147483647) / 2147483647;
@@ -315,9 +324,46 @@ function seedIslets() {
   }
 }
 const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2, hh: ic.h / 2 })).concat(ISLETS);
+// the island rects last laid, and whether the field off this display is out of date (filled in once things settle)
+let laid = null, staleWorld = false, worldT = null;
+const rectKey = r => `${Math.round(r.cx)},${Math.round(r.cy)},${Math.round(r.hw)},${Math.round(r.hh)},${r.w || 1}`;
+const reachOf = r => [r.hw + 5.5 * P.sigma + P.warp * 1.1 + STEP, r.hh + 5.5 * P.sigma + P.warp * 1.1 + STEP];   // as computeField's loops
+// the rects in one list and not the other, counting duplicates (two identical maximized windows: closing one is a change)
+function diffRects(a, b) {
+  const n = new Map(); for (const r of b) { const k = rectKey(r); n.set(k, (n.get(k) || 0) + 1); }
+  const out = []; for (const r of a) { const k = rectKey(r), c = n.get(k) || 0; if (c) n.set(k, c - 1); else out.push(r); }
+  const m = new Map(); for (const r of a) { const k = rectKey(r); m.set(k, (m.get(k) || 0) + 1); }
+  for (const r of b) { const k = rectKey(r), c = m.get(k) || 0; if (c) m.set(k, c - 1); else out.push(r); }
+  return out;
+}
+function myRegion(rects) {                                            // grid cells of this display that the change reaches
+  if (!laid || !FB) return null;
+  const changed = diffRects(rects, laid);
+  if (!changed.length) return 'none';
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const r of changed) { const [Rx, Ry] = reachOf(r); x0 = Math.min(x0, r.cx - Rx); y0 = Math.min(y0, r.cy - Ry); x1 = Math.max(x1, r.cx + Rx); y1 = Math.max(y1, r.cy + Ry); }
+  const m = 4 * STEP;                                                // this display, and a little past its edges (the warp reads a few cells out)
+  x0 = Math.max(x0, OX - m); y0 = Math.max(y0, OY - m); x1 = Math.min(x1, OX + SW + m); y1 = Math.min(y1, OY + SH + m);
+  if (x1 <= x0 || y1 <= y0) return 'none';
+  return [Math.max(0, Math.floor(x0 / STEP)), Math.max(0, Math.floor(y0 / STEP)), Math.min(Gw - 1, Math.ceil(x1 / STEP)), Math.min(Gh - 1, Math.ceil(y1 / STEP))];
+}
+function settleWorld() {                                              // the whole world again (ships and names read it), the picture unchanged
+  clearTimeout(worldT); worldT = setTimeout(() => {
+    if (!staleWorld || !FB) return; staleWorld = false;
+    FB = computeField(laid || iconRects()); uploadField(toI, FB); layoutDirty = true;
+  }, 500);
+}
 function commit(fromEmpty = false) {
-  const nf = computeField(iconRects());
-  const target = 1 - toI;
+  const rects = iconRects(), single = !Span.world || Span.frames().length < 2;
+  if (!fromEmpty && laid && FB && !diffRects(rects, laid).length) return;   // nothing moved
+  const reg = fromEmpty || single ? null : myRegion(rects);
+  laid = rects;
+  if (!reg) { staleWorld = false; clearTimeout(worldT); }              // a whole-world layout: nothing left to settle
+  if (reg === 'none') { staleWorld = true; settleWorld(); return; }   // nothing near this display moved
+  const nf = computeField(rects, reg, FB);
+  if (reg) { staleWorld = true; settleWorld(); }
+  const target = 1 - toI, t = performance.now();
+  mixNow = mixAt(t);                                                  // where the land is now (updates can come every frame, before one is drawn)
   if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); }
   else if (FA && FB && FA !== FB && mixNow < 1 && FA.s.length === FB.s.length) {
     const s = new Float32Array(FB.s.length), a = FA.s, b = FB.s, m = mixNow;
@@ -325,12 +371,21 @@ function commit(fromEmpty = false) {
     FA = Object.assign({}, FB, { s }); uploadField(toI, FA);
   } else FA = FB;
   FB = nf; uploadField(target, FB);
-  fromI = toI; toI = target; morphT0 = performance.now(); morphDur = fromEmpty ? 2200 : MORPH_MS; landMoved();
+  // a new shape while the land is still moving (a window being dragged): carry on from where it is, at speed (ease-out,
+  // shorter), so the coast follows the window; restarting the ease-in on every update would leave it standing still
+  // (not out of the land's first slow rise: that one keeps its pace)
+  const now = performance.now(), going = now - morphT0 < morphDur, rising = going && growing;
+  chase = !fromEmpty && going && !rising;
+  morphDur = fromEmpty ? 2200 : chase ? 700 : rising ? Math.max(MORPH_MS, morphDur - (now - morphT0)) : MORPH_MS;
+  if (!fromEmpty && rising) chase = false;
+  growing = fromEmpty || rising;
+  fromI = toI; toI = target; morphT0 = now; landMoved();
   layoutChanged(); wake();
 }
+function mixAt(t) { const e = Math.min(Math.max((t - morphT0) / morphDur, 0), 1); return chase ? 1 - (1 - e) * (1 - e) : e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2; }
 function landMoved() { layoutDirty = true; lastLandChange = performance.now(); }
 function refresh() {
-  FA = FB = computeField(iconRects());
+  FA = FB = computeField(laid = iconRects());
   uploadField(toI, FB); fromI = toI; morphT0 = -1e9; landMoved();
   layoutChanged(); wake();
 }
@@ -450,7 +505,7 @@ const SCRIPT = '"Apple Chancery", "Snell Roundhand", "Iowan Old Style", serif', 
 
 /* ---------- towns, roads and names: laid out once the land settles; they fade, never pop ---------- */
 let wins = [], towns = [], layoutDirty = true, lastLandChange = 0, labFront = document.getElementById('labelsB');
-const underWindow = (x, y, m) => wins.some(w => x > w.x - m && x < w.x + w.w + m && y > w.y - m && y < w.y + w.h + m);
+const underWindow = (x, y, m) => wins.concat(deskIc).some(w => x > w.x - m && x < w.x + w.w + m && y > w.y - m && y < w.y + w.h + m);
 function landComponents() {
   const st = 2, cw = Math.ceil(Gw / st), ch = Math.ceil(Gh / st), lab = new Int32Array(cw * ch).fill(-1), comps = [];
   const land = (i, j) => FB.s[Math.min(Gh - 1, j * st) * Gw + Math.min(Gw - 1, i * st)] < -6;
@@ -681,15 +736,17 @@ function applySea(t) {
 let rafOn = false, lastT = 0, needMap = true;
 function wake() { needMap = true; if (!rafOn && !paused) { rafOn = true; lastT = 0; requestAnimationFrame(frame); } }
 function frame(now) { try { frame0(now); } catch (e) { rafOn = false; try { webkit.messageHandlers.host.postMessage('JSERR frame ' + e.message); } catch (_) {} setTimeout(wake, 1000); } }
+let pendingCommit = false;
 function frame0(now) {
   if (paused) { rafOn = false; return; }
+  if (pendingCommit) { pendingCommit = false; commit(); }
   const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.033;
   if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + 0.1 / dt : 1 / dt;
   lastT = now;
   const e = Math.min((now - morphT0) / morphDur, 1);
   const morphing = e < 1;
   if (morphing || needMap) {
-    mixNow = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+    mixNow = mixAt(now);
     renderMap(); needMap = false;
   }
   if (FB) { const t = Span.secs(16384);                     // (the world's clock: a ship's bob matches across a seam)
@@ -725,7 +782,7 @@ resize(); drawCompass();
 addEventListener('resize', () => { resize(); commit(true); });
 
 /* ---------- host protocol (Deskland-compatible + 'cursor') ---------- */
-let deskKey = '', lastIcons = null, lastWinsMsg = null, curFrom = -1;
+let deskKey = '', lastIcons = null, lastWinsMsg = null, curFrom = -1, deskIc = [];
 Span.on('cur', m => { cursor = { x: m.x, y: m.y }; curFrom = m.from; });
 Span.on('curoff', m => { if (curFrom === m.from) cursor = null; });
 const handle = m => {
@@ -736,14 +793,18 @@ const handle = m => {
     if (lastIcons) { FB = null; handle(lastIcons); } return; }
   if (m.t === 'cursor') { const k = devicePixelRatio; cursor = { x: m.x / k + OX, y: m.y / k + OY }; curFrom = -1; Span.post('cur', cursor); return; }
   if (m.t === 'cursorOff') { if (curFrom === -1) { cursor = null; Span.post('curoff', {}); } return; }
+  if (m.t === 'dicons') { const k = devicePixelRatio, P = 18;          // your desktop icons: a small island under each cluster
+    deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX - P, y: t / k + OY - P, w: (r - l) / k + 2 * P, h: (b - t) / k + 2 * P }));
+    layoutDirty = true; if (lastIcons) handle(lastIcons); return; }
   if (m.t === 'windows') { lastWinsMsg = m; const k = devicePixelRatio; wins = m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k })); return; }
   if (m.t !== 'icons') return;
   lastIcons = m;
   const k = devicePixelRatio;
-  icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k })) : [];
+  icons = (m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k })) : []).concat(deskIc);   // (your desktop icons: an island each)
   const first = !FB;
-  commit(first);
-  if (first) { placeCompass(); for (const m2 of movers) spawn(m2); }
+  if (!first) { pendingCommit = true; wake(); return; }               // laid at the next frame (several updates in one frame: one layout)
+  commit(true);
+  placeCompass(); for (const m2 of movers) spawn(m2);
 };
 const host = window.chrome && window.chrome.webview;
 if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }

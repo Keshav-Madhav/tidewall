@@ -16,6 +16,10 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #2a9fb0; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+  /* your desktop icons float on lily pads; the koi swim beneath them */
+  .pad { position: fixed; left: 0; top: 0; pointer-events: none; background-size: 100% 100%; will-change: transform;
+         animation: padsway var(--dur, 11s) ease-in-out infinite alternate; transition: opacity .9s ease; }
+  @keyframes padsway { from { rotate: calc(var(--r) - 2.5deg); } to { rotate: calc(var(--r) + 2.5deg); } }
 </style>
 </head>
 <body>
@@ -852,8 +856,9 @@ function stepSites(dt) {
       const gy0 = Math.max(0, Math.floor((w.y - pad) / SITE)), gy1 = Math.min(grows - 1, Math.floor((w.y + w.h + pad) / SITE));
       const ix0 = Math.floor((w.x + 16) / SITE) + 1, ix1 = Math.floor((w.x + w.w - 16) / SITE) - 1, iy0 = Math.floor((w.y + 16) / SITE) + 1, iy1 = Math.floor((w.y + w.h - 16) / SITE) - 1;
       for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
-        if (gy >= iy0 && gy <= iy1 && gx === ix0 && ix1 > ix0) gx = ix1;           // deep inside the window: nothing can grow there
-        for (const c of siteGrid[gy * gcols + gx]) {
+        if (gy >= iy0 && gy <= iy1 && gx === ix0 && ix1 > ix0) gx = Math.min(ix1, gx1);   // deep inside the window: nothing can grow there
+        const cell = siteGrid[gy * gcols + gx]; if (!cell) continue;      // (a window past the world's edge while the displays change)
+        for (const c of cell) {
         if (!c.ok || c.tgt) continue;
         const o = sdBox(c.x, c.y, w.x, w.y, w.x + w.w, w.y + w.h), Z = ZONES[c.z], bb = B * c.bw;
         if (o < -14 || o < Z.lo * bb || o > Z.hi * bb) continue;
@@ -1248,11 +1253,74 @@ function build() { SW = innerWidth; SH = innerHeight; W = Span.uw; H = Span.uh; 
 let deskKey = '';
 function rebuildWorld() { remote = null; build(); makeFloor(); paintSand(); makeSites(); makeFish(); siteKey = ''; instant = true; for (const sc of schools) sc.home = null; if (lastWinMsg) handle(lastWinMsg); }
 let lastWinMsg = null;
+/* ======================= lily pads: one under each desktop icon ======================= */
+// drawn once (two shapes), then each pad is a picture the compositor turns gently; opaque green under the icon and its
+// label, so the label always reads; the fish (on the canvas below) pass under them
+// A lily pad, painted per pixel so it sits in the same world as the water: a slightly irregular disc with a narrow
+// cleft running in to the stem, waxy olive green mottled with yellowing (and, on older pads, a browned margin), faint
+// veins, a rim that turns up and catches the light, a soft sheen, and a diffuse shadow on the pond floor below.
+// (painted only when the first icons arrive, not on every page load; each kept once, as a CSS variable the pads share)
+let padsMade = false;
+function makePads() { if (padsMade) return; padsMade = true; [0, 1, 2].forEach(v => document.documentElement.style.setProperty('--pad' + v, `url(${padImg(v)})`)); }
+function padImg(v) {
+  const S = 256, C = S / 2 - 6, r0 = 104, c = document.createElement('canvas'); c.width = c.height = S; const x = c.getContext('2d');
+  const h2 = (a, b) => { const q = Math.sin(a * 127.1 + b * 311.7 + v * 74.7) * 43758.5453; return q - Math.floor(q); };
+  const vn = (px, py) => { const ix = Math.floor(px), iy = Math.floor(py), fx = px - ix, fy = py - iy, ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    return (h2(ix, iy) * (1 - ux) + h2(ix + 1, iy) * ux) * (1 - uy) + (h2(ix, iy + 1) * (1 - ux) + h2(ix + 1, iy + 1) * ux) * uy; };
+  const fb = (px, py) => vn(px, py) * .55 + vn(px * 2.1 + 5, py * 2.1) * .28 + vn(px * 4.3 + 9, py * 4.3 + 3) * .17;
+  const cleft = [-.8, -2.1, -1.35][v], age = [0, .35, .75][v];        // (the cleft toward the top: never through the name under the icon)
+  const R = th => r0 * (1 + .03 * (vn(th * 2.2 + 3, v) - .5) * 2 + .012 * (vn(th * 9 + 7, v + 4) - .5) * 2);
+  const img = x.createImageData(S, S), d = img.data, L = [-.55, -.62, .56];
+  for (let py = 0; py < S; py++) for (let px = 0; px < S; px++) {
+    const dx = px + .5 - C, dy = py + .5 - C, r = Math.hypot(dx, dy), th = Math.atan2(dy, dx), Rt = R(th);
+    if (r > Rt + 1) continue;
+    let dth = Math.abs(((th - cleft) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI);   // angle from the cleft
+    const half = .042 * Math.pow(r / Rt, .6) + .003, inCleft = (dth - half) * r;                     // narrow V, lobes almost meeting
+    let a = Math.min(1, Math.max(0, Rt - r + .5)) * Math.min(1, Math.max(0, inCleft + .5));
+    if (a <= 0) continue;
+    const u = r / Rt, mott = fb(px * .022 + v * 9, py * .022), patch = fb(px * .012 + 30, py * .012 + v * 5);
+    // colour: deep olive to sap green, yellowing in patches, a browned margin as pads age
+    let cr = 52 + 40 * mott, cg = 78 + 52 * mott, cb = 30 + 16 * mott;
+    const yel = Math.max(0, patch - .58) * 2.2; cr += 60 * yel; cg += 34 * yel; cb -= 4 * yel;
+    const marg = age * Math.max(0, (u - .9 + .05 * vn(th * 6, 2)) / .1) * (.6 + .4 * vn(th * 3 + 2, 8));
+    cr = cr * (1 - marg) + 112 * marg; cg = cg * (1 - marg) + 74 * marg; cb = cb * (1 - marg) + 40 * marg;
+    // veins from the stem: faint, slightly lighter, wandering a little
+    const vein = Math.pow(Math.max(0, Math.cos(th * 21 + 1.6 * vn(r * .05, th * 3))), 18) * Math.min(1, u * 3) * (1 - u * .5);
+    cr += 14 * vein; cg += 18 * vein; cb += 8 * vein;
+    // the surface: flat, turned up at the rim; a diffuse light and a waxy sheen broken by the grain of the leaf
+    const up = Math.max(0, (u - .88) / .12), nx = -dx / (r || 1) * up * .8, ny = -dy / (r || 1) * up * .8, nz = 1;
+    const nl = Math.hypot(nx, ny, nz), dif = .78 + .32 * (nx * L[0] + ny * L[1] + nz * L[2]) / nl - .3 * up * .3;
+    const sheen = Math.max(0, 1 - Math.hypot(dx + r0 * .35, dy + r0 * .4) / (r0 * 1.05)) * (.55 + .45 * fb(px * .09, py * .09)) * .2;
+    const grain = (.94 + .12 * h2(px, py)) * (1 - .28 * Math.max(0, Math.min(1, 2.2 - (Rt - r))) - .22 * Math.max(0, Math.min(1, 2 - inCleft)));   // a dark wet line where it meets the water
+    const k = (py * S + px) * 4;
+    d[k] = Math.min(255, (cr * dif + 190 * sheen) * grain); d[k + 1] = Math.min(255, (cg * dif + 215 * sheen) * grain); d[k + 2] = Math.min(255, (cb * dif + 200 * sheen) * grain);
+    d[k + 3] = 255 * a;
+  }
+  const leaf = document.createElement('canvas'); leaf.width = leaf.height = S; leaf.getContext('2d').putImageData(img, 0, 0);
+  x.save(); x.filter = 'blur(9px)'; x.globalAlpha = .45; x.drawImage(leaf, 9, 12); x.globalCompositeOperation = 'source-in'; x.fillStyle = 'rgb(0,52,58)'; x.fillRect(0, 0, S, S); x.restore();   // its shadow, down on the pond floor
+  x.drawImage(leaf, 0, 0); leaf.width = leaf.height = 1;
+  return c.toDataURL(); }
+const pads = new Map();                                                  // icon key -> element
+function setPads(list) {
+  const k = devicePixelRatio, seen = new Set();
+  if (list.length) makePads();
+  for (const [l, t, r, b] of list) {
+    const w = (r - l) / k, h = (b - t) / k, cx = (l + r) / 2 / k, cy = (t + b) / 2 / k, d = Math.hypot(w, h) * 1.05;   // (the leaf reaches the label's corners)
+    const key = `${Math.round(cx / 4)},${Math.round(cy / 4)}`; seen.add(key);
+    let el = pads.get(key);
+    if (!el) { el = document.createElement('div'); el.className = 'pad'; const n = Math.abs(Math.round(cx * 7 + cy * 13)) % 997;
+      el.style.backgroundImage = `var(--pad${n % 3})`; el.style.setProperty('--r', `${(n * 37) % 40 - 20}deg`);   /* a small turn only: the light and the shadow are painted in */ el.style.setProperty('--dur', `${9 + (n % 7)}s`);
+      el.style.opacity = 0; document.body.appendChild(el); pads.set(key, el); void el.offsetWidth; el.style.opacity = 1; }   // (a style read first, so the fade runs)
+    Object.assign(el.style, { width: d + 'px', height: d + 'px', translate: `${(cx - d / 2).toFixed(1)}px ${(cy - d / 2).toFixed(1)}px` });
+  }
+  for (const [key, el] of pads) if (!seen.has(key)) { el.style.opacity = 0; pads.delete(key); setTimeout(() => el.remove(), 950); }
+}
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
   if (m.t === 'desk') { const k = JSON.stringify([m.x, m.y, m.uw, m.uh, m.fr]); if (k === deskKey) return; deskKey = k; Span.desk(m); rebuildWorld(); return; }
   if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; curAt(x, y, -1); Span.post('cur', { x, y }); return; }
   if (m.t === 'cursorOff') { if (curFrom === -1) { cur.on = false; Span.post('curoff', {}); } return; }
+  if (m.t === 'dicons') { setPads(m.r || []); return; }
   if (m.t === 'windows') { lastWinMsg = m; if (m.live) liveUntil = performance.now() + 250;
     setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
 };

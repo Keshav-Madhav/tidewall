@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.2.0]
+
+### Your desktop icons
+- **Every theme makes room for your desktop icons**, each in its own way: Model Railway lays a village green with a
+  hedge round them, Garden Plan a flagstone terrace, Marauders keeps its towers and street names off them, Gallery
+  builds them a niche with shelves and hangs the paintings round it, Ink Map and Beach raise an island under them,
+  Meadow a bank of cloud, Koi Reef floats each one on a lily pad, Snowfall settles a little cap of snow on each,
+  Celestial Atlas sets them in a dark nebula (and letters the sky round them), Wind Map gives them a cartographer's halo
+  of bare paper. Lava Lamp leaves them be.
+- **Wind Tunnel ▸ No model · your desktop icons**: the icons are the test pieces, and the air comes from their side
+  of the screen so their wakes cross it. Chosen for you when you have icons and haven't picked a model.
+- The preview in the Tidewall window shows your icons, so you can see what each theme does with them.
+- Settings ▸ **Desktop icons** (off until you turn it on). macOS asks to let Tidewall ask Finder where they are; it
+  reads their positions only, never their names. *Until Tidewall's updates are signed with a fixed certificate, macOS
+  may ask again after an update.*
+
+### More settings
+- **What the wallpaper reacts to**: Windows, Stage Manager, Desktop widgets, Desktop icons and The pointer, each its own
+  switch. Off, the scene carries on as if that weren't there (the live preview shows it too).
+- **Frame rate** gains **60**, the smoothest.
+- **On battery**: Same, Calmer (half the frame rate) or Pause, when your Mac is unplugged or in Low Power Mode.
+- **Rest when idle** after 1, 3 or 10 minutes, or never.
+
+### Smoother, and fixed
+- **Ink Map and Beach reshape smoothly while you drag a window across several displays.** Each display recomputed the
+  whole world's coast on every window update (≈45 ms, three times over), so nothing moved until you let go and then
+  the land jumped. Now each display works out only the part of its own screen a change reaches, once a frame, and the
+  coast follows the window instead of restarting its morph on every update.
+- Ink Map no longer cuts a straight channel of sea into the land of a very wide window (a maximized window on a large
+  monitor), and coastlines no longer swell into ink blots where two of them nearly touch.
+- Celestial Atlas across several displays: the Milky Way and the paper carry straight on across a seam (each display
+  used to darken its own edges and cut the band off).
+- Wind Map across several displays: names are placed for the whole map, so one crossing a seam is drawn on both sides
+  (it used to be cut off); the map darkens toward its own edges, not each display's; and a forecast one display fetches
+  reaches the others at once (they could show a stand-in breeze for half a minute).
+- Koi Reef: a rare error while displays change size, which could stop its reef growing for a moment.
+
 ## [1.1.0]
 
 ### One world across your displays

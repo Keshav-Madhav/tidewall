@@ -14,6 +14,7 @@ import CryptoKit
 import ServiceManagement
 import WebKit
 import IOKit
+import IOKit.ps
 import Darwin
 
 // MARK: - Config
@@ -59,7 +60,8 @@ enum Cfg {
     ("inkmap", "Ink Map · very low"), ("garden", "Garden Plan · very low"), ("railway", "Model Railway · very low"), ("meadow", "Meadow · high"), ("beach", "Beach · medium")]
   /// each theme's own sub-choice (Wind Map's region, Lava Lamp's colours, …), declared in themes/variants.json
   static var variantOverride: String?
-  static func variant(_ t: String) -> String? { (t == theme ? variantOverride : nil) ?? d.string(forKey: "variant.\(t)") ?? (t == "wind" ? homeRegion : nil) }
+  static func variant(_ t: String) -> String? { (t == theme ? variantOverride : nil) ?? d.string(forKey: "variant.\(t)") ?? (t == "wind" ? homeRegion : nil)
+    ?? (t == "tunnel" && (DeskIcons.shared?.known == true ? !(DeskIcons.shared?.icons.isEmpty ?? true) : d.bool(forKey: "iconsPresent")) ? "none" : nil) }   // Wind Tunnel with no model chosen: your desktop icons, when you have some
   /// where the user is, roughly: the city of their time zone, from the system's time-zone table (no location permission)
   static let site: (name: String, lat: Double, lon: Double, tz: String, cc: String)? = {
     let tz = TimeZone.current.identifier
@@ -108,8 +110,24 @@ enum Cfg {
     for c in cands.compactMap({ $0 }) { if let t = try? String(contentsOf: c, encoding: .utf8) { return t } }
     return ""
   }
+  /// make room for desktop icons (reading where they are needs macOS's one-time "control Finder" permission)
+  static var deskIcons: Bool { get { d.bool(forKey: "deskIcons") } set { d.set(newValue, forKey: "deskIcons") } }
   static var autoUpdate: Bool { get { d.object(forKey: "autoUpdate") as? Bool ?? true } set { d.set(newValue, forKey: "autoUpdate") } }
   static var restWhenIdle: Bool { get { d.object(forKey: "restWhenIdle") as? Bool ?? true } set { d.set(newValue, forKey: "restWhenIdle") } }
+  /// minutes without input before the wallpaper rests (0: never); before this setting existed it was on/off at 3
+  static var idleMinutes: Double {
+    get { (d.object(forKey: "idleMinutes") as? Double).flatMap { $0.isFinite ? min(120, max(0, $0)) : nil } ?? (restWhenIdle ? 3 : 0) }
+    set { d.set(newValue, forKey: "idleMinutes"); restWhenIdle = newValue > 0; if newValue > 0 { d.set(newValue, forKey: "idleLast") } } }
+  static var idleLast: Double { (d.object(forKey: "idleLast") as? Double).flatMap { $0 > 0 ? $0 : nil } ?? 3 }
+  /// what the scene reshapes itself around: your windows, Stage Manager's thumbnails, desktop widgets; and whether it
+  /// reacts to the pointer. Off: the wallpaper carries on as if that weren't there.
+  static func flag(_ k: String, _ def: Bool = true) -> Bool { d.object(forKey: k) as? Bool ?? def }
+  static var reactWindows: Bool { get { flag("reactWindows") } set { d.set(newValue, forKey: "reactWindows") } }
+  static var reactStage: Bool { get { flag("reactStage") } set { d.set(newValue, forKey: "reactStage") } }
+  static var reactWidgets: Bool { get { flag("reactWidgets") } set { d.set(newValue, forKey: "reactWidgets") } }
+  static var reactCursor: Bool { get { flag("reactCursor") } set { d.set(newValue, forKey: "reactCursor") } }
+  /// on battery: 0 the same, 1 calmer (half the frame rate), 2 paused
+  static var battery: Int { get { (d.object(forKey: "battery") as? Int).map { min(2, max(0, $0)) } ?? 0 } set { d.set(newValue, forKey: "battery") } }
   static var mask: Bool { get { d.object(forKey: "mask") as? Bool ?? false }   /* every theme opts out of the mask now */ set { d.set(newValue, forKey: "mask") } }
 }
 
@@ -253,16 +271,18 @@ func earlyScript(fps: Double, opaque: Bool, cap: Double = 8) -> String { """
   // wax, gardeners). A frame rate picked in Settings replaces all of it. Between frames the
   // page sleeps on a timer instead of waking at every vsync.
   const pick = \(fps), CALM = pick > 0 ? pick : 30, LIVE = pick > 0 ? pick : 60;
-  let boostUntil = 0;
+  let boostUntil = 0, paceK = 1;                                      // paceK: 2 on battery when Settings says calmer
   window.__twBoost = ms => { const u = performance.now() + ms; if (u > boostUntil) boostUntil = u; };
   { const deliver = window.__hostSend;
-    window.__hostSend = s => { const cur = s.startsWith('{"t":"cursor"') && s.charCodeAt(13) === 44;   // the pointer, not cursorOff
+    window.__hostSend = s => { if (s.startsWith('{"t":"pace"')) { paceK = +JSON.parse(s).k || 1; return; }
+      const cur = s.startsWith('{"t":"cursor"') && s.charCodeAt(13) === 44;   // the pointer, not cursorOff
+      if (s.startsWith('{"t":"dicons"')) window.__dicons = s;            // (kept for the bench probes)
       if (cur) window.__twOver = s.indexOf('"w":1') >= 0;
       if ((cur && !window.__twOver) || window.__live) window.__twBoost(900); deliver(s); }; }   // the pointer over the wallpaper ({"t":"cursor…, not over a window), or a live drag
   const raf = window.requestAnimationFrame.bind(window);
   let due = 0, lastT = -1, go = false;
   window.requestAnimationFrame = cb => raf(function tick(t) {
-    if (t !== lastT) { lastT = t; const iv = 1000 / (performance.now() < boostUntil ? LIVE : pick > 0 ? pick : (window.__twCalm || CALM)); go = t + 2 >= due; if (go) due = Math.max(due + iv, t); }
+    if (t !== lastT) { lastT = t; const iv = paceK * 1000 / (performance.now() < boostUntil ? LIVE : pick > 0 ? pick : (window.__twCalm || CALM)); go = t + 2 >= due; if (go) due = Math.max(due + iv, t); }
     if (!go) { const wait = due - t - 6; if (wait > 4) setTimeout(() => raf(tick), wait); else raf(tick); return; }
     if (window.__prof) { const a = performance.now(); cb(t); const p = window.__prof; p.n++; p.ms += performance.now() - a; } else cb(t);
   });
@@ -433,10 +453,15 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   func load() {
     ready = false; paused = nil; lastIcons = ""; lastMask = ""; lastWins = ""; wantsCursor = true
     let page = ["beach": "flat", "meadow": "meadow", "inkmap": "inkmap", "celestial": "celestial", "snow": "snow", "reef": "reef", "wind": "wind", "lava": "lava", "tunnel": "tunnel", "gallery": "gallery", "garden": "garden", "railway": "railway"][Cfg.theme(for: screenID)] ?? "estate"
-    let v = Cfg.variant(Cfg.theme(for: screenID)).flatMap { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) }.map { "&v=\($0)" } ?? ""
+    loadedVariant = Cfg.variant(Cfg.theme(for: screenID))
+    let v = loadedVariant.flatMap { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) }.map { "&v=\($0)" } ?? ""
     web.load(URLRequest(url: URL(string: "tidewall://app/\(page).html?wallpaper=1\(v)\(Cfg.siteQuery)")!))
   }
 
+  private(set) var loadedVariant: String?   // what the page was opened with (Wind Tunnel's automatic choice can change under it)
+  var realRects: [CGRect] = []              // every window over this screen (the scene may be told about fewer)
+  /// pages draw at their own pace × k (2 on battery when Settings says calmer)
+  func sendPace() { guard ready else { return }; send("{\"t\":\"pace\",\"k\":\(delegate.paceK)}") }
   var wantsCursor = true                    // a theme that ignores the pointer says so ("nocursor"): no 120 Hz messages for it
   /// where this screen sits among all of them (points, top-left origin): themes continue one world across displays
   /// (the sky, the map, the painted panorama) and never repeat the same thing on every screen
@@ -460,17 +485,30 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     lastDeskWorld = frames.count
     let fr = frames.map { "[\(Int($0.minX - u.minX)),\(Int($0.minY - u.minY)),\(Int($0.width)),\(Int($0.height))]" }.joined(separator: ",")
     send("{\"t\":\"desk\",\"fr\":[\(fr)],\"x\":\(me.minX - u.minX),\"y\":\(me.minY - u.minY),\"w\":\(me.width),\"h\":\(me.height),\"uw\":\(u.width),\"uh\":\(u.height),\"i\":\(i),\"n\":\(frames.count),\"mx\":\(main.midX - u.minX),\"my\":\(main.midY - u.minY),\"mw\":\(main.width),\"mh\":\(main.height)}")
+    lastDIcons = ""; sendDeskIcons()                                  // (pages place icons by their world offset: the desk may have moved it)
   }
   private(set) var lastDeskWorld = 1
+  private var lastDIcons = ""
+  /// the desktop icons this page should make room for (those on its display, or anywhere in its world), each icon and
+  /// each cluster of neighbouring icons, in its own device pixels; an empty list when the setting is off
+  func sendDeskIcons() {
+    guard ready, let di = DeskIcons.shared else { return }
+    let world = Cfg.spanThemes.contains(Cfg.theme(for: screenID)) ? worldFrames(for: screenID) : [cgFrame]
+    let k = scale, o = cgFrame.origin
+    func enc(_ rs: [CGRect]) -> String { rs.filter { r in world.contains { $0.intersects(r) } }.map { r in let q = r.offsetBy(dx: -o.x, dy: -o.y)
+      return "[\(Int(q.minX * k)),\(Int(q.minY * k)),\(Int(q.maxX * k)),\(Int(q.maxY * k))]" }.joined(separator: ",") }
+    let msg = "{\"t\":\"dicons\",\"r\":[\(enc(di.icons))],\"c\":[\(enc(di.clusters))],\"i\":[\(enc(di.images))]}"
+    if msg != lastDIcons { lastDIcons = msg; send(msg) }
+  }
   /// the page's pixels per point: the display's, but no more than its theme is drawn at (what its devicePixelRatio says)
   let cap: CGFloat                            // fixed when the page is made: the same number its devicePixelRatio was given
   var scale: CGFloat { min(window.backingScaleFactor, cap) }
   func cursor(_ p: CGPoint) {
-    guard wantsCursor else { return }
+    guard wantsCursor, Cfg.reactCursor else { return }
     let k = scale
     // over one of your windows (you're working in an app, not looking at the wallpaper): the page still learns where
     // the pointer is, but doesn't speed up for it
-    let over = lastArgs?.0.contains { $0.contains(p) } == true
+    let over = realRects.contains { $0.contains(p) }
     send("{\"t\":\"cursor\",\"x\":\(Int((p.x - cgFrame.minX) * k)),\"y\":\(Int((p.y - cgFrame.minY) * k))\(over ? ",\"w\":1" : "")}")
   }
 
@@ -483,8 +521,8 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in guard let self else { return }
         NSAnimationContext.runAnimationGroup { c in c.duration = 0.35; self.window.animator().alphaValue = 1 } completionHandler: { self.onShown?(); self.onShown = nil } }
     }
-    if s == "ready" { ready = true; lastWins = ""; lastIcons = ""; lastMask = ""; paused = nil   // a reloaded page has none of it
-      sendDesk(); send("{\"t\":\"me\",\"seed\":\(Cfg.seed)}")
+    if s == "ready" { ready = true; lastWins = ""; lastIcons = ""; lastMask = ""; lastDIcons = ""; paused = nil   // a reloaded page has none of it
+      sendDesk(); send("{\"t\":\"me\",\"seed\":\(Cfg.seed)}"); sendDeskIcons(); if delegate.paceK != 1 { sendPace() }
       if let p = pending { pending = nil; p() } else if let a = lastArgs { update(rects: a.0, owners: a.1, live: false, pause: a.3) }
       return }
     if s.hasPrefix("JSERR") || s == "patched" || (s.hasPrefix("STAT") && ProcessInfo.processInfo.environment["TIDEWALL_STAT"] != nil) { log("[\(screenID)] \(s)") }
@@ -709,6 +747,119 @@ func uncoveredArea(_ screen: CGRect, _ rects: [CGRect]) -> Double {
 
 // MARK: - Usage meter (Tidewall + every helper process macOS bills to it: WebKit page, GPU, network)
 
+// MARK: - Desktop icons (opt-in): where Finder shows them, so each theme can keep them clear
+
+/// Finder knows where every desktop icon is; it tells us through one Apple event (macOS asks the user once). Read
+/// every few seconds and just after a drag, off the main thread, with a timeout. Each icon becomes a box (its image
+/// and the label under it, sized from Finder's own desktop view settings) in global CG points; neighbouring icons are
+/// grouped into clusters, so a column of icons is one tall shape rather than twenty specks.
+final class DeskIcons {
+  enum State: String { case off, ok, denied, failed }
+  static weak var shared: DeskIcons?
+  private(set) var icons: [CGRect] = [], clusters: [CGRect] = [], images: [CGRect] = []   // whole icons (image + label), groups of them, the images alone
+  private(set) var state = State.off, known = false                    // known: icons read since launch (else the last launch's)
+  var onChange: () -> Void = {}
+  private var script: NSAppleScript?, timer: Timer?, monitor: Any?, busy = false, lastClick = 0.0
+  /// true while the wallpaper rests (paused, idle, asleep, let go, paused on battery): no need to ask Finder then
+  var resting: () -> Bool = { false }
+  /// NSAppleScript (an OSA component) isn't thread-safe: it's made and run on this one thread, always the same
+  private static let worker: CFRunLoop = {
+    var loop: CFRunLoop?; let ready = DispatchSemaphore(value: 0)
+    let t = Thread { loop = CFRunLoopGetCurrent(); RunLoop.current.add(NSMachPort(), forMode: .default); ready.signal(); while true { RunLoop.current.run(mode: .default, before: .distantFuture) } }
+    t.name = "tidewall.desk-icons"; t.qualityOfService = .utility; t.start(); ready.wait(); return loop!
+  }()
+  private func onWorker(_ f: @escaping () -> Void) { let rl = Self.worker; CFRunLoopPerformBlock(rl, CFRunLoopMode.defaultMode.rawValue, f); CFRunLoopWakeUp(rl) }
+  var fake: [(CGRect, CGRect)]? = nil                                   // dev: --fakeicons (box, image)
+
+  func start() {
+    stop()
+    guard Cfg.deskIcons || fake != nil else { state = .off; set([]); return }
+    if let fake { state = .ok; set(fake.map(\.0), fake.map(\.1)); return }
+    timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.read() }
+    read()
+    timer?.tolerance = 0.5
+    // an icon dragged to a new spot: look again as soon as it's dropped
+    monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+      guard let self, ProcessInfo.processInfo.systemUptime - self.lastClick > 1 else { return }   // at most once a second
+      self.lastClick = ProcessInfo.processInfo.systemUptime
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.read() } }
+  }
+  func stop() { timer?.invalidate(); timer = nil; if let m = monitor { NSEvent.removeMonitor(m) }; monitor = nil }
+
+  /// Finder's desktop view: icon size, label size and where the label goes
+  static func geometry() -> (icon: CGFloat, text: CGFloat, bottom: Bool) {
+    CFPreferencesAppSynchronize("com.apple.finder" as CFString)
+    let v = CFPreferencesCopyAppValue("DesktopViewSettings" as CFString, "com.apple.finder" as CFString) as? [String: Any]
+    let s = v?["IconViewSettings"] as? [String: Any]
+    let icon = (s?["iconSize"] as? NSNumber)?.doubleValue ?? 64, text = (s?["textSize"] as? NSNumber)?.doubleValue ?? 12
+    let bottom = (s?["labelOnBottom"] as? NSNumber)?.boolValue ?? true
+    return (CGFloat(min(512, max(16, icon))), CGFloat(min(24, max(9, text))), bottom)
+  }
+  /// an icon's box from the centre of its image (what Finder reports): the image and, below or beside it, a label of
+  /// up to two lines
+  static func box(_ c: CGPoint, _ g: (icon: CGFloat, text: CGFloat, bottom: Bool)) -> CGRect {
+    let img = CGRect(x: c.x - g.icon / 2, y: c.y - g.icon / 2, width: g.icon, height: g.icon)
+    let lh = g.text * 1.3 * 2 + 4
+    let label = g.bottom ? CGRect(x: c.x - max(g.icon + 20, g.text * 7) / 2, y: img.maxY + 2, width: max(g.icon + 20, g.text * 7), height: lh)
+                         : CGRect(x: img.maxX + 4, y: c.y - lh / 2, width: g.text * 10, height: lh)
+    return img.union(label)
+  }
+  static func cluster(_ rs: [CGRect], gap: CGFloat = 26) -> [CGRect] {
+    var out = rs
+    var merged = true
+    while merged { merged = false
+      outer: for i in 0..<out.count { for j in (i + 1)..<max(i + 1, out.count) where out[i].insetBy(dx: -gap / 2, dy: -gap / 2).intersects(out[j].insetBy(dx: -gap / 2, dy: -gap / 2)) {
+        out[i] = out[i].union(out[j]); out.remove(at: j); merged = true; break outer } } }
+    return out
+  }
+  /// icons on the desktop that macOS isn't showing (Finder's desktop switched off, or "Show items" off in Desktop & Dock,
+  /// on the desktop or in Stage Manager): Finder still knows where they are, but there's nothing to make room for
+  static func hidden() -> Bool {
+    let f = "com.apple.finder" as CFString, wm = "com.apple.WindowManager" as CFString
+    CFPreferencesAppSynchronize(f); CFPreferencesAppSynchronize(wm)
+    if (CFPreferencesCopyAppValue("CreateDesktop" as CFString, f) as? Bool) == false { return true }
+    let stage = (CFPreferencesCopyAppValue("GloballyEnabled" as CFString, wm) as? Bool) ?? false
+    return (CFPreferencesCopyAppValue((stage ? "HideDesktop" : "StandardHideDesktopIcons") as CFString, wm) as? Bool) ?? false
+  }
+  private func set(_ rs: [CGRect], _ ims: [CGRect] = []) {
+    known = true; if Cfg.d.bool(forKey: "iconsPresent") != !rs.isEmpty { Cfg.d.set(!rs.isEmpty, forKey: "iconsPresent") }   // (a launch opens the tunnel on the right model)
+    if rs == icons && ims == images { return }                           // (before clustering: that's the costly part)
+    let cl = Self.cluster(rs)
+    icons = rs; clusters = cl; images = ims; onChange()
+  }
+  /// the image part of an icon's box (what the snow settles on, say)
+  static func image(_ c: CGPoint, _ g: (icon: CGFloat, text: CGFloat, bottom: Bool)) -> CGRect { CGRect(x: c.x - g.icon / 2, y: c.y - g.icon / 2, width: g.icon, height: g.icon) }
+  func read() {
+    guard !busy, Cfg.deskIcons, timer != nil, !resting() else { return }
+    if Self.hidden() { if state != .ok { state = .ok; onChange() }; set([]); return }
+    busy = true
+    let g = Self.geometry()
+    onWorker { [weak self] in
+      guard let self else { return }
+      if self.script == nil {                                           // made and run on this one thread only
+        self.script = NSAppleScript(source: "with timeout of 3 seconds\ntell application \"Finder\" to get desktop position of every item of desktop\nend timeout") }
+      var err: NSDictionary?
+      let d = self.script?.executeAndReturnError(&err)
+      var pts: [CGPoint] = []
+      if err == nil, let d, d.numberOfItems > 0 {
+        for i in 1...d.numberOfItems { if let p = d.atIndex(i), p.numberOfItems >= 2, let x = p.atIndex(1)?.int32Value, let y = p.atIndex(2)?.int32Value {
+          pts.append(CGPoint(x: CGFloat(x), y: CGFloat(y))) } } }
+      let code = (err?[NSAppleScript.errorNumber] as? NSNumber)?.intValue
+      DispatchQueue.main.async {
+        self.busy = false
+        guard Cfg.deskIcons else { return }
+        let before = self.state; defer { if self.state != before { self.onChange() } }
+        switch code {
+        case nil: self.state = .ok; self.set(pts.map { Self.box($0, g) }, pts.map { Self.image($0, g) })
+        case -1743, -1744: if self.state != .denied { log("[icons] not allowed to ask Finder (System Settings ▸ Privacy & Security ▸ Automation)") }; self.state = .denied; self.set([])
+        case -600: self.state = .ok; self.set([])                       // Finder isn't running: no desktop icons
+        default: if self.state != .failed { log("[icons] couldn't read them (\(code!))") }; self.state = .failed
+        }
+      }
+    }
+  }
+}
+
 final class Usage {
   typealias RespFn = @convention(c) (pid_t) -> pid_t
   private static let responsible: RespFn? = {
@@ -879,7 +1030,7 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       if args.contains("--ui-only") && !args.contains("--closetest") { NSApp.terminate(nil) }
     }
   }
-  func pushDesktop() { guard web != nil else { return }; js("{\"t\":\"desktop\",\"d\":\(desktopJSON())}") }
+  func pushDesktop(icons: Bool = false) { guard web != nil else { return }; js("{\"t\":\"desktop\",\"d\":\(desktopJSON())\(icons ? ",\"icons\":1" : "")}") }
   func toast(_ s: String) { if let d = try? JSONSerialization.data(withJSONObject: ["t": "toast", "s": s]), let j = String(data: d, encoding: .utf8) { js(j) } }
   func js(_ json: String) { web?.evaluateJavaScript("window.tw&&tw.receive(\(json));null", completionHandler: nil) }
   /// what the wallpaper costs, and (apart) what this window costs while it's open
@@ -900,7 +1051,12 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       wins.append(["x": r.minX - f.minX, "y": r.minY - f.minY, "w": r.width, "h": r.height, "name": owner,
                    "sm": Tracker.stageRects.contains("\(r)"), "widget": Tracker.widgetRects.contains("\(r)") || owner == "Notification Centre" || owner == "Notification Center" || owner == "WidgetKit Simulator"])
     }
-    let d: [String: Any] = ["w": f.width, "h": f.height, "windows": wins, "display": Int(fake != nil ? display! : scr.displayID),
+    // your desktop icons on this display (image + label, the image alone, and the groups), so the preview shows what each theme does with them
+    let di = DeskIcons.shared, loc = { (r: CGRect) -> [CGFloat] in [r.minX - f.minX, r.minY - f.minY, r.width, r.height] }
+    let on = (di?.icons ?? []).indices.filter { di!.icons[$0].intersects(f) }
+    let icons: [String: Any] = ["r": on.map { loc(di!.icons[$0]) }, "i": on.compactMap { $0 < di!.images.count ? loc(di!.images[$0]) : nil },
+                                "c": (di?.clusters ?? []).filter { $0.intersects(f) }.map(loc)]
+    let d: [String: Any] = ["w": f.width, "h": f.height, "windows": wins, "icons": icons, "display": Int(fake != nil ? display! : scr.displayID),
                             "notch": fake.map { $0.origin == .zero && scr.safeAreaInsets.top > 0 } ?? (scr.safeAreaInsets.top > 0)]
     return (try? JSONSerialization.data(withJSONObject: d)).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
   }
@@ -924,7 +1080,9 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
     guard let app else { return }
     var vars: [String: String] = [:]; for (t, _) in Cfg.themes { if let v = Cfg.variant(t) { vars[t] = v } }
     let st: [String: Any] = ["t": "state", "current": Cfg.theme, "displays": ds, "variants": vars, "seed": Cfg.seed, "version": Cfg.version, "siteQuery": Cfg.siteQuery,
-      "spanThemes": Array(Cfg.spanThemes), "settings": ["spanWorlds": Cfg.spanWorlds, "login": LoginItem.enabled, "loginBlocked": LoginItem.blocked, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin, "autoUpdate": Cfg.autoUpdate],
+      "spanThemes": Array(Cfg.spanThemes), "settings": ["spanWorlds": Cfg.spanWorlds, "login": LoginItem.enabled, "loginBlocked": LoginItem.blocked, "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin, "autoUpdate": Cfg.autoUpdate, "deskIcons": Cfg.deskIcons, "deskIconsState": app.deskIcons.state.rawValue,
+                     "reactWindows": Cfg.reactWindows, "reactStage": Cfg.reactStage, "reactWidgets": Cfg.reactWidgets, "reactCursor": Cfg.reactCursor,
+                     "idleMinutes": Cfg.idleMinutes, "battery": Cfg.battery, "onBattery": app.onBattery, "lowPower": app.lowPower],
       "update": app.updater.status, "newNotes": Cfg.hasNewNotes, "notesSeen": Cfg.notesSeen ?? ""]
     if let d = try? JSONSerialization.data(withJSONObject: st), let s = String(data: d, encoding: .utf8) { js(s) }
   }
@@ -940,6 +1098,7 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       return
     case "notesSeen": Cfg.notesSeen = Cfg.version; app.buildMenu()
     case "desktop": js("{\"t\":\"desktop\",\"d\":\(desktopJSON(display: (o["display"] as? Int).flatMap { CGDirectDisplayID(exactly: $0) }))}"); return
+    case "openAutomation": NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!); return
     case "open": if let s = o["url"] as? String, let url = URL(string: s), ["https", "http"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }; return
     case "log": log("[ui] \(o["s"] as? String ?? "")"); return
     case "apply": if let id = o["theme"] as? String, Cfg.themes.contains(where: { $0.0 == id }) { Cfg.clearDisplayThemes(); Cfg.theme = id; app.reloadAll() }
@@ -957,12 +1116,20 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
         if args.contains("--ui-only") { toast("Development window: the login item isn't changed."); break }
         if LoginItem.blocked && (v as? Bool ?? false) { SMAppService.openSystemSettingsLoginItems(); break }
         if let why = LoginItem.set(v as? Bool ?? false) { toast(why) }
-      case "restWhenIdle": Cfg.restWhenIdle = v as? Bool ?? true
+      case "restWhenIdle": Cfg.idleMinutes = (v as? Bool ?? true) ? Cfg.idleLast : 0
       case "spanWorlds": Cfg.spanWorlds = v as? Bool ?? true; app.resendDesks(); app.tracker.forceResend()   // each page: its new world's windows
+      case "deskIcons": Cfg.deskIcons = v as? Bool ?? false; app.deskIcons.start()   // turning it on is when macOS asks, once
       case "autoUpdate": Cfg.autoUpdate = v as? Bool ?? true; if Cfg.autoUpdate { app.updater.check(manual: false) }
       case "paused": app.userPaused = v as? Bool ?? false; app.dispatch(live: false)
       case "fps": Cfg.fps = (v as? NSNumber)?.doubleValue ?? 0; app.reloadAll()
       case "margin": Cfg.margin = (v as? NSNumber)?.doubleValue ?? 140; app.tracker.forceResend(); app.dispatch(live: false)   // every page, now
+      case "reactWindows", "reactStage", "reactWidgets":
+        let on = v as? Bool ?? true, k = o["key"] as? String ?? ""
+        if k == "reactWindows" { Cfg.reactWindows = on } else if k == "reactStage" { Cfg.reactStage = on } else { Cfg.reactWidgets = on }
+        app.tracker.forceResend(); app.dispatch(live: false)
+      case "reactCursor": Cfg.reactCursor = v as? Bool ?? true; if !Cfg.reactCursor { for w in app.walls.values { w.send("{\"t\":\"cursorOff\"}") } }
+      case "idleMinutes": Cfg.idleMinutes = (v as? NSNumber)?.doubleValue ?? 3
+      case "battery": Cfg.battery = (v as? NSNumber)?.intValue ?? 0; app.checkPower()
       default: break }
     case "reload": app.reloadAll()
     case "checkUpdate": app.updater.check(manual: false, fromWindow: true)
@@ -1066,6 +1233,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
   var walls: [CGDirectDisplayID: Wallpaper] = [:]
   let tracker = Tracker()
+  let deskIcons = DeskIcons()
+  func sendDeskIcons() { for w in walls.values { w.sendDeskIcons() }; appWindow.pushState(); appWindow.pushDesktop(icons: true) }
   var status: NSStatusItem!
   var userPaused = benchMode ? args.contains("--paused") : Cfg.d.bool(forKey: "paused") { didSet { if !benchMode { Cfg.d.set(userPaused, forKey: "paused") } } }
   var locked = false, displaysAsleep = false, awayTimer: Timer?, releasedAway = false, idleRest = false, idleTimer: Timer?, testPauseArmed = false
@@ -1107,6 +1276,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if benchMode, let fs = argValue("--fakescreens"), let b = NSScreen.screens.first.map({ CGRect(origin: .zero, size: $0.frame.size) }) {   // dev
       switch fs {
       case "row": fakeWorld = [1001: CGRect(x: -1920, y: b.minY - 98, width: 1920, height: 1080), 1002: b, 1003: CGRect(x: b.maxX, y: b.minY - 98, width: 1920, height: 1080)]
+      case "above2": fakeWorld = [1001: CGRect(x: b.minX - 1533, y: b.minY - 1080, width: 1920, height: 1080), 1002: CGRect(x: b.minX + 387, y: b.minY - 1080, width: 1920, height: 1080), 1003: b]   // two monitors side by side above the laptop, meeting over it
       case "two": fakeWorld = [1001: CGRect(x: -1920, y: b.maxY - 1080, width: 1920, height: 1080), 1002: b]                      // one monitor left of the laptop, bottoms level
       case "portrait": fakeWorld = [1001: b, 1002: CGRect(x: b.maxX, y: b.minY - 420, width: 1080, height: 1920)]               // a monitor on its side, to the right
       case "big": fakeWorld = [1001: CGRect(x: b.minX - 300, y: b.minY - 1440, width: 2560, height: 1440), 1002: b]             // a 1440p monitor above, overhanging
@@ -1116,6 +1286,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       for (id, f) in fakeWorld where f != b { fakeScale[id] = args.contains("--fakeretina") ? 2 : 1 }
     }
     buildWalls()
+    DeskIcons.shared = deskIcons
+    deskIcons.onChange = { [weak self] in self?.sendDeskIcons(); self?.retuneTunnel() }
+    deskIcons.resting = { [weak self] in guard let self else { return true }; return Tracker.idle || self.releasedAway }
+    if benchMode, let n = argValue("--fakeicons").flatMap(Int.init) {    // dev: a column of n icons down the main display's right edge
+      let main = fakeWorld.first(where: { $0.value.origin == .zero })?.value ?? NSScreen.screens.first.map { CGRect(origin: .zero, size: $0.frame.size) } ?? .zero
+      let g = DeskIcons.geometry(), step = g.icon + g.text * 2.6 + 30, rows = max(1, Int((main.height - 60) / step))
+      deskIcons.fake = (0..<n).map { i in let c = CGPoint(x: main.maxX - 66 - CGFloat(i / rows) * 108, y: main.minY + 73 + CGFloat(i % rows) * step); return (DeskIcons.box(c, g), DeskIcons.image(c, g)) }
+    }
+    deskIcons.start()
     tracker.onUpdate = { [weak self] r, live in self?.lastRects = r; self?.lastOwners = self?.tracker.owners ?? []; self?.dispatch(live: live) }
     tracker.onCursor = { [weak self] p in
       guard let self else { return }
@@ -1130,11 +1309,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // nobody at the Mac (no mouse or key for 3 minutes): every page rests; the first touch wakes them. A once-a-second
     // look at the system's input clock, which needs no permission.
     if !benchMode || argValue("--idletest") != nil {
-      let limit = Double(argValue("--idletest") ?? "180") ?? 180
+      let test = argValue("--idletest").flatMap(Double.init)
+      var tick = 0
       idleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
         guard let self else { return }
+        tick += 1; if tick % 10 == 1 { self.checkPower() }
         let quiet = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
-        let rest = Cfg.restWhenIdle && quiet > limit
+        let limit = test ?? Cfg.idleMinutes * 60
+        let rest = limit > 0 && quiet > limit
         if rest != self.idleRest { self.idleRest = rest; log(rest ? "idle: resting" : "input: awake"); self.dispatch(live: false) }
       }
     }
@@ -1213,7 +1395,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
           else if (r < .68) a = { t: 'set', key: 'paused', value: Math.random() < .3 };
           else if (r < .76) a = { t: 'set', key: 'margin', value: Math.round(80 + Math.random() * 120) };
           else if (r < .84) a = { t: 'variant', theme: Math.random() < .5 ? 'lava' : 'wind', id: Math.random() < .5 ? 'blue' : 'IND' };
-          else if (r < .9) a = { t: 'set', key: 'restWhenIdle', value: Math.random() < .5 };
+          else if (r < .9) a = Math.random() < .5 ? { t: 'set', key: 'idleMinutes', value: [0, 1, 3, 10][Math.floor(Math.random() * 4)] } : { t: 'set', key: ['reactWindows', 'reactStage', 'reactWidgets', 'reactCursor'][Math.floor(Math.random() * 4)], value: Math.random() < .5 };
           else if (r < .95) a = { t: 'reload' };
           else a = { t: 'desktop', display: ids[0] };
           send(a); return JSON.stringify(a); })()
@@ -1315,8 +1497,31 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
   }
   /// a theme changed somewhere: worlds may have grown or shrunk, so every page hears its desk again
-  func resendDesks() { for w in walls.values { w.sendDesk() } }
+  func resendDesks() { for w in walls.values { w.sendDesk(); w.sendDeskIcons() } }
   func reloadAll() { walls.values.forEach { $0.close() }; walls = [:]; comeBackIfAway(); buildWalls() }
+  /// Wind Tunnel with no model chosen runs on your desktop icons while you have some, and on its default model when you
+  /// have none: when that flips (the first file lands on an empty desktop, the last one goes), reopen it, once things settle
+  private var tunnelT: Timer?
+  func retuneTunnel() {
+    tunnelT?.invalidate()
+    tunnelT = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+      guard let self else { return }
+      let v = Cfg.variant("tunnel"), stale = self.walls.filter { Cfg.theme(for: $0.key) == "tunnel" && $0.value.loadedVariant != v }.map(\.key)
+      for id in stale { self.reloadWall(id) }
+      if !stale.isEmpty { self.appWindow.pushState() }
+    }
+  }
+  /// On battery, as Settings asks: the same, calmer (pages draw at half their rate), or paused. Low Power Mode counts.
+  private(set) var onBattery = false, lowPower = false, batteryPause = false, paceK = 1.0
+  func checkPower() {
+    let fake = Updater.devBuild ? ProcessInfo.processInfo.environment["TIDEWALL_FAKE_BATTERY"] : nil   // dev: test the battery paths plugged in
+    let unplugged = fake.map { $0 == "1" } ?? ((IOPSGetProvidingPowerSourceType(nil)?.takeUnretainedValue() as String?) == kIOPSBatteryPowerValue)
+    let low = fake == nil && ProcessInfo.processInfo.isLowPowerModeEnabled, bat = unplugged || low
+    let pause = bat && Cfg.battery == 2, k = bat && Cfg.battery == 1 ? 2.0 : 1.0
+    if unplugged != onBattery || low != lowPower { onBattery = unplugged; lowPower = low; appWindow.pushState() }
+    if k != paceK { paceK = k; for w in walls.values { w.sendPace() }; log("power: pages at \(k == 1 ? "full" : "half") rate") }
+    if pause != batteryPause { batteryPause = pause; log(pause ? "power: on battery, paused" : "power: running"); dispatch(live: false) }
+  }
   func reloadWall(_ id: CGDirectDisplayID) { walls[id]?.close(); walls[id] = nil; comeBackIfAway(); buildWalls() }
   /// while the pages are let go (paused or away) a new theme or setting must still show: bring the pages back (the
   /// stills stay up until each new page has drawn), and let the away timer let them go again later
@@ -1327,6 +1532,13 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   var coveredSince: [CGDirectDisplayID: Double] = [:], dormant: Set<CGDirectDisplayID> = []
+  /// whether the scene reshapes itself around this rect (Settings ▸ The wallpaper reacts to)
+  func reacts(_ i: Int) -> Bool {
+    let r = lastRects[i], owner = i < lastOwners.count ? lastOwners[i] : ""
+    if Tracker.stageRects.contains("\(r)") { return Cfg.reactStage }
+    if Tracker.widgetRects.contains("\(r)") || ["Notification Centre", "Notification Center", "WidgetKit Simulator"].contains(owner) { return Cfg.reactWidgets }
+    return Cfg.reactWindows
+  }
   func dispatch(live: Bool) {
     let now = ProcessInfo.processInfo.systemUptime
     for s in NSScreen.screens where !benchMode && !live {
@@ -1340,7 +1552,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
     }
     scheduleCoverCheck()
-    Tracker.idle = userPaused || asleep || idleRest
+    Tracker.idle = userPaused || asleep || idleRest || batteryPause
     // away for a while (locked, displays asleep, or paused from the menu): every page is let go, all of its memory with it,
     // and the wallpapers are rebuilt the moment you're back
     if userPaused || asleep || idleRest {
@@ -1357,11 +1569,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if hidden != Tracker.allHidden { Tracker.allHidden = hidden; log(hidden ? "everything covered: idling" : "something visible again") }
     for w in walls.values {
       let world = Cfg.spanThemes.contains(Cfg.theme(for: w.screenID)) ? worldFrames(for: w.screenID) : [w.cgFrame]
-      let idx = lastRects.indices.filter { r in world.contains { lastRects[r].intersects($0) } }
+      let idx = lastRects.indices.filter { r in world.contains { lastRects[r].intersects($0) } && reacts(r) }
       let mine = idx.map { lastRects[$0] }, names = idx.map { $0 < lastOwners.count ? lastOwners[$0] : "" }
       // never pause while windows are moving (a sliver of the town is still on show and must keep up)
-      let own = mine.filter { $0.intersects(w.cgFrame) }
-      let pause = userPaused || asleep || idleRest || (!live && uncoveredArea(w.cgFrame, own) < 1)
+      w.realRects = lastRects.filter { $0.intersects(w.cgFrame) }                 // (what's really over it, whatever the scene reacts to)
+      let own = w.realRects
+      let pause = userPaused || asleep || idleRest || batteryPause || (!live && uncoveredArea(w.cgFrame, own) < 1)
       w.update(rects: mine, owners: names, live: live, pause: pause)
     }
   }
@@ -1427,7 +1640,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     sub(NSScreen.screens.count > 1 ? "All Displays" : "Theme", Cfg.themes.map { (id, label) in (label, NSScreen.screens.count > 1 ? Cfg.theme == id && !NSScreen.screens.contains { Cfg.d.string(forKey: "theme.display.\($0.displayID)") != nil } : showing.contains(id), { Cfg.clearDisplayThemes(); Cfg.theme = id; self.reloadAll(); self.buildMenu(); self.appWindow.pushState() }) })
     m.addItem(.separator())
-    let ri = ClosureItem("Rest when idle") { Cfg.restWhenIdle.toggle(); self.buildMenu(); self.appWindow.pushState() }; ri.state = Cfg.restWhenIdle ? .on : .off
+    let ri = ClosureItem("Rest when idle") { Cfg.idleMinutes = Cfg.idleMinutes > 0 ? 0 : Cfg.idleLast; self.buildMenu(); self.appWindow.pushState() }; ri.state = Cfg.idleMinutes > 0 ? .on : .off
     let p = ClosureItem("Pause") { self.userPaused.toggle(); self.dispatch(live: false); self.buildMenu(); self.appWindow.pushState() }
     p.state = userPaused ? .on : .off; m.addItem(p); m.addItem(ri)
     let li = ClosureItem(LoginItem.blocked ? "Open at login (allow in System Settings…)" : "Open at login") {
@@ -1518,7 +1731,7 @@ enum Bench {
     }
     Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
       for w in app.walls.values where w.cgFrame.origin == .zero {
-        w.web.evaluateJavaScript("[(window.__prof?('JSms/frame='+(__prof.ms/Math.max(1,__prof.n)).toFixed(2)+' frames/s='+(__prof.n/((performance.now()-__prof.t0)/1000)).toFixed(1)):''),(typeof window.__dbg==='function'?__dbg():''), (typeof icons!=='undefined'?'icon0='+JSON.stringify(icons[0]&&{x:icons[0].x|0,y:icons[0].y|0,w:icons[0].w|0,h:icons[0].h|0})+' s@c='+(typeof curS==='function'&&icons[0]?curS(icons[0].x+icons[0].w/2,icons[0].y+icons[0].h/2).toFixed(0):'-')+' frames='+(typeof frameN!=='undefined'?frameN:'-')+' icons='+icons.length+' mix='+(typeof curMix!=='undefined'?curMix.toFixed(2):'-')+' from/to='+(typeof fromI!=='undefined'?fromI+'/'+toI:'-')+' morphT0='+(typeof morphT0!=='undefined'?(morphT0|0):'-')+' FB='+(typeof FB!=='undefined'&&!!FB)+' iconsSeen='+(typeof iconsSeen!=='undefined'?iconsSeen:'-'):''), devicePixelRatio, cv.width+'x'+cv.height, cv._scale, P.quality, Math.round(fpsEMA), fieldMs.toFixed(1), (window.__gl?window.__gl.drawingBufferWidth:0)+'x'+(window.__gl?window.__gl.drawingBufferHeight:0), paused].join(' ')") { r, _ in
+        w.web.evaluateJavaScript("(()=>{try{return [(window.__prof?('JSms/frame='+(__prof.ms/Math.max(1,__prof.n)).toFixed(2)+' frames/s='+(__prof.n/((performance.now()-__prof.t0)/1000)).toFixed(1)):''),(typeof window.__dbg==='function'?__dbg():''), (typeof icons!=='undefined'?'icon0='+JSON.stringify(icons[0]&&{x:icons[0].x|0,y:icons[0].y|0,w:icons[0].w|0,h:icons[0].h|0})+' s@c='+(typeof curS==='function'&&icons[0]?curS(icons[0].x+icons[0].w/2,icons[0].y+icons[0].h/2).toFixed(0):'-')+' frames='+(typeof frameN!=='undefined'?frameN:'-')+' icons='+icons.length+' mix='+(typeof curMix!=='undefined'?curMix.toFixed(2):'-')+' from/to='+(typeof fromI!=='undefined'?fromI+'/'+toI:'-')+' morphT0='+(typeof morphT0!=='undefined'?(morphT0|0):'-')+' FB='+(typeof FB!=='undefined'&&!!FB)+' iconsSeen='+(typeof iconsSeen!=='undefined'?iconsSeen:'-'):''), devicePixelRatio, cv.width+'x'+cv.height, cv._scale, P.quality, Math.round(fpsEMA), fieldMs.toFixed(1), (window.__gl?window.__gl.drawingBufferWidth:0)+'x'+(window.__gl?window.__gl.drawingBufferHeight:0), paused].join(' ')}catch(e){return 'page loading'}})()") { r, _ in
           let pid = webPid(w.web)
           log("bench fps/fieldMs/buffer/paused: \(r ?? "nil")  webpid=\(pid)  polls=\(app.tracker.polls) avgPollMs=\(String(format: "%.2f", app.tracker.pollMs / Double(max(app.tracker.polls, 1))))")
         }

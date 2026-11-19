@@ -38,6 +38,14 @@ paintings on a museum wall. Drag a window and the world re-arranges itself aroun
 run, koi swim and boats sail from screen to screen; one garden, one castle plan, one sea of islands, one long museum
 wall. Every theme but Lava Lamp and Wind Tunnel spans, and each display can also have its own theme.
 
+**Your desktop icons get room too**, each theme in its own way: a village green with a hedge on the railway, a
+flagstone terrace in the garden, shelves in a niche on the gallery wall, an island on the ink map and the beach, a
+lily pad on the reef, a cap of snow in the valley, a dark nebula on the star chart, a cartographer's halo on the wind
+map, and obstacles in the wind tunnel (which can run on your icons alone, with no model).
+
+**Make it yours.** Settings ▸ *What the wallpaper reacts to* turns each of windows, Stage Manager, desktop widgets,
+desktop icons and the pointer on or off.
+
 ## Install
 
 1. Download `Tidewall-<version>.zip` from [Releases](../../releases/latest) and double-click it to unzip.
@@ -69,16 +77,22 @@ A wallpaper runs all day, so Tidewall is built to cost as little as possible:
   pointer over it, a window being dragged); the soft, full-screen scenes draw a little under retina, which looks the
   same at about half the work.
 - Every display shares one web process.
-- A screen that's fully covered stops drawing. With no mouse or keyboard input for 3 minutes, everything pauses; after
-  10 minutes (or 90 seconds after locking) the pages are let go entirely and a still picture stands in, until you're
-  back.
+- A screen that's fully covered stops drawing. With no mouse or keyboard input for a while (3 minutes, or 1, 10 or
+  never in Settings), everything pauses; 10 minutes later (or 90 seconds after locking) the pages are let go entirely
+  and a still picture stands in, until you're back.
+- On battery or in Low Power Mode it can carry on as usual, draw at half the rate, or pause (Settings ▸ On battery).
+- Settings ▸ Frame rate: Auto, or a fixed 60, 30, 20 or 15.
 - Tidewall ▸ Settings shows what the wallpaper is costing right now: CPU, GPU and memory.
 
 ## Privacy
 
-Tidewall needs **no permissions**. Window positions come from the same public list the Dock and Mission Control use
-(`CGWindowListCopyWindowInfo`), and the app reads only their sizes, positions and app names, never their contents. It
-doesn't record your screen, log your keys, or collect anything.
+Tidewall needs **no permissions** for anything it does by default. Window positions come from the same public list
+the Dock and Mission Control use (`CGWindowListCopyWindowInfo`), and the app reads only their sizes, positions and app
+names, never their contents. It doesn't record your screen, log your keys, or collect anything.
+
+If you turn on **Desktop icons**, macOS asks once whether Tidewall may control Finder: it asks Finder only where your
+desktop icons are (`desktop position of every item of desktop`), never their names or contents. Leave it off and
+nothing is asked.
 
 The only network use is **Wind Map**, which fetches public weather data for a grid over the region you chose from
 [Open-Meteo](https://open-meteo.com) (no account, no identifiers). **Celestial Atlas** works out your city from your

@@ -290,7 +290,7 @@ let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1, NZ = null;
 // one world across displays (span.js). The meadow, its clouds and the drifting sky are laid out in world coordinates;
 // W×H is still this display (its boy and cat, which stay on the main display), OX/OY where it sits, WW×WH the world.
 // The cloud field reaches MG past every edge, so a cloud near a seam is worked out the same on both sides of it.
-let OX = 0, OY = 0, WW = innerWidth, WH = innerHeight;
+let OX = 0, OY = 0, WW = innerWidth, WH = innerHeight, deskIc = [];
 const MG = 240;
 function buildNoise() {
   const N = Gw * Gh;
@@ -592,21 +592,36 @@ function uploadField(i, Fd) {
 }
 
 const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+// Tidewall: window updates are laid once a frame (the host's drag shortcut used to snap the field on each one, and the
+// cloud puffs, rebuilt only every half second when nothing morphs, then jumped to catch up); a new shape mid-morph
+// carries on from where the clouds are, at speed, so the bank follows a dragged window
+let chase = false, pendingCommit = false, fieldV = 0, growing = false, laidKey = '';
+function mixAt(t) { const e = Math.min(Math.max((t - morphT0) / morphDur, 0), 1); return chase ? 1 - (1 - e) * (1 - e) : e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2; }
 function commit(fromEmpty = false) {
-  const nf = computeField(P.adaptive ? iconRects() : []);
-  const target = 1 - toI;
+  const rs = P.adaptive ? iconRects() : [], key = rs.map(r => [r.cx, r.cy, r.hw, r.hh].map(Math.round).join()).join('|');
+  if (!fromEmpty && FB && key === laidKey) return;                      // nothing moved
+  laidKey = key;
+  const nf = computeField(rs);
+  const target = 1 - toI, t = performance.now(), m = mixAt(t);
   if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); }
-  else FA = FB;
+  else if (FA && FB && FA !== FB && m < 1 && FA.s.length === FB.s.length) {   // where the clouds are right now
+    const s = new Float32Array(FB.s.length), a = FA.s, b = FB.s; for (let i = 0; i < s.length; i++) s[i] = a[i] + (b[i] - a[i]) * m;
+    FA = Object.assign({}, FB, { s }); uploadField(toI, FA);
+  } else FA = FB;
   FB = nf;
   uploadField(target, FB);
+  const going = t - morphT0 < morphDur, rising = going && growing;    // (not out of the clouds' first slow growth)
+  chase = !fromEmpty && going && !rising;
+  morphDur = fromEmpty ? 2600 : chase ? 800 : rising ? Math.max(MORPH_MS, morphDur - (t - morphT0)) : MORPH_MS;
+  growing = fromEmpty || rising;
   fromI = toI; toI = target;
-  morphT0 = performance.now();
-  morphDur = fromEmpty ? 2600 : MORPH_MS;
+  morphT0 = t;
+  fieldV++;
 }
 function refresh() {
   FA = FB = computeField(P.adaptive ? iconRects() : []);
   uploadField(toI, FB);
-  fromI = toI; morphT0 = -1e9;
+  fromI = toI; morphT0 = -1e9; fieldV++;
 }
 
 /* ======================================================================
@@ -757,8 +772,8 @@ function uploadCircles(t) {
     circBuf = new Float32Array(gw * CIRC_K * gh * 4);
   }
   // 图标周围云团的圆：只在图标挪动时（场在过渡）每帧重算，平时每 0.5 秒重算一次（呼吸很慢，看不出跳）
-  const morphing = curMix < 1 || !massList || massList.W !== W || massList.H !== H;
-  if (morphing || t - massT > 0.5) { massList = buildMassCircles(); massList.W = W; massList.H = H; massT = t; }
+  const morphing = curMix < 1 || !massList || massList.W !== W || massList.H !== H || massList.v !== fieldV;   // (and whenever the field itself changed)
+  if (morphing || t - massT > 0.5) { massList = buildMassCircles(); massList.W = W; massList.H = H; massList.v = fieldV; massT = t; }
   const list = massList.slice();
   for (let i = 0; i < list.length; i += 4) {
     const x = list[i], y = list[i + 1], r = list[i + 2], ph = list[i + 3];
@@ -932,8 +947,8 @@ function frame(now) {
   const dt = lastT ? Math.min((now - lastT) / 1000, 0.1) : 0.03;
   if (lastT) fpsEMA = fpsEMA ? fpsEMA * 0.9 + (1 / dt) * 0.1 : 1 / dt;
   lastT = now;
-  const e = Math.min((now - morphT0) / morphDur, 1);
-  curMix = e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2;
+  if (pendingCommit) { pendingCommit = false; commit(); }
+  curMix = mixAt(now);
   stepSkyClouds(dt);
   draw(now);
   if (++frameN % 10 === 0) updateStats();
@@ -1158,15 +1173,19 @@ function startHostedMode() {
   const handle = m => {
     if (m.t === 'pause') { paused = PREVIEW ? false : m.v; Span.paused(!!paused); if (!paused && !looping) { looping = true; requestAnimationFrame(frame); } return; }
     if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'dicons') { const k = window.devicePixelRatio || 1, P = 22;   // your desktop icons: a small cloud under each cluster
+      deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k - P, y: t / k - P, w: (r - l) / k + 2 * P, h: (b - t) / k + 2 * P }));
+      if (lastIconsMsg) handle(lastIconsMsg); return; }
     if (m.t === 'desk') { const dk = [m.x, m.y, m.w, m.h, m.uw, m.uh, JSON.stringify(m.fr || [])].join('|'); if (dk === deskKey) return; deskKey = dk;
       worldDesk(m); if (lastIconsMsg) { first = true; handle(lastIconsMsg); } else commit(true); return; }
     if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
     if (m.t !== 'icons') return;
     lastIconsMsg = m;
     const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
-    icons = m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : [];
+    icons = (m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : []).concat(deskIc);   // (your desktop icons: a small cloud each)
     if (PREVIEW) drawGhosts();
     iconsSeen = true;
+    if (!first) { pendingCommit = true; return; }                     // laid at the next frame
     commit(first);                                // 第一次：云慢慢长出来；之后：云跟着图标平滑移动
     first = false;
   };

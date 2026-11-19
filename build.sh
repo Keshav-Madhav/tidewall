@@ -36,6 +36,7 @@ cat > "$APP/Contents/Info.plist" <<PL
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.lifestyle</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Tidewall asks Finder where your desktop icons are, so the wallpaper can make room for them. It reads their positions only, nothing else.</string>
   <key>NSHumanReadableCopyright</key><string>GPL-3.0. Began as a fork of Deskland.</string>
 </dict></plist>
 PL

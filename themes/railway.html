@@ -74,8 +74,8 @@ function eWin(x, y) { let e = 1e5; for (const s of slots) e = Math.min(e, sdRB(x
 function setTargets(list) {
   const key = list.map(t => `${t.x | 0},${t.y | 0},${t.w | 0},${t.h | 0},${t.owner},${t.sm}`).join(';');
   if (key === lastKey) return; lastKey = key;                        // nothing changed on this screen: nothing to redo
-  const obs = list.filter(t => t.owner === '__gap');                 // the world's gaps: kept clear, never a town
-  const sm = list.filter(t => t.sm), rest = list.filter(t => !t.sm && t.owner !== '__gap' && t.w >= 50 && t.h >= 40 && t.x > -20);
+  const obs = list.filter(t => t.owner === '__gap' || t.owner === '__icons');   // the world's gaps and your desktop icons: kept clear, never a town
+  const sm = list.filter(t => t.sm), rest = list.filter(t => !t.sm && t.owner !== '__gap' && t.owner !== '__icons' && t.w >= 50 && t.h >= 40 && t.x > -20);
   if (sm.length) { const x0 = Math.min(...sm.map(t => t.x)), y0 = Math.min(...sm.map(t => t.y)), x1 = Math.max(...sm.map(t => t.x + t.w)), y1 = Math.max(...sm.map(t => t.y + t.h));
     rest.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, owner: 'Stage Manager', stage: true }); }
   const used = new Set();
@@ -85,7 +85,8 @@ function setTargets(list) {
     if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
     else { const c = { id: nextId++, owner: t.owner, stage: !!t.stage, x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, life: 0, alive: true }; slots.push(c); used.add(c); }
   }
-  for (const c of slots) c.town = !c.stage && c.tw >= 200 && c.th >= 140 && c.owner !== 'Notification Centre' && c.owner !== '__gap';   // a town for a real app window; Stage Manager and widgets are just open ground
+  for (const c of slots) c.town = !c.stage && c.tw >= 200 && c.th >= 140 && c.owner !== 'Notification Centre' && c.owner !== '__gap' && c.owner !== '__icons';
+  for (const c of slots) c.green = c.owner === '__icons';             // desktop icons: a village green   // a town for a real app window; Stage Manager and widgets are just open ground
   for (const c of slots) if (!used.has(c)) c.alive = false;
   dirty = true; wake();
 }
@@ -624,7 +625,11 @@ function layScenery() {
   const plat = [];
   for (const st of stations) if (st.ok) for (let u = -46; u <= 46; u += 5) { const p = at(st.L, st.s + u), a = tangent(st.L, st.s + u); for (const o of [10, 15, 20, 25, 30]) plat.push([p[0] - Math.sin(a) * o * st.side, p[1] + Math.cos(a) * o * st.side]); }
   const onPlat = (x0, y0, x1, y1) => plat.some(([x, y]) => x > x0 - 3 && x < x1 + 3 && y > y0 - 3 && y < y1 + 3);
-  const overlaps = (x0, y0, x1, y1) => foot.some(f => x0 < f[2] && x1 > f[0] && y0 < f[3] && y1 > f[1]);
+  // footprints in a grid of 64 pt cells: "does this overlap a building?" looks only where it is (the same answers as
+  // checking every footprint, which made laying out a whole world's scenery quadratic: ~5,400 candidates × hundreds)
+  const FG = 64, fgrid = new Map(), fk = (i, j) => i * 100003 + j;
+  const addFoot = f => { foot.push(f); for (let j = Math.floor(f[1] / FG); j <= Math.floor(f[3] / FG); j++) for (let i = Math.floor(f[0] / FG); i <= Math.floor(f[2] / FG); i++) { const k = fk(i, j); let a = fgrid.get(k); if (!a) fgrid.set(k, a = []); a.push(f); } };
+  const overlaps = (x0, y0, x1, y1) => { for (let j = Math.floor(y0 / FG); j <= Math.floor(y1 / FG); j++) for (let i = Math.floor(x0 / FG); i <= Math.floor(x1 / FG); i++) { const a = fgrid.get(fk(i, j)); if (a) for (const f of a) if (x0 < f[2] && x1 > f[0] && y0 < f[3] && y1 > f[1]) return true; } return false; };
   const walk = (x0, y0, x1, y1) => { const d = Math.hypot(x1 - x0, y1 - y0), n = Math.max(1, Math.ceil(d / 5)); for (let k = 0; k <= n; k++) if (tAt(x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n) < 6) return false; return true; };
   const toRing = (s, x, y) => { const px = clamp(x, s.x, s.x + s.w), py = clamp(y, s.y, s.y + s.h), l = Math.hypot(x - px, y - py) || 1; return [px + (x - px) / l * OM, py + (y - py) / l * OM]; };
   const hitsFoot = (x0, y0, x1, y1) => onPlat(x0, y0, x1, y1) || overlaps(x0, y0, x1, y1);
@@ -637,7 +642,7 @@ function layScenery() {
       const x0 = q[0] - dw / 2, by = q[1] + dh * .3, y0 = by - dh;
       if (clearOf(x0, y0, x0 + dw, by, 8, .5, 4) && !overlaps(x0, y0, x0 + dw, by) && (sd !== st.side || walk(q[0], by - 3, p[0] - Math.sin(a) * sd * 14, p[1] + Math.cos(a) * sd * 14))) placed = { q, x0, y0, by, sd, u }; }
     if (!placed) continue;
-    out.push({ id: 'sb' + st.id, x: placed.q[0], y: placed.by, src: 'houses', r, dw, ok: true }); foot.push([placed.x0, placed.y0, placed.x0 + dw, placed.by]);
+    out.push({ id: 'sb' + st.id, x: placed.q[0], y: placed.by, src: 'houses', r, dw, ok: true }); addFoot([placed.x0, placed.y0, placed.x0 + dw, placed.by]);
     if (placed.sd !== st.side) footbridges.push({ L: st.L, s: st.s + placed.u * .5 + (placed.u ? 0 : 20) });
     // the station's own little place: houses on its side, reachable from it; or one landmark if only that fits
     const sd = placed.sd; let nb = 0;
@@ -646,7 +651,7 @@ function layScenery() {
       const n = st.s * .37 + u * 1.3, lm = nb === 0 && h1(n) < .35, [nm, w0] = lm ? [['watertower', 18], ['bandstand', 22], ['windmill', 22]][Math.floor(h1(n + .4) * 3)] : TOWN[Math.floor(h1(n + .7) * TOWN.length)];
       const rr = ATLAS.H[nm], hh = w0 * rr[3] / rr[2], x0 = q[0] - w0 / 2, by = q[1] + hh * .35, y0 = by - hh;
       if (!clearOf(x0, y0, x0 + w0, by, 8, .45, 4) || hitsFoot(x0 + 1, y0 + 1, x0 + w0 - 1, by) || !walk(q[0], by - 3, placed.q[0], placed.by - 3)) continue;
-      out.push({ id: `sh${st.id}:${u}`, x: q[0], y: by, src: 'houses', r: rr, dw: w0, ok: true }); foot.push([x0 + 1, y0 + 1, x0 + w0 - 1, by]); nb++; }
+      out.push({ id: `sh${st.id}:${u}`, x: q[0], y: by, src: 'houses', r: rr, dw: w0, ok: true }); addFoot([x0 + 1, y0 + 1, x0 + w0 - 1, by]); nb++; }
   }
   // the towns: two rows of houses facing the road on every side of each window
   for (const s of slots) {
@@ -673,7 +678,7 @@ function layScenery() {
           const rp = toRing(s, x0 + dw / 2, y0 + dh * .75);
           const ok = s.alive && clearOf(x0, y0, x0 + dw, y0 + dh, 9, .3) && !hitsFoot(x0 + 1, y0 + 1, x0 + dw - 1, y0 + dh) && walk(x0 + dw / 2, y0 + dh * .75, rp[0], rp[1]);   // the whole house clear, and reachable
           out.push({ id: `h${s.id}:${row}:${sd}:${k}`, x: x0 + dw / 2, y: y0 + dh, src: 'houses', r, dw, ok });
-          if (ok) foot.push([x0 + 1, y0 + 1, x0 + dw - 1, y0 + dh]);
+          if (ok) addFoot([x0 + 1, y0 + 1, x0 + dw - 1, y0 + dh]);
         }
       }
     }
@@ -681,7 +686,7 @@ function layScenery() {
   // the villages: houses along their streets and round their squares
   for (const t of villageScen) { const r = t.r, dh = t.dw * r[3] / r[2], x0 = t.x - t.dw / 2, y0 = t.y - dh;
     const ok = clearOf(x0, y0, x0 + t.dw, t.y, 8, .3, 3.5) && !hitsFoot(x0 + 1, y0 + 1, x0 + t.dw - 1, t.y) && !villages.some(v => Math.hypot(t.x - v.x, t.y - dh / 2 - v.y) < 18);
-    out.push({ id: t.id, x: t.x, y: t.y, src: 'houses', r, dw: t.dw, ok }); if (ok) foot.push([x0 + 1, y0 + 1, x0 + t.dw - 1, t.y]); }
+    out.push({ id: t.id, x: t.x, y: t.y, src: 'houses', r, dw: t.dw, ok }); if (ok) addFoot([x0 + 1, y0 + 1, x0 + t.dw - 1, t.y]); }
   // the fields
   fields = [];
   for (const f of staticFields) {
@@ -696,15 +701,18 @@ function layScenery() {
   for (let q = 0; q < markSpots.length && mk < MARKS.length; q++) {
     const [x, y] = markSpots[q], [nm, dw] = MARKS[mk], r = ATLAS.H[nm], dh = dw * r[3] / r[2], by = y + dh * .3, x0 = x - dw / 2, y0 = by - dh;
     if (!(clearOf(x0, y0, x0 + dw, by, 11, 2) && hAt(x, y) > .16 && kAt(x, y) > T + 10 && !hitsFoot(x0, y0, x0 + dw, by))) continue;
-    foot.push([x0, y0, x0 + dw, by]); out.push({ id: `m${q}${nm}`, x, y: by, src: 'houses', r, dw, ok: true }); mk++;
+    addFoot([x0, y0, x0 + dw, by]); out.push({ id: `m${q}${nm}`, x, y: by, src: 'houses', r, dw, ok: true }); mk++;
   }
   for (const s0 of VIS.keys()) if (s0[0] === 'm' && !out.some(o => o.id === s0)) { const [, q, nm] = s0.match(/^m(\d+)(\D+)$/) || []; if (nm && markSpots[q]) { const r = ATLAS.H[nm], dw = MARKS.find(m => m[0] === nm)[1], dh = dw * r[3] / r[2]; out.push({ id: s0, x: markSpots[q][0], y: markSpots[q][1] + dh * .3, src: 'houses', r, dw, ok: false }); } }
-  // farms and trees wherever they still fit
+  // farms and trees wherever they still fit (only near this display: across several, each page laid out every tree in
+  // the world; whether one fits depends only on what's within a few dozen points, so the ones on show come out the same)
+  const far = (x, y, m = 120) => Span.world && (x < OX - m || y < OY - m || x > OX + SW + m || y > OY + SH + m + 40);   // (farms further: one can block what blocks a tree)
   for (const t of staticScen) {
     const r = t.r, dh = t.dw * r[3] / r[2], x0 = t.x - t.dw / 2, y0 = t.y - dh;
+    if (far(t.x, t.y, t.bld ? 240 : 120)) { out.push({ id: t.id, x: t.x, y: t.y, src: t.src, r, dw: t.dw, ok: false, tree: !t.bld }); continue; }
     let ok;
     if (t.bld) { ok = clearOf(x0, y0, x0 + t.dw, t.y, 10, LV[0]) && !hitsFoot(x0, y0, x0 + t.dw, t.y) && !inField(t.x, t.y) && kAt(t.x, t.y) > T + 8 && (!t.belt || outside(t.x, t.y));
-      if (ok) foot.push([x0, y0, x0 + t.dw, t.y]); }
+      if (ok) addFoot([x0, y0, x0 + t.dw, t.y]); }
     else { const hb = hAt(t.x, t.y);
       ok = clearOf(t.x - t.dw * .4, t.y - dh, t.x + t.dw * .4, t.y, 8, 2) && hb < LV[5] && !inField(t.x, t.y) && !hitsFoot(t.x - t.dw * .35, t.y - dh * .8, t.x + t.dw * .35, t.y) && kAt(t.x, t.y) > HOUSE_GAP + 2 * ROW2 && (!t.belt || outside(t.x, t.y)) && !villages.some(v => Math.hypot(t.x - v.x, t.y - v.y) < 26); }
     out.push({ id: t.id, x: t.x, y: t.y, src: t.src, r, dw: t.dw, ok, tree: !t.bld });
@@ -750,6 +758,7 @@ function drawBoard(ctx) {
     bx.save(); bx.translate(0, LIFT); bx.fillStyle = LV_SIDE[k]; bx.fill(p, 'evenodd'); bx.restore();
     bx.fillStyle = LV_TOP[k]; bx.fill(p, 'evenodd');
     bx.strokeStyle = 'rgba(255,255,235,.55)'; bx.lineWidth = 1.2; bx.stroke(p); });
+  for (const sl of slots) if (sl.green && sl.life > .02) drawGreen(sl);
   drawRoadNet();
   for (const L of ghosts) drawLine(L);
   for (const L of branches) drawLine(L);
@@ -798,6 +807,34 @@ function drawField(f) {
   bx.beginPath(); bx.roundRect(-f.w / 2, -f.h / 2, f.w, f.h, 4);                                           // a round-topped hedge round it
   bx.save(); bx.translate(1, 1.6); bx.lineWidth = 4; bx.strokeStyle = 'rgba(30,60,20,.25)'; bx.stroke(); bx.restore();
   bx.lineWidth = 3.5; bx.strokeStyle = '#4f8a36'; bx.stroke(); bx.lineWidth = 1.3; bx.strokeStyle = 'rgba(170,220,120,.7)'; bx.setLineDash([1.3, 2]); bx.stroke(); bx.setLineDash([]);
+  bx.restore();
+}
+// your desktop icons stand on a village green: a mown lawn in stripes, a white picket fence round it, nothing built on it
+function drawGreen(s) {
+  // a village green the shape of your icons (a patch round each, run together), pasture-coloured and mown in soft
+  // stripes, edged by a hedge of the board's own bushes along its outer edge only
+  const pad = 18, a = clamp(s.life * 1.3 - .15, 0, 1);   // wide enough that neighbouring icons share one green
+  let rs = deskIcR.filter(([l, t, r, b]) => (l + r) / 2 > s.x - 30 && (l + r) / 2 < s.x + s.w + 30 && (t + b) / 2 > s.y - 30 && (t + b) / 2 < s.y + s.h + 30);
+  if (!rs.length) rs = [[s.x, s.y, s.x + s.w, s.y + s.h]];
+  rs = rs.map(([l, t, r, b]) => [l - pad, t - pad, r + pad, b + pad]);
+  const lawn = new Path2D(); for (const [l, t, r, b] of rs) lawn.roundRect(l, t, r - l, b - t, 7);
+  const X0 = Math.min(...rs.map(q => q[0])), Y0 = Math.min(...rs.map(q => q[1])), X1 = Math.max(...rs.map(q => q[2])), Y1 = Math.max(...rs.map(q => q[3]));
+  bx.save(); bx.globalAlpha = a; bx.fillStyle = '#9fd06e'; bx.fill(lawn);
+  bx.clip(lawn); bx.fillStyle = 'rgba(255,255,225,.07)';                             // mown stripes, along its length
+  if (X1 - X0 >= Y1 - Y0) for (let sy = Y0; sy < Y1; sy += 20) bx.fillRect(X0, sy, X1 - X0, 10); else for (let sx = X0; sx < X1; sx += 20) bx.fillRect(sx, Y0, 10, Y1 - Y0);
+  bx.restore();
+  if (!ATLAS || !IMG.trees.complete || !ATLAS.T.bush.length) return;
+  const inside = (px, py, me) => rs.some((q, i) => i !== me && px >= q[0] - 1 && px <= q[2] + 1 && py >= q[1] - 1 && py <= q[3] + 1);   // on or in another patch: inside the green
+  const pts = [];
+  rs.forEach(([l, t, r, b], i) => { const w = r - l, h = b - t, per = 2 * (w + h), n = Math.max(8, Math.round(per / 7));   // a bush every ~7 px round the edge
+    for (let k = 0; k < n; k++) { let d = k / n * per, px, py;
+      if (d < w) { px = l + d; py = t; } else if ((d -= w) < h) { px = r; py = t + d; } else if ((d -= h) < w) { px = r - d; py = b; } else { px = l; py = b - (d - w); }
+      if (!inside(px, py, i)) pts.push([px, py + 3, Math.round(px * 3 + py * 7)]); } });
+  pts.sort((p, q) => p[1] - q[1]);
+  bx.save(); bx.globalAlpha = a; bx.fillStyle = 'rgba(35,70,25,.22)';
+  for (const [px, py] of pts) { bx.beginPath(); bx.ellipse(px + 2.5, py - 1, 5, 2.6, .45, 0, 7); bx.fill(); }   // their shadows, to the lower right like the rest
+  for (const [px, py, seed] of pts) { const list = ATLAS.T.bush, rr = list[Math.floor(h1(seed) * list.length)], dh = 8 + 2.5 * h1(seed + .3), dw = dh * rr[2] / rr[3];
+    bx.drawImage(IMG.trees, rr[0], rr[1], rr[2], rr[3], px - dw / 2, py - dh, dw, dh); }
   bx.restore();
 }
 function drawRoad(s) {
@@ -1403,7 +1440,7 @@ let lastWinMsg = null, frameDT = 1 / 30;               // frameDT: the real fram
 function build() { SW = innerWidth; SH = innerHeight; W = Span.uw; H = Span.uh; OX = Span.x; OY = Span.y; K = devicePixelRatio;
   cv.width = Math.round(SW * K); cv.height = Math.round(SH * K); prep(); clearMovers(); buildStatic(); first = true; dirty = true; wake();
   if (lastWinMsg) handle(lastWinMsg); }                                // the screen's scale may have changed
-let deskKey = '';
+let deskKey = '', deskIc = [], deskIcR = [];
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
   if (m.t === 'desk') { const k = [m.i, m.n, m.w, m.h, m.x, m.y, JSON.stringify(m.fr || [])].join('|'); if (k === deskKey) return; deskKey = k;
@@ -1411,12 +1448,18 @@ const handle = m => {
     VIS.clear(); visOf = [null, null, null]; lastKey = ''; build(); return; }
   if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; curAt(x, y, -1); Span.post('cur', { x, y }); return; }
   if (m.t === 'cursorOff') { if (curFrom === -1) { cur.on = false; Span.post('curoff', {}); } return; }
+  if (m.t === 'dicons') { const k = devicePixelRatio;                // your desktop icons, cluster by cluster
+    deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k, owner: '__icons' }));
+    deskIcR = (m.r || []).map(([l, t, r, b]) => [l / k + OX, t / k + OY, r / k + OX, b / k + OY]);   // each icon, for the shape of its green
+    dirty = true; wake();                                               // (the green's shape can change while the clusters don't)
+    if (lastWinMsg) handle(lastWinMsg); return; }
   if (m.t === 'windows') { lastWinMsg = m; const K = devicePixelRatio;
     const list = m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }));
     if (Span.world) {                                                  // what no display shows, and each lower display's menu bar
       for (const g of Span.gaps()) list.push({ x: g.x, y: g.y, w: g.w, h: g.h, owner: '__gap' });
       for (const F of Span.frames()) if (F[1] > 1) list.push({ x: F[0], y: F[1], w: F[2], h: MENU, owner: '__gap' });
     }
+    for (const d of deskIc) list.push(d);
     setTargets(list); }
 };
 build();

@@ -165,8 +165,9 @@ self.onmessage = e => {
 // display works out only its own part of it (W×H at OX, OY) plus a margin M, so its walls meet its neighbours' at the
 // seams. FR: every display's frame in the world (null when alone). Grid cell (gx, gy) is world point (X0 + gx·C, Y0 + gy·C).
 function onOneOf(FR, W, H, x0, y0, x1, y1) { return !FR ? x0 >= 0 && y0 >= 0 && x1 <= W && y1 <= H : FR.some(([fx, fy, fw, fh]) => x0 >= fx && y0 >= fy && x1 <= fx + fw && y1 <= fy + fh); }
-function buildTown({ W, H, K, seed, t: tNow = 1, OX = 0, OY = 0, WW = W, WH = H, CX = W * .09, CY = H * .15, FR = null, E = null, paperSeed = 1 }) {
-  const R = rng(seed), C = 3, wins = [], M = FR ? 160 : 0, X0 = Math.floor((OX - M) / C) * C, Y0 = Math.floor((OY - M) / C) * C;   // on the world's grid
+function buildTown({ W, H, K, seed, t: tNow = 1, OX = 0, OY = 0, WW = W, WH = H, CX = W * .09, CY = H * .15, FR = null, E = null, paperSeed = 1, icons = [] }) {
+  const R = rng(seed), C = 3, wins = icons,   // what the still parts must keep clear of: your desktop icons (towers, street names, marks)
+   M = FR ? 160 : 0, X0 = Math.floor((OX - M) / C) * C, Y0 = Math.floor((OY - M) / C) * C;   // on the world's grid
   const onOne = (x0, y0, x1, y1) => onOneOf(FR, W, H, x0, y0, x1, y1);
   const t0 = performance.now();
   const gw = Math.ceil((OX + W + M - X0) / C) + 2, gh = Math.ceil((OY + H + M - Y0) / C) + 2, N = gw * gh;

@@ -61,6 +61,12 @@ function project() {
 }
 const X = lon => (lon - PJ.lon0) / (PJ.lon1 - PJ.lon0) * W, Y = lat => (PJ.lat1 - lat) / (PJ.lat1 - PJ.lat0) * H;
 const LON = x => PJ.lon0 + x / W * (PJ.lon1 - PJ.lon0), LAT = y => PJ.lat1 - y / H * (PJ.lat1 - PJ.lat0);
+// names are placed once for the whole map (every display making the same choices, in desk coordinates) and each
+// display draws the ones that reach it: a name across a seam is drawn on both sides of it, not cut off on one
+const WD = () => ({ ox: DESK.x || 0, oy: DESK.y || 0, uw: DESK.uw || W, uh: DESK.uh || H, n: Math.max(1, DESK.n || 1) });
+// the latitude span every display judges by (the main display's), so grid spacing and the cities' cut agree across seams
+const spanAll = () => { const P = PJU || PJ; return (P.lat1 - P.lat0) * (DESK.n > 1 ? (DESK.mh || H) / (DESK.uh || H) : 1); };
+const onWorld = (lon0, lon1, lat0, lat1) => { const P = PJU || PJ; return lon1 > P.lon0 && lon0 < P.lon1 && lat1 > P.lat0 && lat0 < P.lat1; };
 
 /* ======================= live wind ======================= */
 let GS = 2.5, PJU = null, DESK = { x: 0, y: 0, uw: 0, uh: 0, i: 0, n: 1 }, deskSeen = null;
@@ -224,17 +230,18 @@ const FADE = prog(VS_FULL, `#version 300 es
 precision highp float; out vec4 o; void main() { o = vec4(0.); }`, 'fade');
 const COMP = prog(VS_FULL, `#version 300 es
 precision highp float; in vec2 vUV; out vec4 o;
-uniform sampler2D uTrail, uMap; uniform vec3 uBg, uLand, uLine, uFast, uGrat, uInk; uniform float uK, uDayF;
+uniform sampler2D uTrail, uMap, uHalo; uniform vec3 uBg, uLand, uLine, uFast, uGrat, uInk; uniform float uK, uDayF; uniform vec4 uWorld;   // this display in the whole map: x, y, w/W, h/H
 float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 void main() {
   vec4 m = texture(uMap, vec2(vUV.x, 1. - vUV.y)); /* the chart canvas is stored top-down */ vec2 tr = texture(uTrail, vUV).rg;
+  float h = texture(uHalo, vec2(vUV.x, 1. - vUV.y)).r;              // a cartographer's halo round each desktop icon
   vec3 c = mix(uBg, uLand, m.g);
-  c = mix(c, uGrat, m.b * .55);
-  float t = 1. - exp(-tr.r * 1.5), sp = tr.r > 1e-3 ? clamp(tr.g / tr.r, 0., 1.) : 0.;
+  c = mix(c, uGrat, m.b * .55 * (1. - h));
+  float t = (1. - exp(-tr.r * 1.5)) * (1. - .92 * h), sp = tr.r > 1e-3 ? clamp(tr.g / tr.r, 0., 1.) : 0.;
   c = mix(c, mix(uLine, uFast, smoothstep(.4, .95, sp)), t * mix(.58, .6, uDayF));   // light lines on a dark map read stronger: hold them back at night
-  c = mix(c, uInk, min(1., m.r * mix(1.15, .85, uDayF)));               // and let the ink come through at full strength
+  c = mix(c, uInk, min(1., m.r * mix(1.15, .85, uDayF)) * (1. - .6 * h));               // and let the ink come through at full strength
   c *= .985 + .03 * hash(floor(gl_FragCoord.xy));                     // a whisper of paper grain
-  vec2 q = vUV - .5; c *= 1. - .08 * smoothstep(.35, .9, length(q * vec2(1.2, 1.)));
+  vec2 q = uWorld.xy + vec2(vUV.x, 1. - vUV.y) * uWorld.zw - .5; c *= 1. - .08 * smoothstep(.35, .9, length(q * vec2(1.2, 1.)));   // darker toward the map's edges, not each display's
   o = vec4(c, 1.);
 }`, 'comp');
 
@@ -331,35 +338,38 @@ function drawRelief(y) {
     if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) c = !c; } return c; };
   y.fillStyle = 'rgb(70,0,0)';
   const vis = r => { let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9; for (let i = 0; i < r.length; i += 2) { x0 = Math.min(x0, r[i]); x1 = Math.max(x1, r[i]); y0 = Math.min(y0, r[i + 1]); y1 = Math.max(y1, r[i + 1]); }
-    return x1 > PJ.lon0 && x0 < PJ.lon1 && y1 > PJ.lat0 && y0 < PJ.lat1 ? [x0, y0, x1, y1] : null; };
-  const labels = [];
+    return [x0, y0, x1, y1, x1 > PJ.lon0 && x0 < PJ.lon1 && y1 > PJ.lat0 && y0 < PJ.lat1]; };
+  const labels = [], D = WD();
   for (const g of WORLD.regions) for (const r of g.p) {
-    const bb = vis(r); if (!bb) continue;
-    if (g.k === 'Desert') {
+    const bb = vis(r); if (!onWorld(bb[0], bb[2], bb[1], bb[3])) continue;
+    if (g.k === 'Desert' && bb[4]) {
       const n = Math.min(9000, Math.round((X(bb[2]) - X(bb[0])) * (Y(bb[1]) - Y(bb[3])) / 55));
       for (let k = 0; k < n; k++) { const lon = bb[0] + R() * (bb[2] - bb[0]), lat = bb[1] + R() * (bb[3] - bb[1]);
         if (inPoly(lon, lat, r) && elevAt(lon, lat) < 1500) y.fillRect(X(lon), Y(lat), .8, .8); }
     }
     if (['Range/mtn', 'Plateau', 'Desert', 'Basin', 'Plain'].includes(g.k)) {
       // the shape's long axis, from its points' spread (a quick principal-axis fit)
-      let mx = 0, my = 0, n = r.length / 2; for (let i = 0; i < r.length; i += 2) { mx += X(r[i]); my += Y(r[i + 1]); } mx /= n; my /= n;
-      let sxx = 0, syy = 0, sxy = 0; for (let i = 0; i < r.length; i += 2) { const dx = X(r[i]) - mx, dy = Y(r[i + 1]) - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+      let mx = 0, my = 0, n = r.length / 2; for (let i = 0; i < r.length; i += 2) { mx += X(r[i]) + D.ox; my += Y(r[i + 1]) + D.oy; } mx /= n; my /= n;   // (desk coordinates)
+      let sxx = 0, syy = 0, sxy = 0; for (let i = 0; i < r.length; i += 2) { const dx = X(r[i]) + D.ox - mx, dy = Y(r[i + 1]) + D.oy - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
       let a = .5 * Math.atan2(2 * sxy, sxx - syy); if (a > Math.PI / 2) a -= Math.PI; if (a < -Math.PI / 2) a += Math.PI;
       const len = Math.sqrt((sxx + syy) / n) * 2.2;
-      if (len < 90 || mx < 30 || mx > W - 30 || my < 20 || my > H - 20) continue;
+      if (len < 90 || mx < 30 || mx > D.uw - 30 || my < 20 || my > D.uh - 20) continue;
       labels.push({ t: g.n.toUpperCase().replace(/\bMTS\.?/, 'MOUNTAINS'), x: mx, y: my, a: Math.abs(a) < .12 ? 0 : a, len, rank: g.r, k: g.k });
     }
   }
   y.fillStyle = 'rgb(112,0,0)'; labels.sort((p, q) => p.rank - q.rank || q.len - p.len);
-  const boxes = []; let shown = 0;
+  const boxes = [], mine = deskIc.map(([l, t, r, b]) => [l - 10 + D.ox, t - 8 + D.oy, r + 10 + D.ox, b + 8 + D.oy]); let shown = 0;
+  const hit = (list, box) => list.some(b => b[0] < box[2] && b[2] > box[0] && b[1] < box[3] && b[3] > box[1]);
   for (const L of labels) {
-    if (shown >= 12) break;
+    if (shown >= 12 * D.n) break;
     const size = clamp(L.len / 26, 9, 12.5); y.font = `italic ${size}px ${SERIF}`; y.letterSpacing = `${size * .45}px`;
     const w = y.measureText(L.t).width; if (w > L.len * 1.5) continue;
     const box = [L.x - w / 2 - 8, L.y - 14, L.x + w / 2 + 8, L.y + 14];
-    if (boxes.some(b => b[0] < box[2] && b[2] > box[0] && b[1] < box[3] && b[3] > box[1])) continue;
+    if (hit(boxes, box)) continue;
     boxes.push(box); shown++;
-    y.save(); y.translate(L.x, L.y); y.rotate(L.a); y.textAlign = 'center'; y.fillText(L.t, 0, 0); y.restore();
+    const mg = 40 + w / 2;                                              // (a long name may be set at an angle)
+    if (hit(mine, box) || box[2] < D.ox - mg || box[0] > D.ox + W + mg || box[3] < D.oy - mg || box[1] > D.oy + H + mg) continue;   // under your icons, or off this display
+    y.save(); y.translate(L.x - D.ox, L.y - D.oy); y.rotate(L.a); y.textAlign = 'center'; y.fillText(L.t, 0, 0); y.restore();
   }
   y.letterSpacing = '0px'; LABEL_BOXES = boxes;
   window.__relief = 'done ' + peaks.length;
@@ -380,7 +390,7 @@ function paintMap() {
     layer(y => { y.strokeStyle = 'rgb(150,0,0)'; y.lineWidth = .75 * zoom; y.lineJoin = 'round';
       for (const sh of shifts) for (const r of COAST.land) { ring(y, r, sh); y.stroke(); } y.lineWidth = .5 * zoom; for (const sh of shifts) for (const r of COAST.lakes) { ring(y, r, sh); y.stroke(); } });
   }
-  layer(y => { const span = PJ.lat1 - PJ.lat0, gs = span > 50 ? 10 : span > 20 ? 5 : span > 10 ? 2 : 1, ls = gs * 2;
+  layer(y => { const span = spanAll(), gs = span > 50 ? 10 : span > 20 ? 5 : span > 10 ? 2 : 1, ls = gs * 2;
     const lonT = v => { const w = ((v + 540) % 360) - 180; return `${Math.abs(Math.round(w))}°${w < 0 ? 'W' : w > 0 ? 'E' : ''}`; }, latT = v => `${Math.abs(Math.round(v))}°${v < 0 ? 'S' : v > 0 ? 'N' : ''}`;
     y.strokeStyle = 'rgb(0,0,255)'; y.lineWidth = .5; y.setLineDash([2, 4]);
     for (let lo = Math.ceil(PJ.lon0 / gs) * gs; lo < PJ.lon1; lo += gs) { y.beginPath(); y.moveTo(X(lo), 0); y.lineTo(X(lo), H); y.stroke(); }
@@ -393,28 +403,30 @@ function paintMap() {
     y.fillStyle = 'rgb(150,0,0)';
     const sea = (t, lon, lat, size, rot = 0) => { y.save(); y.translate(X(lon), Y(lat)); y.rotate(rot); y.font = `italic ${size}px ${SERIF}`; y.textAlign = 'center';
       y.letterSpacing = `${size * .35}px`; y.fillText(t, 0, 0); y.restore(); };
+    const D = WD(), PU = PJU || PJ, XW = lon => X(lon) + D.ox, YW = lat => Y(lat) + D.oy;   // (desk coordinates: every display chooses alike)
     const taken = LABEL_BOXES.slice(), free = b => !taken.some(o => o[0] < b[2] && o[2] > b[0] && o[1] < b[3] && o[3] > b[1]);
-    const seas = WORLD.marine.filter(m => m[1] > PJ.lon0 + 1 && m[1] < PJ.lon1 - 1 && m[2] > PJ.lat0 + 1 && m[2] < PJ.lat1 - 1).sort((p, q) => p[3] - q[3] || q[4] - p[4]);
+    const mine = deskIc.map(([l, t, r, b]) => [l - 8 + D.ox, t - 6 + D.oy, r + 8 + D.ox, b + 6 + D.oy]), underIcon = b => mine.some(o => o[0] < b[2] && o[2] > b[0] && o[1] < b[3] && o[3] > b[1]);
+    const seas = WORLD.marine.filter(m => m[1] > PU.lon0 + 1 && m[1] < PU.lon1 - 1 && m[2] > PU.lat0 + 1 && m[2] < PU.lat1 - 1).sort((p, q) => p[3] - q[3] || q[4] - p[4]);
     let ns = 0;
     for (const [n, lo, la, rank] of seas) {
-      if (ns >= 5) break;
+      if (ns >= 5 * D.n) break;
       const size = rank <= 1 ? 13 : rank <= 3 ? 12 : 10.5; y.font = `italic ${size}px ${SERIF}`; y.letterSpacing = `${size * .35}px`;
-      const t = n.toUpperCase(), w = y.measureText(t).width, px = X(lo), py = Y(la), b = [px - w / 2 - 6, py - 14, px + w / 2 + 6, py + 6];
-      if (b[0] < 6 || b[2] > W - 6 || !free(b)) continue;
-      taken.push(b); ns++; sea(t, lo, la, size);
+      const t = n.toUpperCase(), w = y.measureText(t).width, px = XW(lo), py = YW(la), b = [px - w / 2 - 6, py - 14, px + w / 2 + 6, py + 6];
+      if (b[0] < 6 || b[2] > D.uw - 6 || !free(b)) continue;
+      taken.push(b); ns++; if (!underIcon(b)) sea(t, lo, la, size);   // (placed alike everywhere; not drawn under your icons)
     }
     const city = (t, lon, lat, home) => { const px = X(lon), py = Y(lat); y.beginPath(); y.arc(px, py, home ? 2.6 : 1.7, 0, 7); y.fill();
       if (home) { y.lineWidth = .8; y.strokeStyle = 'rgb(150,0,0)'; y.beginPath(); y.arc(px, py, 6, 0, 7); y.stroke(); }
       y.font = `${home ? 12 : 10}px ${SERIF}`; y.letterSpacing = '0px'; y.textAlign = 'left'; y.fillText(t, px + (home ? 9 : 5), py + 3.5); };
-    city(HOME.name, HOME.lon, HOME.lat, true); taken.push([X(HOME.lon) - 8, Y(HOME.lat) - 12, X(HOME.lon) + 90, Y(HOME.lat) + 10]);
-    const span = PJ.lat1 - PJ.lat0, gap = 70; let nc = 0;
+    city(HOME.name, HOME.lon, HOME.lat, true); taken.push([XW(HOME.lon) - 8, YW(HOME.lat) - 12, XW(HOME.lon) + 90, YW(HOME.lat) + 10]);
+    const span = spanAll(), gap = 70; let nc = 0;
     for (const [n, lo, la, rank] of WORLD.places) {           // the biggest cities in view, spaced apart
-      if (nc >= 11) break;
-      if (lo < PJ.lon0 || lo > PJ.lon1 || la < PJ.lat0 || la > PJ.lat1 || (Math.abs(lo - HOME.lon) < .01 && Math.abs(la - HOME.lat) < .01)) continue;
+      if (nc >= 11 * D.n) break;
+      if (lo < PU.lon0 || lo > PU.lon1 || la < PU.lat0 || la > PU.lat1 || (Math.abs(lo - HOME.lon) < .01 && Math.abs(la - HOME.lat) < .01)) continue;
       if (rank > (span > 30 ? 3 : span > 15 ? 5 : 8)) continue;
-      const px = X(lo), py = Y(la); y.font = `10px ${SERIF}`; const w = y.measureText(n).width, b = [px - gap / 2, py - 10, px + w + 8, py + 8];
-      if (px < 10 || px > W - w - 14 || py < 18 || py > H - 20 || !free(b)) continue;
-      taken.push(b); nc++; city(n, lo, la, false);
+      const px = XW(lo), py = YW(la); y.font = `10px ${SERIF}`; const w = y.measureText(n).width, b = [px - gap / 2, py - 10, px + w + 8, py + 8];
+      if (px < 10 || px > D.uw - w - 14 || py < 18 || py > D.uh - 20 || !free(b)) continue;
+      taken.push(b); nc++; if (!underIcon(b)) city(n, lo, la, false);
     }
   });
   if (!mapT) mapT = gl.createTexture();
@@ -446,6 +458,21 @@ function localTime(ms, tz) { if (!tz) return new Date(ms).toLocaleTimeString([],
   // by the zone's name when we have it (an offset saved before a daylight-saving change would be an hour out after it)
   if (tz.name) try { return new Intl.DateTimeFormat('en-GB', { timeZone: tz.name, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms)); } catch (_) { }
   const d = new Date(ms + tz.off * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }
+// desktop icons sit on the chart the way names do on a printed map: in a halo of bare paper (the wind and the
+// fine lines knocked out round them), with no lettering of the map's own beneath; painted once per change, at ¼ size
+let deskIc = [], iconKey = '', haloT = null;
+function paintHalo() {
+  const q = 4, c = document.createElement('canvas'); c.width = Math.max(1, Math.ceil(W / q)); c.height = Math.max(1, Math.ceil(H / q));
+  const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, c.width, c.height); x.scale(1 / q, 1 / q); x.globalCompositeOperation = 'lighter'; x.fillStyle = 'rgba(255,255,255,.2)';
+  for (const [l, t, r, b] of deskIc) for (let i = 0; i < 6; i++) { const p = 2 + i * 4; x.beginPath(); x.roundRect(l - p, t - p, r - l + 2 * p, b - t + 2 * p, 10 + p); x.fill(); }   // soft: five steps out from a solid core
+  if (!haloT) haloT = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, haloT); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c); c.width = c.height = 1;
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+const onIcon = (l, t, r, b) => deskIc.some(o => l < o[2] && r > o[0] && t < o[3] && b > o[1]);
+// the caption sits bottom left, or bottom right if your icons are there
+function placeCaption() { const left = !onIcon(0, H - 96, 420, H) || onIcon(W - 420, H - 96, W, H); capCv.style.inset = left ? 'auto auto 0 0' : 'auto 0 0 auto'; }
 function drawCaption() {
   if (!PAL) palette();
   const k = K, w = 420, h = 96; capCv.width = w * k; capCv.height = h * k;
@@ -630,7 +657,9 @@ function stepCards(now) {
     if (moving) c._still = now;
     // the report is for the place under the window; asked for once the window has settled
     if (now - c._still > 500 || !c._key) { if (!c._polled || now - c._polled > 5000) { c._polled = now; c._key += '~'; } paintCard(c, LAT(w.y + w.h / 2), LON(w.x + w.w / 2)); }
-    const above = w.y > CH + 12, tx = clamp(w.x + 4, 8, W - CW - 8), ty = above ? w.y - CH - 6 : clamp(w.y + w.h + 12, 8, H - CH - 8);
+    const tx = clamp(w.x + 4, 8, W - CW - 8), up = w.y - CH - 6, down = clamp(w.y + w.h + 12, 8, H - CH - 8);
+    let above = w.y > CH + 12; if (onIcon(tx, above ? up : down, tx + CW, (above ? up : down) + CH) && (above || w.y > CH + 12) && !onIcon(tx, above ? down : up, tx + CW, (above ? down : up) + CH)) above = !above;   // not over your icons
+    const ty = above ? up : down;
     c.style.transform = `translate3d(${tx.toFixed(1)}px,${ty.toFixed(1)}px,0)`;
   }
   for (const [w, c] of cards) if (!seen.has(w)) { cards.delete(w); c.style.opacity = 0; setTimeout(() => c.remove(), 700); }
@@ -641,7 +670,7 @@ const cur = { x: -1e4, y: -1e4, vx: 0, vy: 0, on: false, t: 0 };
 let curRead = null;
 function stepCursor(now) {
   if (!curRead) curRead = makeReadout();
-  const over = cur.on && !wins.some(w => cur.x > w.x && cur.x < w.x + w.w && cur.y > w.y && cur.y < w.y + w.h);
+  const over = cur.on && !wins.some(w => cur.x > w.x && cur.x < w.x + w.w && cur.y > w.y && cur.y < w.y + w.h) && !onIcon(cur.x - 4, cur.y - 4, cur.x + 4, cur.y + 4);
   if (over) {
     const flip = cur.x > W - 240;                                       // near the right edge the words go to the left; the barb stays on the pointer
     const tx = flip ? cur.x - 207 : cur.x - 23, ty = clamp(cur.y - 23, -23, H - 23);
@@ -676,8 +705,9 @@ function render(dt) {
   gl.disable(gl.BLEND);
   // the chart
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height);
-  gl.useProgram(COMP); bindT(COMP, [['uTrail', trailT], ['uMap', mapT]]);
+  gl.useProgram(COMP); bindT(COMP, [['uTrail', trailT], ['uMap', mapT], ['uHalo', haloT]]);
   gl.uniform1f(COMP.u.uDayF, dayF);
+  { const UW = DESK.uw || W, UH = DESK.uh || H; gl.uniform4f(COMP.u.uWorld, (DESK.x || 0) / UW, (DESK.y || 0) / UH, W / UW, H / UH); }
   for (const [u, key] of [['uBg', 'bg'], ['uLand', 'land'], ['uLine', 'line'], ['uFast', 'fast'], ['uGrat', 'grat'], ['uInk', 'ink']]) gl.uniform3fv(COMP.u[u], PAL[key]);
   full();
 }
@@ -701,7 +731,7 @@ function loop0(now) {
 }
 
 /* ======================= boot + host protocol ======================= */
-function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; project(); const c = loadCache(); if (c) DATA = c; buildTargets(); palette(); paintMap(); drawCaption(); }
+function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; project(); const c = loadCache(); if (c) DATA = c; buildTargets(); palette(); paintHalo(); paintMap(); drawCaption(); placeCaption(); }
 const handle = m => {
   if (m.t === 'desk') { DESK = m; deskSeen(); if (booted) build(); return; }
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
@@ -709,6 +739,8 @@ const handle = m => {
     if (cur.on) { cur.vx = cur.vx * .5 + (x - cur.x) / dt * .5; cur.vy = cur.vy * .5 + (y - cur.y) / dt * .5; }
     cur.x = x; cur.y = y; cur.t = t; cur.on = true; return; }
   if (m.t === 'cursorOff') { cur.on = false; return; }
+  if (m.t === 'dicons') { const k = [m.r].join('|'); if (k === iconKey) return; iconKey = k;   // your desktop icons: haloed, and the map lettered round them
+    deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]); if (booted) { paintHalo(); paintMap(); placeCaption(); } return; }
   if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
     setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
 };
@@ -722,6 +754,8 @@ Promise.all([fetch('wind/world.json').then(r => r.json()), fetch('wind/elev.bin'
     booted = true; bootAt = Date.now(); maybeFetch(); wake(); });
   }).catch(err => post('JSERR world ' + err.message));
 setInterval(() => { if (!paused && booted) maybeFetch(); }, 30e3);
+// another display fetched the forecast and saved it: take it now (it used to wait up to 30 s, drawing a stand-in breeze)
+addEventListener('storage', e => { if (e.key !== 'tidewall-wind-' + VARIANT || !booted) return; const c = loadCache(); if (c && (!DATA || c.fetched > DATA.fetched)) { DATA = c; buildTarget(); drawCaption(); } });
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (!booted) return; build(); maybeFetch(); }, 200); });
 window.__dbg = () => `country=${COUNTRY && COUNTRY.id} GS=${GS} elev=${ELEV ? ELEV.length : 'none'} coast=${!!COAST} relief=${window.__relief || '-'} run=${running} paused=${paused} fps=${fpsEMA | 0} ms=${fieldMs.toFixed(2)} wins=${wins.length} data=${DATA ? new Date(DATA.fetched).toISOString() : 'none'} day=${dayF.toFixed(2)}`;
 const host = window.chrome && window.chrome.webview;

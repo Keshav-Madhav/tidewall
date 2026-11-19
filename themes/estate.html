@@ -127,7 +127,7 @@ function grow(seed) {
   if (building) { growQueued = { seed }; return; } building = true; buildT0 = performance.now();
   townSeed = seed ?? hash(`${citySeed}:${generation++}`);
   const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS); tFrozen = ease3(tm);
-  worker.postMessage(Object.assign({ town: true, W, H, K, seed: townSeed, t: tFrozen, paperSeed: citySeed }, worldArgs()));
+  worker.postMessage(Object.assign({ town: true, W, H, K, seed: townSeed, t: tFrozen, paperSeed: citySeed, icons: deskIc.map(d => ({ x: d.x, y: d.y, w: d.w, h: d.h })) }, worldArgs()));
 }
 let growQueued = null, tFrozen = 0, townGen = 0, buildT0 = 0;
 // labels go only into open ground the town reported, and never overlap each other, the towers or the compass
@@ -141,6 +141,7 @@ function decorate(x, rings, spots = []) {
     x.font = `${size}px ${SCRIPT}`; const w = x.measureText(text).width + size * 4.6, h = size * 2.6;
     const b = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
     if (b[0] < 8 || b[1] < 8 || b[2] > W - 8 || b[3] > H - 8) return null;
+    if (deskIc.some(d => b[0] < d.x - OX + d.w + 12 && b[2] > d.x - OX - 12 && b[1] < d.y - OY + d.h + 12 && b[3] > d.y - OY - 12)) return null;   // never over your desktop icons
     return boxes.some(o => b[0] < o[2] + 14 && b[2] > o[0] - 14 && b[1] < o[3] + 14 && b[3] > o[1] - 14) ? null : b;
   };
   for (const rg of rings) {                          // a tower's name sits just beneath it
@@ -263,7 +264,7 @@ const hallTags = new Map();
 function drawHalls() {   // a red scroll naming each app's hall: a small sprite moved by the compositor
   const seen = new Set(), best = new Map();
   for (const c of cur) {
-    if (!c.owner || c.owner === 'WindowManager' || c.w * c.h < 60000) continue;
+    if (!c.owner || c.owner === 'WindowManager' || c.owner === '__icons' || c.w * c.h < 60000) continue;   // (desktop icons get a quiet courtyard, no scroll)
     const b = best.get(c.owner); if (!b || c.life * c.w * c.h > b.life * b.w * b.h) best.set(c.owner, c);
   }
   // each tag takes the first spot that's clear of every window, every other tag and the screen edge; it keeps its last spot while that stays clear
@@ -300,7 +301,7 @@ let running = false, lastT = 0, settledAt = 0, layoutKey = '';
 function maybeNewTown() {
   if (building && performance.now() - buildT0 > 10000) building = false;          // lost town: allow a new one
   if (!booted || building) return;
-  const key = cur.filter(c => c.alive && c.w * c.h >= 60000).map(c => `${c.owner}@${Math.round((c.x + c.w / 2) / 260)},${Math.round((c.y + c.h / 2) / 260)}:${Math.round(c.w / 300)}x${Math.round(c.h / 300)}`).sort().join('|');
+  const key = cur.filter(c => c.alive && c.w * c.h >= 60000 && c.owner !== '__icons').map(c => `${c.owner}@${Math.round((c.x + c.w / 2) / 260)},${Math.round((c.y + c.h / 2) / 260)}:${Math.round(c.w / 300)}x${Math.round(c.h / 300)}`).sort().join('|');
   if (key === layoutKey) return;
   if (Span.world && !Span.leader()) return;                         // one world: the leader decides when the town changes
   const first = layoutKey === ''; layoutKey = key;
@@ -470,7 +471,7 @@ const paperMsg = () => Object.assign({ paper: true, W, H, K, seed: citySeed }, w
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { size(); worker.postMessage(paperMsg()); grow(townSeed); }, 250); });
 let FB = null; function commit() { } function refresh() { }
 window.__dbg = () => `steps=${document.querySelectorAll('.step').length} me=${!!(me && me.sm)} town=${fieldMs}ms frame=${frameMs}ms wins=${cur.length}`;
-let booted = false, deskKey = '', meSeed = null, lastWinMsg = null;
+let booted = false, deskKey = '', meSeed = null, lastWinMsg = null, deskIc = [], iconsKey = '';
 function cursorAt(x, y) {
   if (paused || !me) return; target = { x, y };
   if (!me.sm) me.place(target.x, target.y);
@@ -493,7 +494,11 @@ const handle0 = m => {
   }
   if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; Span.post('cur', { x, y }); cursorAt(x, y); return; }
   if (m.t === 'windows') { ST.msgs++; const nw = performance.now(); if (ST.lastMsg) ST.gap = Math.max(ST.gap || 0, nw - ST.lastMsg); ST.lastMsg = nw; liveUntil = m.live ? nw + 250 : 0; }
-  if (m.t === 'windows') { lastWinMsg = m; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] }))); }
+  if (m.t === 'dicons') { deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: Math.round(l / K + OX), y: Math.round(t / K + OY), w: Math.round((r - l) / K), h: Math.round((b - t) / K), owner: '__icons' }));   // (whole points: every display's worker sees the same numbers)   // your desktop icons: a courtyard each
+    const ik = deskIc.map(d => [d.x, d.y, d.w, d.h].map(Math.round).join(',')).join(';');
+    if (ik !== iconsKey) { iconsKey = ik; if (booted) grow(townSeed); }            // the same town, its names and towers redrawn clear of them
+    if (lastWinMsg) handle0(lastWinMsg); return; }
+  if (m.t === 'windows') { lastWinMsg = m; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })).concat(deskIc)); }
 };
 const handle = m => { const t0 = performance.now(); handle0(m); ST.busy = (ST.busy || 0) + performance.now() - t0; };
 const host = window.chrome && window.chrome.webview;

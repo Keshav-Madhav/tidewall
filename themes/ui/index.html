@@ -144,6 +144,12 @@
   .mw.dark { background: rgba(30,31,34,.9); color: #e8e8ea; box-shadow: 0 0 0 1px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.08), 0 24px 64px rgba(0,0,0,.42); }
   .mw.light { background: rgba(250,250,252,.92); color: #333; box-shadow: 0 0 0 1px rgba(0,0,0,.22), 0 24px 64px rgba(0,0,0,.36); }
   .mw.grab { cursor: grabbing; }
+  /* your desktop icons, as stand-ins: a folder or a page, and the name under it */
+  .mi { position: absolute; z-index: 1; pointer-events: none; display: flex; flex-direction: column; align-items: center; }
+  .mi b { display: block; border-radius: 9%; box-shadow: 0 2px 6px rgba(0,0,0,.28); }
+  .mi b.fo { background: linear-gradient(#7cc4f4, #4aa3e6); border-radius: 8% 8% 10% 10%; }
+  .mi b.pg { background: linear-gradient(#fff, #e9ecf1); border-radius: 4% 18% 4% 4%; transform: scaleX(.8); }
+  .mi i { display: block; height: 11px; margin-top: 6px; border-radius: 4px; background: rgba(255,255,255,.88); box-shadow: 0 1px 3px rgba(0,0,0,.35); }
   .mw .tb { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 15px; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; }
   .mw .tb i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; flex: none; }
   .mw .tb i:nth-child(1) { background: #ff5f57; } .mw .tb i:nth-child(2) { background: #febc2e; } .mw .tb i:nth-child(3) { background: #28c840; margin-right: 8px; }
@@ -316,8 +322,15 @@
     <div class="group-t">General</div>
     <div class="group">
       <div class="rowx"><div class="tx"><b>Open at login</b><span id="loginNote">Start Tidewall when you log in.</span></div><div class="sw" data-k="login" role="switch" tabindex="0"></div></div>
-      <div class="rowx"><div class="tx"><b>Rest when idle</b><span>Pause after 3 minutes without input, and let go of memory 10 minutes after that.</span></div><div class="sw" data-k="restWhenIdle" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>Pause wallpaper</b><span>Freeze the scene where it is.</span></div><div class="sw" data-k="paused" role="switch" tabindex="0"></div></div>
+    </div>
+    <div class="group-t">What the wallpaper reacts to</div>
+    <div class="group">
+      <div class="rowx"><div class="tx"><b>Windows</b><span>The scene reshapes itself around your app windows. Off: it carries on behind them as if they weren't there.</span></div><div class="sw" data-k="reactWindows" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b>Stage Manager</b><span>The strip of recent apps at the side of the screen.</span></div><div class="sw" data-k="reactStage" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b>Desktop widgets</b><span>Clocks, weather and the other widgets on your desktop.</span></div><div class="sw" data-k="reactWidgets" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b>Desktop icons</b><span id="iconsNote">Each theme keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.</span></div><div class="sw" data-k="deskIcons" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b>The pointer</b><span>Fish follow it, the snow melts round it, the boat sails to it. Off: the scene ignores it.</span></div><div class="sw" data-k="reactCursor" role="switch" tabindex="0"></div></div>
     </div>
     <div class="group-t" id="dispSetT">Displays</div>
     <div class="group" id="dispSet">
@@ -325,7 +338,9 @@
     </div>
     <div class="group-t">Performance</div>
     <div class="group">
-      <div class="rowx"><div class="tx"><b>Frame rate</b><span>Auto runs each theme at a calm pace (30 or less) and smooths up to 60 while you're working on the wallpaper. A fixed rate holds it there; lower is gentler on battery.</span></div><div class="seg" data-k="fps"><button data-v="0">Auto</button><button data-v="30">30</button><button data-v="20">20</button><button data-v="15">15</button></div></div>
+      <div class="rowx"><div class="tx"><b>Frame rate</b><span>Auto runs each theme at a calm pace (30 or less) and smooths up to 60 while you're working on the wallpaper. A fixed rate holds it there: 60 is the smoothest, lower is gentler on battery.</span></div><div class="seg" data-k="fps"><button data-v="0">Auto</button><button data-v="60">60</button><button data-v="30">30</button><button data-v="20">20</button><button data-v="15">15</button></div></div>
+      <div class="rowx"><div class="tx"><b>On battery</b><span id="batNote">What the wallpaper does when your Mac isn't plugged in (or is in Low Power Mode).</span></div><div class="seg" data-k="battery"><button data-v="0">Same</button><button data-v="1">Calmer</button><button data-v="2">Pause</button></div></div>
+      <div class="rowx"><div class="tx"><b>Rest when idle</b><span>Pause when nobody has touched the mouse or keyboard for this long, and let go of memory 10 minutes after that. The first touch brings it back.</span></div><div class="seg" data-k="idleMinutes"><button data-v="0">Never</button><button data-v="1">1 min</button><button data-v="3">3 min</button><button data-v="10">10 min</button></div></div>
       <div class="rowx"><div class="tx"><b>Space around windows</b><span>How far the scene keeps back from each window edge.</span></div><div class="seg" data-k="margin"><button data-v="60">60</button><button data-v="100">100</button><button data-v="140">140</button><button data-v="200">200</button></div></div>
     </div>
     <div class="group-t">The wallpaper, right now</div>
@@ -507,7 +522,7 @@ addEventListener('keydown', e => {
 });
 
 /* ======================= live preview ======================= */
-let DESK = null, mode = 'mine', VW = 1512, VH = 982, wins = [], pvReady = false, pvKey = null, pvTimer = 0, pvShowT = 0, pvGen = 0;
+let pvIcons = '', DESK = null, mode = 'mine', VW = 1512, VH = 982, wins = [], pvReady = false, pvKey = null, pvTimer = 0, pvShowT = 0, pvGen = 0;
 const MARGIN = () => S.settings.margin || 140;
 const pv = $('#pv'), screenEl = $('#screen'), stageEl = $('#stage');
 const SAMPLE = () => [{ x: Math.round(VW * .15), y: Math.round(VH * .17), w: Math.round(VW * .43), h: Math.round(VH * .45), name: 'Safari' },
@@ -536,6 +551,9 @@ function drawWins() {
     return `<div class="mw ${dark ? 'dark' : 'light'}" data-i="${i}"><div class="tb"><i></i><i></i><i></i>${esc(w.name || 'Window')}</div><div class="bd">${
       Array.from({ length: lines }, (_, k) => `<div class="ln" style="width:${55 + ((k * 37 + hue(w.name || '')) % 40)}%"></div>`).join('')}</div></div>`;
   }).join('');
+  const ic = (DESK && DESK.icons) || { r: [], i: [] };
+  $('#mws').insertAdjacentHTML('beforeend', ic.r.map(([x, y, w, h], k) => { const [ix, iy, iw, ih] = ic.i[k] || [x, y, w, w];
+    return `<div class="mi" style="left:${x}px;top:${iy}px;width:${w}px"><b class="${k % 3 ? 'pg' : 'fo'}" style="width:${iw}px;height:${ih}px"></b><i style="width:${Math.min(w - 6, 40 + (k * 23) % 30)}px"></i></div>`; }).join(''));
   placeWins();
   $$('.mw').forEach(el => el.addEventListener('pointerdown', down));
 }
@@ -560,14 +578,19 @@ addEventListener('blur', () => { clearTimeout(pvRestT); pvRestT = setTimeout(() 
 addEventListener('focus', () => { clearTimeout(pvRestT); pvResting(false); });
 document.addEventListener('visibilitychange', () => { clearTimeout(pvRestT); pvResting(document.hidden || !document.hasFocus()); });
 function sendWins(live) {
-  if (!pvReady) return; const k = pdpr(), m = MARGIN(), R = r => r.map(v => Math.round(v * k));
-  toFrame(JSON.stringify({ t: 'windows', live, r: wins.map(w => R([w.x, w.y, w.x + w.w, w.y + w.h])), n: wins.map(w => w.name || ''), sm: wins.map(w => w.sm ? 1 : 0) }));
-  toFrame(JSON.stringify({ t: 'icons', vis: true, r: wins.map(w => R([w.x - m, w.y - m, w.x + w.w + m, w.y + w.h + m])) }));
+  if (!pvReady) return; const k = pdpr(), m = MARGIN(), R = r => r.map(v => Math.round(v * k)), st = S.settings || {};
+  const on = v => v !== false;                                          // (what the scene reacts to, as Settings says)
+  const vis = wins.filter(w => w.sm ? on(st.reactStage) : w.widget ? on(st.reactWidgets) : on(st.reactWindows));
+  toFrame(JSON.stringify({ t: 'windows', live, r: vis.map(w => R([w.x, w.y, w.x + w.w, w.y + w.h])), n: vis.map(w => w.name || ''), sm: vis.map(w => w.sm ? 1 : 0) }));
+  toFrame(JSON.stringify({ t: 'icons', vis: true, r: vis.map(w => R([w.x - m, w.y - m, w.x + w.w + m, w.y + w.h + m])) }));
+  const ic = (DESK && DESK.icons && st.deskIcons) ? DESK.icons : {}, LT = ([x, y, w, h]) => R([x, y, x + w, y + h]);   // your desktop icons, as the wallpaper gets them
+  const di = JSON.stringify({ t: 'dicons', r: (ic.r || []).map(LT), i: (ic.i || []).map(LT), c: (ic.c || []).map(LT) });
+  if (di !== pvIcons) { pvIcons = di; toFrame(di); }                    // (not on every frame of a drag: only when they change)
 }
 addEventListener('message', e => {
   if (e.source !== pv.contentWindow || !e.data || e.data.__twFrom === undefined) return;
   if (String(e.data.__twFrom) !== 'ready' || +pv.dataset.gen !== pvGen) return;   // an earlier preview, still finishing
-  pvReady = true; send({ t: 'log', s: 'preview ready ' + sel });
+  pvReady = true; pvIcons = ''; send({ t: 'log', s: 'preview ready ' + sel });
   toFrame(JSON.stringify({ t: 'desk', x: 0, y: 0, w: VW, h: VH, uw: VW, uh: VH, i: 0, n: 1, mx: VW / 2, my: VH / 2, mw: VW, mh: VH }));
   toFrame(JSON.stringify({ t: 'me', seed: S.seed }));
   sendWins(false);
@@ -616,7 +639,7 @@ function drawDesk() {
 }
 
 /* ======================= settings ======================= */
-function toggle(el) { const k = el.dataset.k, v = !el.classList.contains('on'); el.classList.toggle('on', v); el.setAttribute('aria-checked', String(v)); S.settings[k] = v; send({ t: 'set', key: k, value: v }); drawLive(); }
+function toggle(el) { const k = el.dataset.k, v = !el.classList.contains('on'); el.classList.toggle('on', v); el.setAttribute('aria-checked', String(v)); S.settings[k] = v; send({ t: 'set', key: k, value: v }); drawLive(); if (/^react|^deskIcons$/.test(k)) sendWins(false); }
 $$('.sw').forEach(el => { el.addEventListener('click', () => toggle(el)); el.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggle(el); } }); });
 $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.addEventListener('click', () => { const k = seg.dataset.k, v = +b.dataset.v; S.settings[k] = v; drawSettings(); send({ t: 'set', key: k, value: v }); if (k === 'margin') sendWins(false); })));
 function drawSettings() {
@@ -625,6 +648,13 @@ function drawSettings() {
   $('#loginNote').textContent = blocked ? 'Switched off in System Settings ▸ General ▸ Login Items. Turn this on to allow it there.' : 'Start Tidewall when you log in.';
   $$('.sw').forEach(el => { el.classList.toggle('on', !!S.settings[el.dataset.k]); el.setAttribute('aria-checked', String(!!S.settings[el.dataset.k])); });
   $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.v === S.settings[seg.dataset.k])));
+  // desktop icons: say so when macOS hasn't allowed it, and offer the way there
+  const denied = S.settings.deskIcons && S.settings.deskIconsState === 'denied';
+  $('#iconsNote').innerHTML = denied ? 'macOS hasn’t let Tidewall see Finder yet. <a href="#" id="iconsFix">Open Privacy &amp; Security ▸ Automation</a> and allow <b>Finder</b> under Tidewall.'
+    : 'Each theme keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.';
+  const fix = $('#iconsFix'); if (fix) fix.addEventListener('click', e => { e.preventDefault(); send({ t: 'openAutomation' }); });
+  $('#batNote').textContent = 'What the wallpaper does when your Mac isn’t plugged in (or is in Low Power Mode). Calmer draws at half the rate.' +
+    (S.settings.onBattery ? ' Your Mac is on battery now.' : S.settings.lowPower ? ' Low Power Mode is on now.' : '');
   drawLive();
 }
 function drawLive() { const p = !!S.settings.paused; $('#liveDot').classList.toggle('off', p); $('#liveTxt').textContent = p ? 'Paused' : (S.displays.length > 1 ? `Live on ${S.displays.length} displays` : 'Live'); $('#pauseBtn').textContent = p ? 'Resume' : 'Pause'; }
@@ -684,6 +714,9 @@ window.tw = { receive(m) {
     if (first) select(mainTheme()); else select(sel, true);
     if ($('#displays').classList.contains('on')) drawDesk();
   } else if (m.t === 'desktop') {
+    // the same display and windows, only the desktop icons changed: keep the preview as it is (its windows may have been dragged)
+    if (DESK && m.d && m.d.display === DESK.display && JSON.stringify(m.d.windows) === JSON.stringify(DESK.windows)) { DESK.icons = m.d.icons; drawWins(); sendWins(false); return; }
+    if (DESK && m.d && m.d.display !== DESK.display && m.icons) { send({ t: 'desktop', display: DESK.display }); return; }   // icons changed: ask for the display on show
     const firstDesk = !DESK; DESK = m.d;
     if (firstDesk && !DESK.windows.some(w => !w.sm && !w.widget)) { mode = 'sample'; $$('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.m === 'sample')); }   // nothing of yours to drag: start with the sample
     if (firstDesk || !drag) { wins = layoutFor(mode); sizeScreen(); drawWins(); loadPreview(); sendWins(false); }   // another display: another shape

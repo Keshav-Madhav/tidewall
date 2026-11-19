@@ -97,8 +97,8 @@ function setTargets(list) {
     let best = null, bd = 1e9;
     for (const c of cur) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
     if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
-    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, alive: true, cols: makeCols(t.w), vx: 0, vy: 0, px: t.x, py: t.y };
-      if (!settled) for (let i = 0; i < c.cols.length; i++) c.cols[i] = 11 + 10 * vnoise(i * .06 + t.x, 2) + 5 * vnoise(i * .25 + t.y, 5);   // it's been snowing a while
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, cap: t.cap, alive: true, cols: makeCols(t.w), vx: 0, vy: 0, px: t.x, py: t.y };
+      if (!settled || performance.now() < 8000) for (let i = 0; i < c.cols.length; i++) c.cols[i] = 11 + 10 * vnoise(i * .06 + t.x, 2) + 5 * vnoise(i * .25 + t.y, 5);   // it's been snowing a while (icons arrive a moment after the first windows)
       cur.push(c); used.add(c); }
   }
   settled = true;
@@ -180,7 +180,7 @@ function stepSnow(dt, now) {
   for (let i = clumps.length - 1; i >= 0; i--) if (clumps[i].life <= 0) clumps.splice(i, 1);
   // drifts settle; warmth melts grooves; orphans melt away
   const settle = Math.exp(-dt / 600);
-  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, 42); if (warm) melt(c.cols, c.x, c.y, dt); }
+  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, c.cap || 42); if (warm) melt(c.cols, c.x, c.y, dt); }   // c.cap: a desktop icon wears only a little cap
   for (let i = 0; i < ground.length; i++) ground[i] *= Math.exp(-dt / 1500);
   relax(ground, 70); if (warm) melt(ground, 0, H - 6, dt);
   for (const o of orphans) { o.melt += dt; for (let i = 0; i < o.cols.length; i++) o.cols[i] *= Math.exp(-dt / 14); relax(o.cols, 34); }
@@ -281,13 +281,17 @@ function loop0(now) {
 /* ---------- boot + host protocol ---------- */
 function build() { W = innerWidth; H = innerHeight; $('gl').width = Math.round(W * K); $('gl').height = Math.round(H * K); drawBackdrop(); makeFlakes(); }
 let FB = null; function commit() { } function refresh() { }
+let lastWins = null, deskIc = [];
 const handle = m => {
   if (m.t === 'desk') { showPanel(m.i, m.n); return; }
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
   if (m.t === 'cursor') { cursor = { x: m.x / K, y: m.y / K }; cursorT = performance.now(); return; }
   if (m.t === 'cursorOff') { cursor = null; return; }
   // Stage Manager draws its thumbnails tilted in 3D but reports flat rectangles: snow can't sit on them believably, so it falls behind
-  if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })).filter((_, i) => !(m.sm && m.sm[i]))); }
+  if (m.t === 'dicons') {                                               // your desktop icons: snow settles in a little cap on each
+    deskIc = (m.i || []).map(([l, t, r, b]) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: '__icon', cap: 9 }));
+    if (lastWins) handle(lastWins); else setTargets(deskIc); return; }
+  if (m.t === 'windows') { lastWins = m; if (m.live) liveUntil = performance.now() + 250; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })).filter((_, i) => !(m.sm && m.sm[i])).concat(deskIc)); }
 };
 build(); wake();
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 200); });
