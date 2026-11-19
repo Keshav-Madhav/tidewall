@@ -69,7 +69,7 @@ function fbo(...ts) {
   const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f);
   ts.forEach((t, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t, 0));
   gl.drawBuffers(ts.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
-  const st = gl.checkFramebufferStatus(gl.FRAMEBUFFER); if (st !== gl.FRAMEBUFFER_COMPLETE) post('JSERR fbo incomplete ' + st);
+  const st = gl.checkFramebufferStatus(gl.FRAMEBUFFER); if (st !== gl.FRAMEBUFFER_COMPLETE && !gl.isContextLost()) post('JSERR fbo incomplete ' + st);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); return f;
 }
 const emptyVao = gl.createVertexArray();

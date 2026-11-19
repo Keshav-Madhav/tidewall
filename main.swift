@@ -391,7 +391,7 @@ final class StillWall {
     window.ignoresMouseEvents = true; window.isOpaque = true; window.hasShadow = false; window.isReleasedWhenClosed = false
     // one bitmap, handed straight to the layer (an image view would keep extra copies of the picture)
     let v = NSView(frame: NSRect(origin: .zero, size: frame.size)); v.wantsLayer = true
-    var r = NSRect(origin: .zero, size: image.size); v.layer?.contents = image.cgImage(forProposedRect: &r, context: nil, hints: nil); v.layer?.contentsGravity = .resize
+    var r = NSRect(origin: .zero, size: image.size); v.layer?.contents = image.cgImage(forProposedRect: &r, context: nil, hints: nil); v.layer?.contentsGravity = .resizeAspectFill
     window.contentView = v; window.setFrame(frame, display: true); window.orderFront(nil)
   }
   func close() { window.orderOut(nil); window.close() }
@@ -464,6 +464,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   private(set) var loadedVariant: String?   // what the page was opened with (Wind Tunnel's automatic choice can change under it)
   var realRects: [CGRect] = []              // every window over this screen (the scene may be told about fewer)
   var seenSince: Double?                    // when it first ran on show (a picture of it a few seconds on shows the scene)
+  var usable: CGRect?                       // its display below the menu bar and beside the Dock (nil: all of it)
   private var wasOver = false, lastOverSend = 0.0
   /// pages draw at their own pace × k (2 on battery when Settings says calmer)
   func sendPace() { guard ready else { return }; send("{\"t\":\"pace\",\"k\":\(delegate.paceK)}") }
@@ -515,7 +516,8 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let k = scale
     // over one of your windows (you're working in an app, not looking at the wallpaper): the page still learns where
     // the pointer is, but doesn't speed up for it
-    let over = realRects.contains { $0.contains(p) }
+    // (the menu bar and the Dock count as a window: reaching for a menu isn't working on the wallpaper)
+    let over = realRects.contains { $0.contains(p) } || (usable.map { !$0.contains(p) } ?? false)
     // over a window (you're working in an app): the page hears where the pointer is 10 times a second, not 60; nothing
     // it does there can be seen, and every message is work for it
     let now = ProcessInfo.processInfo.systemUptime
@@ -919,16 +921,36 @@ final class Usage {
     }
     return total
   }
-  func sample() -> Sample {
+  /// The counters as they were, every 15 s for the last minute or so. What the menu and the window show is the
+  /// average since the oldest of these: what the wallpaper costs you over time. (Measured only from the moment you
+  /// look, it was the cost of looking: the menu drawing itself, the pointer up in the menu bar.)
+  private struct Mark { var t: Double; var cpu: [pid_t: UInt64]; var gpu: UInt64 }
+  private var marks: [Mark] = []
+  private func counters() -> (Double, [pid_t], [pid_t: UInt64], [pid_t: Double], UInt64) {
     let t = ProcessInfo.processInfo.systemUptime, pids = family()
+    var cpu: [pid_t: UInt64] = [:], mem: [pid_t: Double] = [:]
+    for p in pids { guard let r = rusage(p) else { continue }; cpu[p] = r.ri_user_time + r.ri_system_time; mem[p] = Double(r.ri_phys_footprint) / 1_048_576 }
+    return (t, pids, cpu, mem, gpuNs(Set(pids)))
+  }
+  func mark() {
+    let (t, _, cpu, _, g) = counters()
+    marks.append(Mark(t: t, cpu: cpu, gpu: g)); marks.removeAll { t - $0.t > 70 }
+  }
+  /// the average since the oldest mark (about a minute); just started (no mark 10 s old yet), since the last call
+  var window: Double { marks.first.map { ProcessInfo.processInfo.systemUptime - $0.t } ?? 0 }
+  func sample() -> Sample {
+    let (t, pids, cpuNow, mem, g) = counters()
     var s = Sample(); s.procs = pids.count
-    var cpuNow: [pid_t: UInt64] = [:], dCPU: UInt64 = 0
-    for p in pids { guard let r = rusage(p) else { continue }
-      let c = r.ri_user_time + r.ri_system_time; cpuNow[p] = c
-      if let l = lastCPU[p], c >= l { dCPU += c - l; if t > lastT, lastT > 0 { s.cpuBy[p] = Double(c - l) * tb / 1e9 / (t - lastT) * 100 } }
-      let mb = Double(r.ri_phys_footprint) / 1_048_576; s.memMB += mb; s.memBy[p] = mb }
-    let g = gpuNs(Set(pids)), dt = t - lastT
-    if lastT > 0, dt > 0 { s.cpu = Double(dCPU) * tb / 1e9 / dt * 100; s.gpu = Double(g >= lastGPU ? g - lastGPU : 0) / 1e9 / dt * 100 }
+    for (p, mb) in mem { s.memMB += mb; s.memBy[p] = mb }
+    let base = marks.first.flatMap { t - $0.t >= 10 ? $0 : nil }
+    let t0 = base?.t ?? lastT, cpu0 = base?.cpu ?? lastCPU, g0 = base?.gpu ?? lastGPU, dt = t - t0
+    if t0 > 0, dt > 0 {
+      var dCPU: UInt64 = 0
+      for (p, c) in cpuNow {
+        let l = cpu0[p] ?? 0                                // (a process that started since: all of its time is in the window)
+        guard c >= l else { continue }; dCPU += c - l; s.cpuBy[p] = Double(c - l) * tb / 1e9 / dt * 100 }
+      s.cpu = Double(dCPU) * tb / 1e9 / dt * 100; s.gpu = Double(g >= g0 ? g - g0 : 0) / 1e9 / dt * 100
+    }
     lastCPU = cpuNow; lastGPU = g; lastT = t
     return s
   }
@@ -1230,8 +1252,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   let usage = Usage()
   var usageTimer: Timer?
   func menuWillOpen(_ menu: NSMenu) {
-    _ = usage.sample()                                   // baseline, then refresh every 2 s while open
-    refreshUsage(menu, first: true)
+    let ready = usage.window >= 10                       // a minute's marks: its average straight away
+    if !ready { _ = usage.sample() }                     // just started: a baseline, the figures 2 s on
+    refreshUsage(menu, first: !ready)
     let t = Timer(timeInterval: 2, repeats: true) { [weak self, weak menu] _ in if let menu { self?.refreshUsage(menu, first: false) } }
     RunLoop.main.add(t, forMode: .common); usageTimer = t
   }
@@ -1240,8 +1263,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let s = first ? Usage.Sample() : usage.sample()
     let mono = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
     let ui = pid_t(appWindow.web.map(webPid) ?? -1), wc = s.cpuBy[ui] ?? 0, wm = s.memBy[ui] ?? 0
+    let avg = usage.window >= 30 ? "  last minute" : ""
     let lines = first ? ["CPU     measuring…", "GPU     measuring…", "Memory  measuring…", ""]
-      : [String(format: "CPU     %.1f%%", max(0, s.cpu - wc)), String(format: "GPU     %.1f%%", s.gpu) + (wm > 0 ? "  incl. window" : ""), String(format: "Memory  %.0f MB", max(0, s.memMB - wm)),
+      : [String(format: "CPU     %.1f%%", max(0, s.cpu - wc)) + avg, String(format: "GPU     %.1f%%", s.gpu) + avg + (wm > 0 ? "  incl. window" : ""), String(format: "Memory  %.0f MB", max(0, s.memMB - wm)),
          wm > 0 ? String(format: "+ window %.0f MB, freed on close", wm) : ""]
     for (i, l) in lines.enumerated() { guard let it = menu.item(withTag: 900 + i) else { continue }
       it.isHidden = l.isEmpty; it.attributedTitle = NSAttributedString(string: l, attributes: [.font: mono]) }
@@ -1263,6 +1287,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func applicationDidFinishLaunching(_ n: Notification) {
     if !benchMode { updater.launching() }
+    usage.mark()                                         // the meter's minute: its counters every 15 s
+    let mk = Timer(timeInterval: 15, repeats: true) { [weak self] _ in self?.usage.mark() }; mk.tolerance = 5; RunLoop.main.add(mk, forMode: .common)
     if let a = argValue("--appearance") { NSApp.appearance = NSAppearance(named: a == "light" ? .aqua : .darkAqua) }
     if args.contains("--ui-only") {           // dev: just the app window (no wallpapers), to work on the interface
       tracker.onUpdate = { [weak self] r, _ in self?.lastRects = r; self?.lastOwners = self?.tracker.owners ?? [] }; tracker.start()
@@ -1464,6 +1490,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
   var stills: [CGDirectDisplayID: StillWall] = [:]
   /// let every page go, leaving each screen showing its last frame as a still picture
+  func thumbnail(_ theme: String) -> NSImage? { NSImage(contentsOf: themesRoot.appendingPathComponent("ui/thumbs/\(theme).jpg")) }
   /// the part of a display windows can use: below the menu bar, beside the Dock
   func usableFrame(_ s: NSScreen) -> CGRect {
     let h = NSScreen.screens.first?.frame.height ?? s.frame.maxY, v = s.visibleFrame
@@ -1583,8 +1610,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       if covered { if coveredSince[id] == nil { coveredSince[id] = now; if !full, let w = walls[id] { keepStill(id, w) } } } else { coveredSince[id] = nil; pendingStills[id] = nil }
       if covered, let since = coveredSince[id], now - since > (full ? 15 : 30), let w = walls[id] {   // let its page go
         if full { w.close(); walls[id] = nil; dormant.insert(id); log("screen \(id) fully covered: released its page") }
-        else if let img = pendingStills[id] { releaseToStill(id, w, img); log("screen \(id) covered but for its menu bar: a still picture, page released") }
-        // (no picture of it yet: it has been covered since it opened, never drawn on show; it just rests)
+        // a picture of it as it was last on show; or, covered since it opened (WebKit never drew it), the wall's own
+        // thumbnail: through a translucent menu bar it reads the same, and the real page is back the moment you look
+        else if let img = pendingStills[id] ?? thumbnail(Cfg.theme(for: id)) { releaseToStill(id, w, img); log("screen \(id) covered but for its menu bar: a still picture, page released") }
       } else if !covered, dormant.contains(id), !releasedAway {                                               // visible again
         dormant.remove(id); buildWalls(); log("screen \(id) uncovered: page restored")   // (behind its still, if it had one, until it has drawn)
       }
@@ -1611,6 +1639,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       let mine = idx.map { lastRects[$0] }, names = idx.map { $0 < lastOwners.count ? lastOwners[$0] : "" }
       // never pause while windows are moving (a sliver of the town is still on show and must keep up)
       w.realRects = lastRects.filter { $0.intersects(w.cgFrame) }                 // (what's really over it, whatever the scene reacts to)
+      w.usable = benchMode ? nil : usableFrame(w)
       let own = w.realRects
       // nothing to see but through the menu bar and the Dock (a maximized window): it rests, its last frame on show
       let pause = userPaused || asleep || idleRest || batteryPause || (!live && uncoveredArea(benchMode ? w.cgFrame : usableFrame(w), own) < 1)

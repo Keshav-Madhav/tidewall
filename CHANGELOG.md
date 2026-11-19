@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.2.3]
+
+### Lighter
+- **A display covered since Tidewall started now rests too.** A screen under a maximized window from the moment Tidewall
+  opened was never drawn on show, so there was no picture of it to leave in its place, and its page kept running. It now
+  shows the wall's own picture through the menu bar and lets the page go. With two maximized monitors beside a laptop:
+  ≈480 MB → ≈300 MB.
+- **Reaching for the menu bar no longer wakes the wallpaper.** The pointer up in the menu bar or the Dock counts as over a
+  window, so opening Tidewall's menu (or any other) doesn't make the scene speed up to follow it.
+
+### Honest numbers
+- CPU and GPU in the menu and in Settings are now the **average over the last minute**, not the two seconds after you
+  opened the menu, which measured the menu drawing itself and the wallpaper reacting to the pointer on its way there.
+
+### Fixed
+- A still picture left on a display no longer stretches when its shape differs from the screen's.
+- Switching walls quickly no longer fills the log with framebuffer errors from the preview being let go.
+
 ## [1.2.2]
 
 ### Updates

@@ -165,7 +165,7 @@ function tex(w, h, internal, format, type, filter, data = null) {
   t.w = w; t.h = h; return t;
 }
 function fbo(t) { const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
-  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) post('JSERR fbo incomplete'); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return f; }
+  if (!gl.isContextLost() && gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) post('JSERR fbo incomplete'); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return f; }
 const vao = gl.createVertexArray();
 const VS_FULL = `#version 300 es
 out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUV = p; gl_Position = vec4(p * 2. - 1., 0., 1.); }`;
