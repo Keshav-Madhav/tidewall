@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.2.1]
+
+### Lighter
+- **A display under a maximized window rests.** When windows cover everything but the menu bar and the Dock, the
+  wallpaper there stops drawing (its last frame still shows through the menu bar); after 30 s the page is let go
+  entirely, with a still picture in its place, and it comes straight back when a window moves off. (A full-screen app
+  already freed its display.) On a desk with two maximized monitors: ≈12% CPU → ≈5%, ≈355 MB → ≈210 MB.
+- **While you work in your apps, the wallpaper does far less.** With the pointer over a window, nothing it does there
+  can be seen: Celestial Atlas no longer redraws the whole sky for its little black hole (≈13% CPU → ≈1.5%), Ink Map's
+  boat holds its course instead of chasing a pointer it can't reach (≈9% → ≈4.5%), and every theme now hears where the
+  pointer is 10 times a second there instead of 60.
+- **Ink Map at rest** moves its ships at 12 frames a second (about a point a step), and at 30 while the boat is under
+  way (≈7% → ≈4.7% CPU).
+- **Frame rate 30, 20 or 15 is now a cap**, not a fixed rate: a calm scene that needs less still draws less (with 30
+  picked, Ink Map's sea ran at 30 instead of its own 12, Meadow's clouds at 30 instead of 15). 60 still holds every scene
+  at 60.
+- Celestial Atlas lets go of its working canvases as soon as the minute's sky is painted.
+
 ## [1.2.0]
 
 ### Your desktop icons

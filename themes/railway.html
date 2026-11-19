@@ -1440,7 +1440,7 @@ let lastWinMsg = null, frameDT = 1 / 30;               // frameDT: the real fram
 function build() { SW = innerWidth; SH = innerHeight; W = Span.uw; H = Span.uh; OX = Span.x; OY = Span.y; K = devicePixelRatio;
   cv.width = Math.round(SW * K); cv.height = Math.round(SH * K); prep(); clearMovers(); buildStatic(); first = true; dirty = true; wake();
   if (lastWinMsg) handle(lastWinMsg); }                                // the screen's scale may have changed
-let deskKey = '', deskIc = [], deskIcR = [];
+let deskKey = '', deskIc = [], deskIcR = [], dKey = '';
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
   if (m.t === 'desk') { const k = [m.i, m.n, m.w, m.h, m.x, m.y, JSON.stringify(m.fr || [])].join('|'); if (k === deskKey) return; deskKey = k;
@@ -1448,7 +1448,7 @@ const handle = m => {
     VIS.clear(); visOf = [null, null, null]; lastKey = ''; build(); return; }
   if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; curAt(x, y, -1); Span.post('cur', { x, y }); return; }
   if (m.t === 'cursorOff') { if (curFrom === -1) { cur.on = false; Span.post('curoff', {}); } return; }
-  if (m.t === 'dicons') { const k = devicePixelRatio;                // your desktop icons, cluster by cluster
+  if (m.t === 'dicons') { const k = devicePixelRatio, key = JSON.stringify([m.r, m.c, OX, OY]); if (key === dKey) return; dKey = key;   // your desktop icons, cluster by cluster (the same again: nothing to do)
     deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k, owner: '__icons' }));
     deskIcR = (m.r || []).map(([l, t, r, b]) => [l / k + OX, t / k + OY, r / k + OX, b / k + OY]);   // each icon, for the shape of its green
     dirty = true; wake();                                               // (the green's shape can change while the clusters don't)

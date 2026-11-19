@@ -81,7 +81,7 @@ A wallpaper runs all day, so Tidewall is built to cost as little as possible:
   never in Settings), everything pauses; 10 minutes later (or 90 seconds after locking) the pages are let go entirely
   and a still picture stands in, until you're back.
 - On battery or in Low Power Mode it can carry on as usual, draw at half the rate, or pause (Settings ▸ On battery).
-- Settings ▸ Frame rate: Auto, or a fixed 60, 30, 20 or 15.
+- Settings ▸ Frame rate: Auto, a steady 60, or a cap of 30, 20 or 15.
 - Tidewall ▸ Settings shows what the wallpaper is costing right now: CPU, GPU and memory.
 
 ## Privacy

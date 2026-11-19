@@ -30,7 +30,9 @@
 <script>
 'use strict';
 const INK = 'rgba(58,42,28,0.92)';
-window.__twCalm = 20;                                    // frames a second while nobody's working here (ships under sail and a slow sea serpent)
+window.__twCalm = 12;                                    // frames a second while nobody's working here: the ships (13 pt/s) and the serpent (7)
+// move about a point a step; the boat under way asks for more (its wake is laid frame by frame). (A CSS transition to
+// glide them between steps was tried: the compositor then animates at the display's full rate, which cost more.)
 const P = { quality: 2, sigma: 70, warp: 30 };            // P.quality only for bench compatibility
 const STEP = 6, MORPH_MS = 1500;
 const cv = document.getElementById('map');
@@ -715,6 +717,7 @@ function stepBoat(dt, t) {
 function drawBoat(t) {
   const sp = Math.hypot(B.vx, B.vy), bob = Math.sin(t * 2.1) * 1.2 * (1 - Math.min(1, sp / 230) * .6), x = B.x - OX, y = B.y - OY;
   boat.style.transform = `translate3d(${(x - 30).toFixed(1)}px,${(y - 44 + bob).toFixed(1)}px,0) rotate(${B.tilt.toFixed(3)}rad) scaleX(${B.flip.toFixed(3)})`;
+  window.__twCalm = sp > 8 ? 30 : 12;                                  // under way: its wake wants frames
   if (sp > 30) inkWake.feed(x - B.vx / sp * 26, y - B.vy / sp * 26 + 4, Math.atan2(B.vy, B.vx), performance.now()); else inkWake.reset();
   inkWake.draw(performance.now());
 }
@@ -791,7 +794,8 @@ const handle = m => {
     Span.desk(m); resize(); compassAt = { x: 120, y: 120 }; delete compass.dataset.placed; compass.style.opacity = 0; remote = null; B.on = false; layoutDirty = true;
     if (lastWinsMsg) handle(lastWinsMsg);
     if (lastIcons) { FB = null; handle(lastIcons); } return; }
-  if (m.t === 'cursor') { const k = devicePixelRatio; cursor = { x: m.x / k + OX, y: m.y / k + OY }; curFrom = -1; Span.post('cur', cursor); return; }
+  if (m.t === 'cursor') { if (m.w) return;                           // over one of your windows: the boat keeps its course for the last place it saw you
+    const k = devicePixelRatio; cursor = { x: m.x / k + OX, y: m.y / k + OY }; curFrom = -1; Span.post('cur', cursor); return; }
   if (m.t === 'cursorOff') { if (curFrom === -1) { cursor = null; Span.post('curoff', {}); } return; }
   if (m.t === 'dicons') { const k = devicePixelRatio, P = 18;          // your desktop icons: a small island under each cluster
     deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX - P, y: t / k + OY - P, w: (r - l) / k + 2 * P, h: (b - t) / k + 2 * P }));

@@ -189,7 +189,8 @@ function paintSky(date = new Date()) {
     // the grain: countless faint stars where the band is dense
     const R2 = rng(77);
     for (let n = 0; n < W * H / 70; n++) { const X = R2() * W, Y = R2() * H, k = (((Y / q | 0) + pad) * soft.width + (X / q | 0) + pad) * 4, d = Math.min(1, dAt(k) * 1.15);
-      if (R2() > d * 1.4) continue; x.fillStyle = `rgba(225,230,255,${.12 + R2() * .35 * d})`; x.fillRect(X, Y, .8, .8); } }
+      if (R2() > d * 1.4) continue; x.fillStyle = `rgba(225,230,255,${.12 + R2() * .35 * d})`; x.fillRect(X, Y, .8, .8); }
+    mw.width = mw.height = soft.width = soft.height = 1; }                // the scratch canvases go now, not whenever the collector gets to them
   // real nebulae, clusters and galaxies at their true positions — painted larger and bolder than life
   { const DSO = [
       ['Orion Nebula', 83.82, -5.39, 46, ['235,120,150', '150,110,220']], ['Rosette', 98.0, 4.9, 34, ['220,90,110']], ['Lagoon', 270.9, -24.38, 34, ['235,110,140', '130,140,230']],
@@ -472,6 +473,7 @@ const handle = m => {
   if (m.t === 'me') return;
   if (m.t === 'desk') { const k = [m.x, m.y, m.w, m.h, m.uw, m.uh, m.i, m.n].join('|'); if (k === deskKey) return; deskKey = k;
     DESK = m; if (SKY) { uploadSky(paintSky(), false); dirty = true; wake(); } return; }
+  if (m.t === 'cursor' && m.w) { if (curs.here) { curs.here = false; wake(); } return; }   // over a window: its little black hole can't be seen; let it fade, and redraw nothing for it
   if (m.t === 'cursor') { curs.x = m.x / K; curs.y = m.y / K; curs.here = true; curs.lastMove = performance.now(); dirty = true; wake(); return; }
   if (m.t === 'cursorOff') { curs.here = false; wake(); return; }        // the pointer went to another screen
   if (m.t === 'dicons') { const k = [m.r].join('|'); if (k === iconKey) return; iconKey = k;   // your desktop icons: the chart is repainted round them

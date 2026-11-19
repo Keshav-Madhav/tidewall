@@ -270,7 +270,8 @@ func earlyScript(fps: Double, opaque: Bool, cap: Double = 8) -> String { """
   // follows you and your windows stays smooth. A slow scene may ask for less while calm (window.__twCalm: slow ships,
   // wax, gardeners). A frame rate picked in Settings replaces all of it. Between frames the
   // page sleeps on a timer instead of waking at every vsync.
-  const pick = \(fps), CALM = pick > 0 ? pick : 30, LIVE = pick > 0 ? pick : 60;
+  // a picked rate: 60 holds every scene there; 30, 20 or 15 cap it (a calm scene that asks for less still gets less)
+  const pick = \(fps), CALM = pick > 0 ? pick : 30, LIVE = pick > 0 ? pick : 60, calmAt = () => pick >= 60 ? pick : Math.min(CALM, window.__twCalm || CALM);
   let boostUntil = 0, paceK = 1;                                      // paceK: 2 on battery when Settings says calmer
   window.__twBoost = ms => { const u = performance.now() + ms; if (u > boostUntil) boostUntil = u; };
   { const deliver = window.__hostSend;
@@ -282,7 +283,7 @@ func earlyScript(fps: Double, opaque: Bool, cap: Double = 8) -> String { """
   const raf = window.requestAnimationFrame.bind(window);
   let due = 0, lastT = -1, go = false;
   window.requestAnimationFrame = cb => raf(function tick(t) {
-    if (t !== lastT) { lastT = t; const iv = paceK * 1000 / (performance.now() < boostUntil ? LIVE : pick > 0 ? pick : (window.__twCalm || CALM)); go = t + 2 >= due; if (go) due = Math.max(due + iv, t); }
+    if (t !== lastT) { lastT = t; const iv = paceK * 1000 / (performance.now() < boostUntil ? LIVE : calmAt()); go = t + 2 >= due; if (go) due = Math.max(due + iv, t); }
     if (!go) { const wait = due - t - 6; if (wait > 4) setTimeout(() => raf(tick), wait); else raf(tick); return; }
     if (window.__prof) { const a = performance.now(); cb(t); const p = window.__prof; p.n++; p.ms += performance.now() - a; } else cb(t);
   });
@@ -451,7 +452,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   }
 
   func load() {
-    ready = false; paused = nil; lastIcons = ""; lastMask = ""; lastWins = ""; wantsCursor = true
+    ready = false; paused = nil; lastIcons = ""; lastMask = ""; lastWins = ""; wantsCursor = true; seenSince = nil
     let page = ["beach": "flat", "meadow": "meadow", "inkmap": "inkmap", "celestial": "celestial", "snow": "snow", "reef": "reef", "wind": "wind", "lava": "lava", "tunnel": "tunnel", "gallery": "gallery", "garden": "garden", "railway": "railway"][Cfg.theme(for: screenID)] ?? "estate"
     loadedVariant = Cfg.variant(Cfg.theme(for: screenID))
     let v = loadedVariant.flatMap { $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) }.map { "&v=\($0)" } ?? ""
@@ -460,6 +461,8 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
   private(set) var loadedVariant: String?   // what the page was opened with (Wind Tunnel's automatic choice can change under it)
   var realRects: [CGRect] = []              // every window over this screen (the scene may be told about fewer)
+  var seenSince: Double?                    // when it first ran on show (a picture of it a few seconds on shows the scene)
+  private var wasOver = false, lastOverSend = 0.0
   /// pages draw at their own pace × k (2 on battery when Settings says calmer)
   func sendPace() { guard ready else { return }; send("{\"t\":\"pace\",\"k\":\(delegate.paceK)}") }
   var wantsCursor = true                    // a theme that ignores the pointer says so ("nocursor"): no 120 Hz messages for it
@@ -484,10 +487,12 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let order = rows.flatMap { $0.sorted { $0.minX < $1.minX } }, i = order.firstIndex(of: me) ?? 0
     lastDeskWorld = frames.count
     let fr = frames.map { "[\(Int($0.minX - u.minX)),\(Int($0.minY - u.minY)),\(Int($0.width)),\(Int($0.height))]" }.joined(separator: ",")
-    send("{\"t\":\"desk\",\"fr\":[\(fr)],\"x\":\(me.minX - u.minX),\"y\":\(me.minY - u.minY),\"w\":\(me.width),\"h\":\(me.height),\"uw\":\(u.width),\"uh\":\(u.height),\"i\":\(i),\"n\":\(frames.count),\"mx\":\(main.midX - u.minX),\"my\":\(main.midY - u.minY),\"mw\":\(main.width),\"mh\":\(main.height)}")
-    lastDIcons = ""; sendDeskIcons()                                  // (pages place icons by their world offset: the desk may have moved it)
+    let deskMsg = "{\"t\":\"desk\",\"fr\":[\(fr)],\"x\":\(me.minX - u.minX),\"y\":\(me.minY - u.minY),\"w\":\(me.width),\"h\":\(me.height),\"uw\":\(u.width),\"uh\":\(u.height),\"i\":\(i),\"n\":\(frames.count),\"mx\":\(main.midX - u.minX),\"my\":\(main.midY - u.minY),\"mw\":\(main.width),\"mh\":\(main.height)}"
+    send(deskMsg)
+    if deskMsg != lastDeskMsg { lastDeskMsg = deskMsg; lastDIcons = ""; sendDeskIcons() }   // (pages place icons by their world offset: a new desk may have moved it)
   }
   private(set) var lastDeskWorld = 1
+  private var lastDeskMsg = ""
   private var lastDIcons = ""
   /// the desktop icons this page should make room for (those on its display, or anywhere in its world), each icon and
   /// each cluster of neighbouring icons, in its own device pixels; an empty list when the setting is off
@@ -509,6 +514,11 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     // over one of your windows (you're working in an app, not looking at the wallpaper): the page still learns where
     // the pointer is, but doesn't speed up for it
     let over = realRects.contains { $0.contains(p) }
+    // over a window (you're working in an app): the page hears where the pointer is 10 times a second, not 60; nothing
+    // it does there can be seen, and every message is work for it
+    let now = ProcessInfo.processInfo.systemUptime
+    if over && wasOver && now - lastOverSend < 0.1 { return }
+    wasOver = over; if over { lastOverSend = now }
     send("{\"t\":\"cursor\",\"x\":\(Int((p.x - cgFrame.minX) * k)),\"y\":\(Int((p.y - cgFrame.minY) * k))\(over ? ",\"w\":1" : "")}")
   }
 
@@ -521,7 +531,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in guard let self else { return }
         NSAnimationContext.runAnimationGroup { c in c.duration = 0.35; self.window.animator().alphaValue = 1 } completionHandler: { self.onShown?(); self.onShown = nil } }
     }
-    if s == "ready" { ready = true; lastWins = ""; lastIcons = ""; lastMask = ""; lastDIcons = ""; paused = nil   // a reloaded page has none of it
+    if s == "ready" { ready = true; lastWins = ""; lastIcons = ""; lastMask = ""; lastDIcons = ""; lastDeskMsg = ""; paused = nil   // a reloaded page has none of it
       sendDesk(); send("{\"t\":\"me\",\"seed\":\(Cfg.seed)}"); sendDeskIcons(); if delegate.paceK != 1 { sendPace() }
       if let p = pending { pending = nil; p() } else if let a = lastArgs { update(rects: a.0, owners: a.1, live: false, pause: a.3) }
       return }
@@ -1449,6 +1459,25 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
   var stills: [CGDirectDisplayID: StillWall] = [:]
   /// let every page go, leaving each screen showing its last frame as a still picture
+  /// the part of a display windows can use: below the menu bar, beside the Dock
+  func usableFrame(_ s: NSScreen) -> CGRect {
+    let h = NSScreen.screens.first?.frame.height ?? s.frame.maxY, v = s.visibleFrame
+    return CGRect(x: v.minX, y: h - v.maxY, width: v.width, height: v.height)
+  }
+  func usableFrame(_ w: Wallpaper) -> CGRect { NSScreen.screens.first(where: { $0.displayID == w.screenID }).map { usableFrame($0) } ?? w.cgFrame }
+  /// the moment a display is covered but for its menu bar and Dock, a picture of its page as it was last on show (a
+  /// page that's been covered all along hasn't drawn anything worth keeping: WebKit doesn't render a hidden window)
+  var pendingStills: [CGDirectDisplayID: NSImage] = [:]
+  func keepStill(_ id: CGDirectDisplayID, _ w: Wallpaper) {
+    guard let t = w.seenSince, ProcessInfo.processInfo.systemUptime - t > 5 else { return }
+    w.web.takeSnapshot(with: nil) { [weak self] img, _ in if let self, let img, self.coveredSince[id] != nil { self.pendingStills[id] = img } }
+  }
+  /// one display's page let go, that picture left on show in its place (the menu bar and Dock still let it through)
+  func releaseToStill(_ id: CGDirectDisplayID, _ w: Wallpaper, _ img: NSImage) {
+    walls[id] = nil; dormant.insert(id); pendingStills[id] = nil
+    stills[id]?.close(); stills[id] = StillWall(frame: w.window.frame, image: img)
+    w.close()
+  }
   func releaseToStills() {
     let ws = walls; walls = [:]; releasedAway = true
     for (id, w) in ws {
@@ -1543,12 +1572,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let now = ProcessInfo.processInfo.systemUptime
     for s in NSScreen.screens where !benchMode && !live {
       let id = s.displayID, frame = s.cgFrame
-      let covered = !live && uncoveredArea(frame, lastRects) < 1
-      if covered { if coveredSince[id] == nil { coveredSince[id] = now } } else { coveredSince[id] = nil }
-      if covered, let since = coveredSince[id], now - since > 15, let w = walls[id] {          // nobody can see it: free it
-        w.close(); walls[id] = nil; dormant.insert(id); log("screen \(id) fully covered: released its page")
-      } else if !covered, dormant.contains(id), !releasedAway {                                               // a sliver is visible again
-        dormant.remove(id); walls[id] = Wallpaper(screen: s); log("screen \(id) uncovered: page restored")
+      // covered: a full-screen app over it. Mostly covered: windows over all of it but the menu bar and the Dock (a
+      // maximized window), where the wallpaper only shows through, dimmed, behind them
+      let full = uncoveredArea(frame, lastRects) < 1, covered = full || uncoveredArea(usableFrame(s), lastRects) < 1
+      if covered { if coveredSince[id] == nil { coveredSince[id] = now; if !full, let w = walls[id] { keepStill(id, w) } } } else { coveredSince[id] = nil; pendingStills[id] = nil }
+      if covered, let since = coveredSince[id], now - since > (full ? 15 : 30), let w = walls[id] {   // let its page go
+        if full { w.close(); walls[id] = nil; dormant.insert(id); log("screen \(id) fully covered: released its page") }
+        else if let img = pendingStills[id] { releaseToStill(id, w, img); log("screen \(id) covered but for its menu bar: a still picture, page released") }
+        // (no picture of it yet: it has been covered since it opened, never drawn on show; it just rests)
+      } else if !covered, dormant.contains(id), !releasedAway {                                               // visible again
+        dormant.remove(id); buildWalls(); log("screen \(id) uncovered: page restored")   // (behind its still, if it had one, until it has drawn)
       }
     }
     scheduleCoverCheck()
@@ -1574,7 +1607,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       // never pause while windows are moving (a sliver of the town is still on show and must keep up)
       w.realRects = lastRects.filter { $0.intersects(w.cgFrame) }                 // (what's really over it, whatever the scene reacts to)
       let own = w.realRects
-      let pause = userPaused || asleep || idleRest || batteryPause || (!live && uncoveredArea(w.cgFrame, own) < 1)
+      // nothing to see but through the menu bar and the Dock (a maximized window): it rests, its last frame on show
+      let pause = userPaused || asleep || idleRest || batteryPause || (!live && uncoveredArea(benchMode ? w.cgFrame : usableFrame(w), own) < 1)
+      if !pause && w.ready && w.seenSince == nil { w.seenSince = now }
       w.update(rects: mine, owners: names, live: live, pause: pause)
     }
   }
@@ -1769,6 +1804,7 @@ enum Bench {
         }
         func shoot() {
           let t = (ProcessInfo.processInfo.systemUptime - t0) * k
+          guard !args.contains("--film-noshots") else { return }            // dev: the scripted desk only (CPU measurements)
           guard t <= dur, let w = app.walls.values.first(where: { $0.cgFrame.origin == .zero }) else { return }
           let cfg = WKSnapshotConfiguration(); cfg.snapshotWidth = NSNumber(value: width / 2)   // in points: ×2 on a retina screen
           w.web.takeSnapshot(with: cfg) { img, _ in
