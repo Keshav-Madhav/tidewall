@@ -1,6 +1,9 @@
 name: Release
-# Runs when tools/release.sh pushes a version tag. Two jobs, so the signing key never shares a machine with the build:
-#   build:   builds the release app, zips it, and checks the zip exactly the way the app's updater will. No secrets.
+# Runs when tools/release.sh pushes a version tag. Two jobs, so the update key never shares a machine with the build:
+#   build:   (environment "codesign": Tidewall's code-signing certificate, v* tags only) builds the release app, signs
+#            it with that certificate (the same identity every release, so macOS keeps Tidewall's permissions across
+#            updates), zips it, and checks the zip exactly the way the app's updater will. The certificate alone can't
+#            ship anything: installed copies take only what the update key signed.
 #   publish: (environment "release": the key lives there, and only v* tags may use it) signs update.json with
 #            tools/update-sign.swift, verifies it against the app's public keys, and publishes the release. It runs
 #            none of the repo's build scripts, and keeps no git credentials on disk.
@@ -14,6 +17,10 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 30
+    environment: codesign
+    env:
+      # the certificate's SHA-1 (public: assets/tidewall-signing-cert.pem). A release must carry exactly this identity
+      SIGN_SHA1: 1873ADEDF0C5887F95CACECD56B3083687235F7A
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
         with:
@@ -23,8 +30,25 @@ jobs:
           v="${GITHUB_REF_NAME#v}"
           [ "$(tr -d ' \n' < VERSION)" = "$v" ] || { echo "::error::tag $GITHUB_REF_NAME but VERSION says $(cat VERSION)"; exit 1; }
           grep -q "^## \[$v\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no ## [$v] section"; exit 1; }
+      - name: Load the signing certificate (a throwaway keychain, gone with the runner)
+        env:
+          TIDEWALL_SIGN_P12: ${{ secrets.TIDEWALL_SIGN_P12 }}
+          TIDEWALL_SIGN_PASS: ${{ secrets.TIDEWALL_SIGN_PASS }}
+        run: |
+          [ -n "$TIDEWALL_SIGN_P12" ] && [ -n "$TIDEWALL_SIGN_PASS" ] || { echo "::error::the TIDEWALL_SIGN_P12 / TIDEWALL_SIGN_PASS secrets are missing from the codesign environment"; exit 1; }
+          kc="$RUNNER_TEMP/sign.keychain-db"; kp=$(openssl rand -hex 24)
+          security create-keychain -p "$kp" "$kc"; security set-keychain-settings -lut 1800 "$kc"; security unlock-keychain -p "$kp" "$kc"
+          (umask 077; echo "$TIDEWALL_SIGN_P12" | base64 -D > "$RUNNER_TEMP/sign.p12")
+          security import "$RUNNER_TEMP/sign.p12" -k "$kc" -P "$TIDEWALL_SIGN_PASS" -T /usr/bin/codesign -f pkcs12 >/dev/null
+          rm -f "$RUNNER_TEMP/sign.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kp" "$kc" >/dev/null
+          security find-identity -p codesigning "$kc" | grep -q "$SIGN_SHA1" || { echo "::error::the certificate in the secret isn't $SIGN_SHA1"; exit 1; }
+          echo "TIDEWALL_SIGN_KEYCHAIN=$kc" >> "$GITHUB_ENV"
       - name: Build the release app
-        run: RELEASE=1 ./build.sh && bash tools/check-pages.sh
+        run: RELEASE=1 TIDEWALL_SIGN_ID="$SIGN_SHA1" ./build.sh && bash tools/check-pages.sh
+      - name: Unload the signing certificate
+        if: always()
+        run: '[ -z "${TIDEWALL_SIGN_KEYCHAIN:-}" ] || security delete-keychain "$TIDEWALL_SIGN_KEYCHAIN" || true'
       - name: Zip, and check it the way the updater will
         run: |
           v="${GITHUB_REF_NAME#v}"; z="Tidewall-${GITHUB_REF_NAME}.zip"
@@ -34,6 +58,8 @@ jobs:
           [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' $a/Contents/Info.plist)" = app.tidewall ] || { echo "::error::bundle id"; exit 1; }
           [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' $a/Contents/Info.plist)" = "$v" ] || { echo "::error::bundle version"; exit 1; }
           codesign --verify --deep --strict "$a" || { echo "::error::code signature doesn't verify after the zip round trip"; exit 1; }
+          sha1=$(echo "$SIGN_SHA1" | tr 'A-F' 'a-f')
+          codesign --verify -R="identifier \"app.tidewall\" and certificate root = H\"$sha1\"" "$a" || { echo "::error::not signed with Tidewall's certificate (macOS would ask everyone for its permissions again)"; exit 1; }
           lipo -archs $a/Contents/MacOS/Tidewall | grep -q arm64 && lipo -archs $a/Contents/MacOS/Tidewall | grep -q x86_64 || { echo "::error::not universal"; exit 1; }
           awk -v v="$v" '$0 ~ "^## \\[?"v {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
       - name: Make the patch from the previous release (only what changed; checked the way the updater applies it)

@@ -22,8 +22,14 @@ You'll get a reply within a week.
 - **The key in CI.** The private key is a secret of the `release` environment, which only `v*` tags can use. It is
   read by a job that runs no build scripts and keeps no git credentials. A ruleset stops published `v*` tags from
   being moved or deleted. Fork pull requests never see it.
-- **Safe installs.** The app never asks for an administrator password. It only replaces itself in a folder you can
-  write to, with renames on one volume. If a new version doesn't report that it started within 20 seconds, the
+- **One code-signing identity.** Every release is signed with Tidewall's own self-signed certificate (public part:
+  `assets/tidewall-signing-cert.pem`, SHA-1 `1873ADEDF0C5887F95CACECD56B3083687235F7A`), so macOS sees each update as
+  the same app and keeps its permissions. Its private key is a secret of the `codesign` environment (only `v*` tags),
+  read only by the build job, and CI refuses a release not signed with exactly this certificate. It isn't an Apple
+  Developer ID, so Gatekeeper still asks once on first install, and holding it alone ships nothing: installed copies
+  take only what the update key signed.
+- **Safe installs.** The app replaces itself with renames on one volume. Where it can't write to its own folder (a
+  standard account) it asks for an administrator's password, and only when you choose Restart to Update. If a new version doesn't report that it started within 20 seconds, the
   previous one is put back and that version isn't installed automatically again.
 - **No downgrades.** Older versions are never installed.
 - **Development builds** (anything not built with `RELEASE=1`) don't update themselves.

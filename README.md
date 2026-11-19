@@ -61,7 +61,9 @@ Requires macOS 14 Sonoma or later, on Apple silicon or Intel.
 
 **Updates install themselves.** Tidewall checks GitHub for new versions, verifies each download is a signed Tidewall
 release, and installs it while your screen is locked (or when you choose **Restart to Update** in the menu bar). You
-only see the "Open Anyway" step once. Turn it off in Tidewall's **About** page.
+only see the "Open Anyway" step once. Every release is signed with the same Tidewall certificate, so macOS knows each
+update is the same app and keeps what you've allowed it (Finder, for the desktop icons). Turn updates off in Tidewall's
+**About** page.
 
 Tidewall lives in the menu bar, as a little window riding a wave. Click it and choose **Open Tidewall…** for the
 window, where you can try every wall on a live preview of your own desktop, give each display its own wall, and

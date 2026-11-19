@@ -14,7 +14,7 @@ themes/ui/thumbs/       gallery thumbnails (tools/thumbs.sh regenerates them)
 themes/variants.json    per-theme variants (Wind Map region, Lava Lamp colours, Wind Tunnel model)
 assets/                 app icon (Tidewall.icns, icon-1024.png)
 tools/                  dev tools: thumbs, page syntax check, memory and GPU measurement
-build.sh                → build/Tidewall.app (universal, ad-hoc signed)
+build.sh                → build/Tidewall.app (universal; ad-hoc, or the Tidewall certificate when TIDEWALL_SIGN_ID is set)
 ```
 
 Inside `main.swift`: `Cfg` (settings, user defaults, the time-zone site), `SchemeHandler` (serves `themes/`),
@@ -77,6 +77,11 @@ from source, or two wallpapers stack.
   change that `sed` in release.yml.
 - **Never change `Updater.publicKey` or lose the private key**: every existing install would refuse later updates.
   The private key is the repo secret; keep an offline backup (`tools/update-sign.swift keygen` made it once).
+- **Code signing**: releases are signed with a self-signed "Tidewall" certificate (SHA-1 1873ADED…5F7A,
+  `assets/tidewall-signing-cert.pem`); the .p12 and its password are the `codesign` environment's `TIDEWALL_SIGN_P12`
+  / `TIDEWALL_SIGN_PASS`, with a backup in the maintainer's Keychain ("Tidewall code-signing certificate …"). macOS
+  keys Tidewall's permissions to this identity: **never ship a release signed with anything else** (CI checks), and
+  changing certificates (or moving to an Apple Developer ID) costs every user one more permission prompt.
 - Test an update locally without publishing: build a higher version, sign it (`TIDEWALL_UPDATE_KEY=… swift
   tools/update-sign.swift sign …`), serve it with `python3 -m http.server`, then run an installed copy with
   `TIDEWALL_UPDATE_FEED=http://127.0.0.1:PORT/update.json TIDEWALL_UPDATE_INSTALL_NOW=1` (a development build, with a

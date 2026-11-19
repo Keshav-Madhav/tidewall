@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds build/Tidewall.app: the host, the icon, and the themes (Info.plist, ad-hoc signed).
+# Builds build/Tidewall.app: the host, the icon, and the themes (Info.plist; signed, see the end).
 # To use it: copy it to ~/Applications (or /Applications), open it, and turn on "Open at login" in its Settings.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -40,5 +40,13 @@ cat > "$APP/Contents/Info.plist" <<PL
   <key>NSHumanReadableCopyright</key><string>GPL-3.0. Began as a fork of Deskland.</string>
 </dict></plist>
 PL
-codesign --force --deep --sign - "$APP"                       # ad-hoc; the updater refuses a bundle whose seal is broken
+# Releases are signed with Tidewall's own certificate (assets/tidewall-signing-cert.pem; the release workflow puts it in
+# a throwaway keychain and sets TIDEWALL_SIGN_ID to its SHA-1). Every release then has the same identity, so macOS keeps
+# the permissions you gave Tidewall (Finder, for the desktop icons) across updates. Anything else is signed ad hoc.
+# Either way the updater refuses a bundle whose seal is broken.
+if [ -n "${TIDEWALL_SIGN_ID:-}" ]; then
+  codesign --force --deep --timestamp=none --sign "$TIDEWALL_SIGN_ID" ${TIDEWALL_SIGN_KEYCHAIN:+--keychain "$TIDEWALL_SIGN_KEYCHAIN"} "$APP"
+else
+  codesign --force --deep --sign - "$APP"
+fi
 echo "built $APP ($(du -sh "$APP" | cut -f1))"

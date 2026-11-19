@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.4]
+
+### Updates
+- **Tidewall now has its own signature.** Every release from here on is signed with the same Tidewall certificate, so
+  macOS recognises each update as the same app and **keeps the permissions you've given it** (Finder, for the desktop
+  icons) instead of asking again after every update. This one update is the last time it asks: macOS is meeting the
+  signature for the first time.
+
 ## [1.2.3]
 
 ### Lighter
