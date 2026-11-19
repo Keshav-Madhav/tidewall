@@ -42,6 +42,8 @@ jobs:
           security import "$RUNNER_TEMP/sign.p12" -k "$kc" -P "$TIDEWALL_SIGN_PASS" -T /usr/bin/codesign -f pkcs12 >/dev/null
           rm -f "$RUNNER_TEMP/sign.p12"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kp" "$kc" >/dev/null
+          # codesign finds the private key only through the search list (the runner's own, thrown away with it)
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           security find-identity -p codesigning "$kc" | grep -q "$SIGN_SHA1" || { echo "::error::the certificate in the secret isn't $SIGN_SHA1"; exit 1; }
           echo "TIDEWALL_SIGN_KEYCHAIN=$kc" >> "$GITHUB_ENV"
       - name: Build the release app

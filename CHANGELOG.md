@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.2.4]
+## [1.2.5]
 
 ### Updates
 - **Tidewall now has its own signature.** Every release from here on is signed with the same Tidewall certificate, so
