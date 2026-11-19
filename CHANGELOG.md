@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.2.2]
+
+### Updates
+- **Updates download only what changed.** A release now also carries a small patch of just the files that differ from
+  the release before it (often well under 1 MB instead of 130 MB). Tidewall clones itself, lays the patch over the clone,
+  and installs it only if the result is exactly the signed release, bit for bit; otherwise it fetches the whole release as
+  before. (This version itself still arrives in full: the next one is the first that can come as a patch.)
+- **No more “download it from GitHub”.** A copy macOS runs straight from Downloads now offers **Move to Applications**
+  (in About and the menu bar) and updates from there. Where Tidewall can't write to its own folder (a standard account,
+  an Applications folder only an administrator can change) it still downloads updates, and Restart to Update asks for an
+  administrator's password.
+
+### Walls
+- Themes are now called **walls**.
+
+### Steadier
+- The live preview can no longer sit on “Loading preview…” forever: a wall that doesn't start is tried once more, then
+  the window says so. Switching walls lets go of the old preview's graphics at once, and a wallpaper that keeps losing its
+  graphics (the GPU reset, say) waits longer before each reload instead of reloading in a loop.
+
 ## [1.2.1]
 
 ### Lighter

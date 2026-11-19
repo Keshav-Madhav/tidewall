@@ -229,7 +229,9 @@ func earlyScript(fps: Double, opaque: Bool, cap: Double = 8) -> String { """
     let t = 0;
     const lost = () => {
       try { webkit.messageHandlers.host.postMessage('JSERR webgl context lost; reloading the page'); } catch (_) {}
-      clearTimeout(t); t = setTimeout(() => location.reload(), 2500);
+      // a page that keeps losing it waits longer each time: one loss can never turn into a reload loop
+      let n = 0; try { const r = JSON.parse(sessionStorage.__twLost || '[]').filter(x => Date.now() - x < 120000); r.push(Date.now()); sessionStorage.__twLost = JSON.stringify(r); n = r.length; } catch (_) {}
+      clearTimeout(t); t = setTimeout(() => location.reload(), n > 3 ? 30000 : n > 1 ? 8000 : 2500);
     };
     HTMLCanvasElement.prototype.getContext = function (type, ...a) {
       const ctx = gc.call(this, type, ...a);
@@ -984,6 +986,9 @@ let frameShim = """
     addEventListener: (t, f) => { if (t === 'message') ls.push(f); }, removeEventListener: () => {} };
   addEventListener('message', e => { if (e.source === parent && e.data && e.data.__tw !== undefined) for (const f of ls) f({ data: e.data.__tw }); });
   window.__opaque = true;
+  // each WebGL context remembered on its canvas, so the window can let go of it the moment this preview is replaced
+  const gc = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type, ...a) { const c = gc.call(this, type, ...a); if (c && String(type).indexOf('webgl') === 0) this.__twGL = c; return c; };
 })();
 """
 
@@ -1635,7 +1640,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     case .downloading(let v):
       let u = NSMenuItem(title: "Downloading Tidewall \(v)…", action: nil, keyEquivalent: ""); u.isEnabled = false; m.addItem(u); m.addItem(.separator())
     case .blocked(let v, let why):
-      let u = ClosureItem("Download Tidewall \(v)…") { NSWorkspace.shared.open(Updater.releasesPage) }; u.toolTip = why; m.addItem(u); m.addItem(.separator())
+      let u = ClosureItem("Move to Applications to Update to \(v)") { [weak self] in self?.updater.install() }; u.toolTip = why; m.addItem(u); m.addItem(.separator())
     default: break
     }
     for (i, title) in ["CPU  –", "GPU  –", "Memory  –", ""].enumerated() {
@@ -1673,7 +1678,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sub("\(names[id] ?? s.localizedName) — \(Cfg.label(Cfg.theme(for: id)))", items)
       }
     }
-    sub(NSScreen.screens.count > 1 ? "All Displays" : "Theme", Cfg.themes.map { (id, label) in (label, NSScreen.screens.count > 1 ? Cfg.theme == id && !NSScreen.screens.contains { Cfg.d.string(forKey: "theme.display.\($0.displayID)") != nil } : showing.contains(id), { Cfg.clearDisplayThemes(); Cfg.theme = id; self.reloadAll(); self.buildMenu(); self.appWindow.pushState() }) })
+    sub(NSScreen.screens.count > 1 ? "All Displays" : "Wall", Cfg.themes.map { (id, label) in (label, NSScreen.screens.count > 1 ? Cfg.theme == id && !NSScreen.screens.contains { Cfg.d.string(forKey: "theme.display.\($0.displayID)") != nil } : showing.contains(id), { Cfg.clearDisplayThemes(); Cfg.theme = id; self.reloadAll(); self.buildMenu(); self.appWindow.pushState() }) })
     m.addItem(.separator())
     let ri = ClosureItem("Rest when idle") { Cfg.idleMinutes = Cfg.idleMinutes > 0 ? 0 : Cfg.idleLast; self.buildMenu(); self.appWindow.pushState() }; ri.state = Cfg.idleMinutes > 0 ? .on : .off
     let p = ClosureItem("Pause") { self.userPaused.toggle(); self.dispatch(live: false); self.buildMenu(); self.appWindow.pushState() }
@@ -1945,6 +1950,12 @@ final class Updater {
   /// The release-signing keys' public halves: the one CI signs with, and an offline backup (kept off GitHub) to sign
   /// with if the first is ever lost or has to be retired. Removing a key strands installs that only trust it.
   static let publicKeys = ["jjgDHnSJpmtt4178OEDmCcY5tCnQ3yryG8fnEPBxvyE=", "KsHXWESHYkG6q4hV1qc6fYixqZj5UcoS/34N+7Gwycw="]
+  /// development builds only: a throwaway key to sign local test releases with (TIDEWALL_UPDATE_TESTKEY = its public half)
+  static var trustedKeys: [String] { publicKeys + (env["TIDEWALL_UPDATE_TESTKEY"].map { [$0] } ?? []) }
+  /// A release can carry a patch: only the files that changed since the release before it. A copy of the app on that
+  /// release is cloned, patched, and must then match the release's code-signature hash exactly (the signature seals
+  /// every file in the bundle), or the whole release is downloaded as before.
+  struct Patch { let from: String, url: URL, sha: String, size: Int }
   static let feed = URL(string: env["TIDEWALL_UPDATE_FEED"] ?? "https://github.com/Keshav-Madhav/tidewall/releases/latest/download/update.json")!
   static let releasesPage = URL(string: "https://github.com/Keshav-Madhav/tidewall/releases/latest")!
   enum State: Equatable { case idle, checking, downloading(String), ready(String), blocked(String, String), skipped(String), upToDate, failed(String), off(String) }
@@ -1952,6 +1963,9 @@ final class Updater {
   var onChange: (() -> Void)?
   var isAway: () -> Bool = { false }
   private var staged: URL?, stagedHash = "", lastCheck: Date?, timer: Timer?, notes = ""
+  /// the app's folder isn't writable by this account (a standard account, /Applications owned by an administrator):
+  /// updates still download, and installing asks for an administrator's password
+  var needsAdmin: Bool { !fm.isWritableFile(atPath: Bundle.main.bundleURL.deletingLastPathComponent().path) }
   /// this launch is the first after an update installed
   private(set) var justUpdated = args.contains("--updated-from")
   private let fm = FileManager.default
@@ -1969,8 +1983,9 @@ final class Updater {
   }
   /// The wallpapers are up: an install's helper waits for this before it lets go of the previous copy
   func cameUp() { try? Cfg.version.write(to: alive, atomically: true, encoding: .utf8) }
-  /// unpacked updates live beside the app, so every step of the swap is a rename on one volume
-  private var work: URL { Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(".tidewall-update-\(getuid())") }
+  /// unpacked updates live beside the app, so every step of the swap is a rename on one volume (or, where this account
+  /// can't write, in its own caches: the install then runs with an administrator's permission)
+  private var work: URL { needsAdmin ? caches.appendingPathComponent("stage") : Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent(".tidewall-update-\(getuid())") }
 
   /// why updates are off altogether (nil = they're on)
   var off: String? { Self.devBuild && Self.env["TIDEWALL_UPDATE_FEED"] == nil ? "This is a development build; it doesn't update itself." : nil }
@@ -1996,12 +2011,10 @@ final class Updater {
     timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.check(manual: false) }
   }
 
-  /// Why this copy can't replace itself (nil = it can)
+  /// Why this copy can't replace itself (nil = it can). Only a copy macOS runs from a temporary place (opened straight
+  /// from Downloads) can't: the button then moves it to Applications. A folder it can't write to just needs a password.
   var cantInstall: String? {
-    let app = Bundle.main.bundleURL, parent = app.deletingLastPathComponent().path
-    if app.path.contains("/AppTranslocation/") { return "Move Tidewall to your Applications folder to get updates." }
-    if !fm.isWritableFile(atPath: parent) { return "Tidewall can't replace itself in \(parent)." }
-    return nil
+    Bundle.main.bundleURL.path.contains("/AppTranslocation/") ? "Move Tidewall to your Applications folder to get updates." : nil
   }
 
   /// versions whose install didn't come up: not installed automatically again
@@ -2010,7 +2023,7 @@ final class Updater {
 
   /// For the app window: where things stand
   var status: [String: Any] {
-    var o: [String: Any] = ["auto": Cfg.autoUpdate]
+    var o: [String: Any] = ["auto": Cfg.autoUpdate, "admin": needsAdmin]
     switch state {
     case .idle: o["s"] = "idle"
     case .checking: o["s"] = "checking"
@@ -2063,13 +2076,24 @@ final class Updater {
         self.state = .failed("Tidewall \(v) needs macOS \(minOS)"); if manual { self.tell("Tidewall \(v) needs macOS \(minOS)", "This Mac stays on \(Cfg.version).") }; return }
       guard url.scheme == "https" || Self.env["TIDEWALL_UPDATE_FEED"] != nil else { self.state = .failed("insecure update URL"); return }
       self.notes = notes
-      if let why = self.cantInstall {        // don't fetch what can't be installed: point at the download instead
-        self.state = .blocked(v, why); if manual { self.tell("Tidewall \(v) is available", "\(why) You can download it from GitHub.") }; return }
+      if let why = self.cantInstall {        // don't fetch what can't be installed: offer to move it where it can be
+        self.state = .blocked(v, why); if manual { self.tell("Tidewall \(v) is available", "\(why) Choose “Move to Applications” in Tidewall ▸ About.") }; return }
+      // the patch, and the code-signature hash it must arrive at: trusted only under the second signature
+      var patch: Patch? = nil, cdhash: String? = nil
+      if let s2 = (o["signature2"] as? String).flatMap({ Data(base64Encoded: $0) }), let cd = o["cdhash"] as? String {
+        let p = o["patch"] as? [String: Any], pf = p?["from"] as? String ?? "-", ps = p?["sha256"] as? String ?? "-", pz = (p?["size"] as? NSNumber)?.intValue ?? 0
+        if Self.signature2Valid(s2, v, sha, size, minOS, notes, cd, pf, ps, pz) {
+          cdhash = cd
+          if pf == Cfg.version, let us = p?["url"] as? String, let pu = URL(string: us), pu.scheme == "https" || Self.env["TIDEWALL_UPDATE_FEED"] != nil {
+            patch = Patch(from: pf, url: pu, sha: ps, size: pz) }
+        } else { log("[update] the patch information isn't signed by Tidewall; ignoring it") }
+      }
       if !manual && !fromWindow && self.hasFailed(v) { log("[update] \(v) failed to install before; waiting for a newer one (or Check for Updates…)"); self.state = .skipped(v); return }
       self.notes = notes                                  // plain text: never render it as HTML
       log("[update] \(v) is available (have \(Cfg.version)); downloading")
       if manual { self.tell("Tidewall \(v) is available", "It’s downloading now. When it’s ready, choose “Restart to Update” in the menu bar.") }
-      self.download(v, url, sha, sig, size: size, minOS: minOS, notes: notes)
+      if let patch, let cdhash { self.downloadPatch(v, patch, cdhash: cdhash) { ok in if !ok { self.download(v, url, sha, sig, size: size, minOS: minOS, notes: notes) } } }
+      else { self.download(v, url, sha, sig, size: size, minOS: minOS, notes: notes) }
     } }.resume()
   }
 
@@ -2077,8 +2101,57 @@ final class Updater {
   static func signatureValid(_ sig: Data, _ v: String, _ sha: String, _ size: Int, _ minOS: String, _ notes: String) -> Bool {
     let n = SHA256.hash(data: Data(notes.utf8)).map { String(format: "%02x", $0) }.joined()
     let msg = Data("tidewall-update-v1\n\(v)\n\(sha.lowercased())\n\(size)\n\(minOS)\n\(n)".utf8)
-    return publicKeys.contains { k in
+    return trustedKeys.contains { k in
       Data(base64Encoded: k).flatMap { try? Curve25519.Signing.PublicKey(rawRepresentation: $0) }?.isValidSignature(sig, for: msg) ?? false }
+  }
+  /// The second signature (tools/update-sign.swift makes the same message): everything the first covers, plus the
+  /// release's code-signature hash and its patch ("-" and 0 when there's none). Older copies ignore it.
+  static func signature2Valid(_ sig: Data, _ v: String, _ sha: String, _ size: Int, _ minOS: String, _ notes: String,
+                              _ cdhash: String, _ pFrom: String, _ pSha: String, _ pSize: Int) -> Bool {
+    let n = SHA256.hash(data: Data(notes.utf8)).map { String(format: "%02x", $0) }.joined()
+    let msg = Data("tidewall-update-v2\n\(v)\n\(sha.lowercased())\n\(size)\n\(minOS)\n\(n)\n\(cdhash.lowercased())\n\(pFrom)\n\(pSha.lowercased())\n\(pSize)".utf8)
+    return trustedKeys.contains { k in
+      Data(base64Encoded: k).flatMap { try? Curve25519.Signing.PublicKey(rawRepresentation: $0) }?.isValidSignature(sig, for: msg) ?? false }
+  }
+
+  /// Fetch only what changed, lay it over a clone of this copy, and accept the result only if its code signature is
+  /// exactly the release's. done(false): fetch the whole release instead.
+  private func downloadPatch(_ v: String, _ p: Patch, cdhash: String, done: @escaping (Bool) -> Void) {
+    state = .downloading(v); log("[update] \(v): fetching only what changed since \(p.from) (\(p.size / 1000) KB)")
+    URLSession.shared.downloadTask(with: p.url) { [weak self] tmp, resp, err in
+      guard let self else { return }
+      let r: Staged = {
+        guard let tmp, err == nil, (resp as? HTTPURLResponse)?.statusCode == 200 else { return .bad(err?.localizedDescription ?? "download failed") }
+        return self.stagePatch(tmp, v, p, cdhash: cdhash)
+      }()
+      DispatchQueue.main.async {
+        switch r {
+        case .ok(let app, let hash): self.staged = app; self.stagedHash = hash; self.state = .ready(v); log("[update] \(v) is ready to install (patched)"); self.away(); done(true)
+        case .bad(let why): log("[update] the \(v) patch didn't work (\(why)); fetching the whole release"); done(false)
+        }
+      }
+    }.resume()
+  }
+  private func stagePatch(_ zip: URL, _ v: String, _ p: Patch, cdhash: String) -> Staged {
+    guard (try? fm.attributesOfItem(atPath: zip.path))?[.size] as? Int == p.size else { return .bad("size mismatch") }
+    guard let h = FileHandle(forReadingAtPath: zip.path) else { return .bad("can't read the download") }
+    var hasher = SHA256(); while case let d = h.readData(ofLength: 1 << 20), !d.isEmpty { hasher.update(data: d) }; try? h.close()
+    guard hasher.finalize().map({ String(format: "%02x", $0) }).joined() == p.sha.lowercased() else { return .bad("checksum mismatch") }
+    let stage = work.appendingPathComponent(v), app = stage.appendingPathComponent("Tidewall.app")
+    try? fm.removeItem(at: stage); try? fm.createDirectory(at: stage, withIntermediateDirectories: true)
+    // this copy, cloned (on APFS: instant, and no extra space until files differ)
+    guard run("/bin/cp", ["-cR", Bundle.main.bundleURL.path, app.path]).0 == 0 || run("/usr/bin/ditto", [Bundle.main.bundleURL.path, app.path]).0 == 0 else { return .bad("couldn't copy the app") }
+    guard run("/usr/bin/ditto", ["-x", "-k", zip.path, stage.path]).0 == 0 else { return .bad("couldn't unpack the patch") }
+    let del = stage.appendingPathComponent("deleted.txt")
+    if let list = try? String(contentsOf: del, encoding: .utf8) {
+      for line in list.split(separator: "\n").map(String.init) where !line.isEmpty && !line.hasPrefix("/") && !line.split(separator: "/").contains("..") {
+        try? fm.removeItem(at: app.appendingPathComponent(line)) } }
+    try? fm.removeItem(at: del)
+    guard let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
+          info["CFBundleIdentifier"] as? String == "app.tidewall", info["CFBundleShortVersionString"] as? String == v else { return .bad("the patched copy isn't Tidewall \(v)") }
+    _ = run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", app.path])
+    guard let hash = codeHash(app), hash.lowercased() == "cdhash=" + cdhash.lowercased() else { try? fm.removeItem(at: stage); return .bad("the patched copy isn't exactly the release") }
+    return .ok(app, hash)
   }
 
   private func download(_ v: String, _ url: URL, _ sha: String, _ sig: Data, size: Int, minOS: String, notes: String) {
@@ -2136,7 +2209,7 @@ final class Updater {
 
   /// The screen locked or the displays slept: a good moment to install, if updates are automatic
   func away() {
-    guard case .ready(let v) = state, Cfg.autoUpdate, cantInstall == nil, !hasFailed(v),       // a version that failed: only by hand
+    guard case .ready(let v) = state, Cfg.autoUpdate, cantInstall == nil, !needsAdmin, !hasFailed(v),   // a version that failed, or one that needs a password: only by hand
           isAway() || Self.env["TIDEWALL_UPDATE_INSTALL_NOW"] == "1" else { return }
     log("[update] installing while you're away"); install()
   }
@@ -2145,7 +2218,7 @@ final class Updater {
   /// old app aside and the new one into place, opens it, and waits up to 20 s for it to report it came up. If it
   /// doesn't, it puts the old app back and opens that; the next launch remembers the version failed.
   func install() {
-    if case .blocked = state { NSWorkspace.shared.open(Self.releasesPage); return }
+    if case .blocked = state { if !Mover.moveNow() { NSWorkspace.shared.open(Self.releasesPage) }; return }   // (it moves, then updates from there)
     guard case .ready(let v) = state, let new = staged else { return }
     if let why = cantInstall { tell("Can’t update here", why); return }
     // the unpacked copy waited, maybe for hours: make sure it's exactly what was verified
@@ -2156,13 +2229,15 @@ final class Updater {
     let q = shQuote
     // with the login item on, relaunch through it, so launchd keeps restarting Tidewall if it ever crashes
     // (only if launchd's loaded copy of the job runs exactly this app: it keeps the definition it read at login)
-    let job = "gui/$(id -u)/\(LoginItem.label)"
+    let job = "gui/\(getuid())/\(LoginItem.label)", admin = needsAdmin
+    // installed with an administrator's permission, the script runs as root: it opens Tidewall as you, not as root
+    let opener = admin ? "/bin/launchctl asuser \(getuid()) /usr/bin/sudo -u \(shQuote(NSUserName())) /usr/bin/open" : "/usr/bin/open"
     let viaLogin = LoginItem.enabled
       ? "[ \"$(launchctl print \(job) 2>/dev/null | awk '/^\\tprogram = /{print substr($0, index($0, \"= \") + 2); exit}')\" = \"$EXE\" ] && launchctl kickstart \(job) >/dev/null 2>&1 || " : ""
     let script = """
     APP=\(q(cur)); NEW=\(q(new.path)); PREV=\(q(prev)); OK=\(q(alive.path)); RES=\(q(result.path)); PIDF=\(q(pidFile.path)); V=\(q(v))
     EXE="$APP/Contents/MacOS/Tidewall"
-    launch() { \(viaLogin)/usr/bin/open "$APP" --args --background --updated-from \(q(Cfg.version)); }
+    launch() { \(viaLogin)\(opener) "$APP" --args --background --updated-from \(q(Cfg.version)); }
     # stop every Tidewall running from $APP: the pid it wrote, and any other whose executable is exactly $EXE
     stop() { for sig in TERM TERM TERM KILL; do
         ps=""; p=$(cat "$PIDF" 2>/dev/null); [ -n "$p" ] && [ "$(ps -o comm= -p "$p" 2>/dev/null)" = "$EXE" ] && ps="$p"
@@ -2184,7 +2259,20 @@ final class Updater {
     fi
     echo "rolledback $V" > "$RES"; launch
     """
-    guard spawnDetached(script) else { log("[update] couldn't start the installer"); state = .failed("couldn't start the installer"); return }
+    if admin {
+      // macOS asks for an administrator's password; the installer then runs as root, detached, and waits for this copy to quit
+      let f = caches.appendingPathComponent("update-install.sh")
+      guard (try? script.write(to: f, atomically: true, encoding: .utf8)) != nil else { tell("Couldn’t install the update", "Tidewall couldn’t prepare the installer."); return }
+      let aq = { (s: String) in "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+      let src = "do shell script \"/bin/sh \" & quoted form of \(aq(f.path)) & \" >/dev/null 2>&1 &\" with prompt \(aq("Tidewall wants to install version \(v). It needs an administrator’s permission because of where it’s installed.")) with administrator privileges"
+      NSApp.activate(ignoringOtherApps: true)
+      var err: NSDictionary?
+      _ = NSAppleScript(source: src)?.executeAndReturnError(&err)
+      if let err { let code = (err[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
+        log("[update] the installer wasn't allowed to run (\(code))"); if code != -128 { tell("Couldn’t install the update", "\(err[NSAppleScript.errorMessage] ?? "macOS didn’t allow it.")") }; return }
+    } else {
+      guard spawnDetached(script) else { log("[update] couldn't start the installer"); state = .failed("couldn't start the installer"); return }
+    }
     log("[update] installing \(v); relaunching")
     NSApp.terminate(nil)
   }
@@ -2237,10 +2325,12 @@ enum Mover {
     typealias Fn = @convention(c) (CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<CFURL>?
     return (unsafeBitCast(f, to: Fn.self)(u as CFURL, nil)?.takeRetainedValue() as URL?) ?? u
   }
+  /// About ▸ Move to Applications (a copy macOS runs from Downloads can't update itself): move it now, no question
+  static func moveNow() -> Bool { offerIfNeeded(force: true) }
   /// true when it's moving: this copy then quits and the moved one opens
-  static func offerIfNeeded() -> Bool {
-    let test = Updater.env["TIDEWALL_UPDATE_MOVE_TEST"] == "1"        // development builds only: no question asked
-    guard !args.contains("--moved"), !Updater.devBuild || test else { return false }
+  static func offerIfNeeded(force: Bool = false) -> Bool {
+    let test = force || Updater.env["TIDEWALL_UPDATE_MOVE_TEST"] == "1"   // asked for (or a development test): no question
+    guard force || !args.contains("--moved"), force || !Updater.devBuild || test else { return false }
     let fm = FileManager.default, src = original
     // already in Applications, but still run from a translocated copy (unzipped there rather than moved by Finder):
     // clear the quarantine flag you've already approved and open the real one, once

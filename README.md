@@ -9,17 +9,17 @@ https://github.com/user-attachments/assets/65214d13-136b-42cd-add1-bde06a6ab17a
 
 <p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/latest"><b>Download Tidewall</b></a> · free for macOS 14+</p>
 
-<p align="center"><img src="docs/app.png" width="860" alt="The Tidewall window: a live preview of Model Railway on your own desktop, with the theme gallery below"></p>
+<p align="center"><img src="docs/app.png" width="860" alt="The Tidewall window: a live preview of Model Railway on your own desktop, with the wall gallery below"></p>
 
-Most live wallpapers are a video playing behind everything. Tidewall's themes are *places* that know where your
+Most live wallpapers are a video playing behind everything. Tidewall's walls are *places* that know where your
 windows are: they become islands on an inked map, towns on a model railway, flowerbeds in a garden plan, framed
 paintings on a museum wall. Drag a window and the world re-arranges itself around it, smoothly, in real time.
 
-<p align="center"><img src="docs/themes.jpg" width="860" alt="Thirteen themes"></p>
+<p align="center"><img src="docs/themes.jpg" width="860" alt="Thirteen walls"></p>
 
-## Themes
+## Walls
 
-| Theme | What it is | Cost |
+| Wall | What it is | Cost |
 |---|---|---|
 | **Model Railway** | a toy railway diorama: windows become towns, trains run between them, cars wait at the level crossings | very low |
 | **Garden Plan** | a landscape architect's planting plan: windows become flowerbeds, gardeners tend the paths | very low |
@@ -34,11 +34,11 @@ paintings on a museum wall. Drag a window and the world re-arranges itself aroun
 | **Wind Tunnel** | a real fluid simulation: smoke streams past museum-scanned models, and around your windows | high |
 | **Meadow**, **Beach** | painted landscapes that part around your windows | medium to high |
 
-**Several displays are one world.** Show a theme on more than one display and it becomes one continuous scene: trains
+**Several displays are one world.** Show a wall on more than one display and it becomes one continuous scene: trains
 run, koi swim and boats sail from screen to screen; one garden, one castle plan, one sea of islands, one long museum
-wall. Every theme but Lava Lamp and Wind Tunnel spans, and each display can also have its own theme.
+wall. Every wall but Lava Lamp and Wind Tunnel spans, and each display can also have its own wall.
 
-**Your desktop icons get room too**, each theme in its own way: a village green with a hedge on the railway, a
+**Your desktop icons get room too**, each wall in its own way: a village green with a hedge on the railway, a
 flagstone terrace in the garden, shelves in a niche on the gallery wall, an island on the ink map and the beach, a
 lily pad on the reef, a cap of snow in the valley, a dark nebula on the star chart, a cartographer's halo on the wind
 map, and obstacles in the wind tunnel (which can run on your icons alone, with no model).
@@ -64,14 +64,14 @@ release, and installs it while your screen is locked (or when you choose **Resta
 only see the "Open Anyway" step once. Turn it off in Tidewall's **About** page.
 
 Tidewall lives in the menu bar, as a little window riding a wave. Click it and choose **Open Tidewall…** for the
-window, where you can try every theme on a live preview of your own desktop, give each display its own theme, and
+window, where you can try every wall on a live preview of your own desktop, give each display its own wall, and
 turn on **Open at login**.
 
 ## Light on your Mac
 
 A wallpaper runs all day, so Tidewall is built to cost as little as possible:
 
-- The cheap themes draw the scene once and redraw only when your windows change; trains, boats and gardeners are
+- The cheap walls draw the scene once and redraw only when your windows change; trains, boats and gardeners are
   small pictures the graphics card slides around for free.
 - Scenes draw at a calm 30 frames a second or less, and at 60 only while you're working on the wallpaper itself (the
   pointer over it, a window being dragged); the soft, full-screen scenes draw a little under retina, which looks the
@@ -108,8 +108,8 @@ git clone https://github.com/Keshav-Madhav/tidewall.git && cd tidewall
 open build/Tidewall.app
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for running from source, testing themes against fake desktops, and **writing
-your own theme** (a single HTML page; the host tells it where the windows are).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for running from source, testing walls against fake desktops, and **writing
+your own wall** (a single HTML page; the host tells it where the windows are).
 
 ## Uninstall
 

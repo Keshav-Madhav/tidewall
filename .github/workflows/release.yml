@@ -36,12 +36,26 @@ jobs:
           codesign --verify --deep --strict "$a" || { echo "::error::code signature doesn't verify after the zip round trip"; exit 1; }
           lipo -archs $a/Contents/MacOS/Tidewall | grep -q arm64 && lipo -archs $a/Contents/MacOS/Tidewall | grep -q x86_64 || { echo "::error::not universal"; exit 1; }
           awk -v v="$v" '$0 ~ "^## \\[?"v {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+      - name: Make the patch from the previous release (only what changed; checked the way the updater applies it)
+        run: |
+          # the release this one follows is still "latest" (this one isn't published yet); no previous one, or any
+          # problem at all: no patch, and every copy fetches the whole zip as before
+          prev=$(curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/update.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])') || prev=""
+          if [ -z "$prev" ] || [ "v$prev" = "$GITHUB_REF_NAME" ]; then echo "no previous release: no patch"; exit 0; fi
+          curl -fsSL -o prev.zip "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$prev/Tidewall-v$prev.zip" || { echo "::warning::couldn't fetch $prev: no patch"; exit 0; }
+          mkdir prev && ditto -x -k prev.zip prev
+          p="Tidewall-${GITHUB_REF_NAME}-patch-from-$prev.zip"
+          if python3 tools/make-patch.py prev/Tidewall.app check/Tidewall.app "$p"; then echo "$prev" > patch-from.txt
+          else echo "::warning::the patch from $prev didn't check out: no patch"; rm -f "$p"; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
         with:
           name: release
           path: |
             Tidewall-${{ github.ref_name }}.zip
+            Tidewall-${{ github.ref_name }}-patch-from-*.zip
+            patch-from.txt
             notes.md
+          if-no-files-found: warn
           retention-days: 3
 
   publish:
@@ -69,12 +83,21 @@ jobs:
           [ -n "$TIDEWALL_UPDATE_KEY" ] || { echo "::error::the TIDEWALL_UPDATE_KEY secret is missing from the release environment"; exit 1; }
           v="${GITHUB_REF_NAME#v}"; z="Tidewall-${GITHUB_REF_NAME}.zip"
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$z"
-          swift tools/update-sign.swift sign "$z" "$v" "$url" notes.md > update.json
+          # the release app's code-signature hash, read here from the zip itself (it pins every file in the bundle)
+          mkdir c && ditto -x -k "$z" c
+          cd_hash=$(codesign -dv --verbose=4 c/Tidewall.app 2>&1 | sed -n 's/^CDHash=//p')
+          [ -n "$cd_hash" ] || { echo "::error::no code-signature hash"; exit 1; }
+          set -- "$z" "$v" "$url" notes.md "$cd_hash"
+          if [ -f patch-from.txt ]; then prev=$(cat patch-from.txt); pz="Tidewall-${GITHUB_REF_NAME}-patch-from-$prev.zip"
+            set -- "$@" "$pz" "$prev" "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$pz"; fi
+          swift tools/update-sign.swift sign "$@" > update.json
           pub=$(sed -n 's/.*static let publicKeys = \["\([^"]*\)".*/\1/p' main.swift)
-          swift tools/update-sign.swift verify "$z" update.json "$pub"   # the app will accept it
+          swift tools/update-sign.swift verify "$z" update.json "$pub" ${pz:+"$pz"}   # the app will accept it
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "Tidewall-${GITHUB_REF_NAME}.zip" update.json -R "$GITHUB_REPOSITORY" \
+          files=("Tidewall-${GITHUB_REF_NAME}.zip" update.json)
+          for f in Tidewall-${GITHUB_REF_NAME}-patch-from-*.zip; do if [ -f "$f" ]; then files+=("$f"); fi; done   # (a release may have no patch)
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" -R "$GITHUB_REPOSITORY" \
             --title "Tidewall ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag

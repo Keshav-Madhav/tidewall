@@ -254,14 +254,14 @@
 <aside>
   <div class="brand"><img src="icon.png" alt=""><div><b>Tidewall</b><small>Live wallpaper</small></div></div>
   <nav>
-    <a href="#themes" data-p="themes" class="on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2.2"/><path d="M1.8 10.5c2-1.6 3.7-1.6 5.3 0s3.4 1.6 5.4 0 2 .1 2 .1"/></svg>Themes</a>
+    <a href="#themes" data-p="themes" class="on"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2.2"/><path d="M1.8 10.5c2-1.6 3.7-1.6 5.3 0s3.4 1.6 5.4 0 2 .1 2 .1"/></svg>Walls</a>
     <a href="#displays" data-p="displays"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="2.5" width="9" height="6.5" rx="1.4"/><rect x="7" y="7" width="8" height="6.5" rx="1.4"/></svg>Displays</a>
     <a href="#settings" data-p="settings"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7"/><circle cx="10.5" cy="4.5" r="1.6"/><circle cx="5.5" cy="11.5" r="1.6"/></svg>Settings</a>
     <a href="#whatsnew" data-p="whatsnew"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 1.8l1.6 3.9 3.9 1.6-3.9 1.6L8 12.8l-1.6-3.9-3.9-1.6 3.9-1.6z"/><path d="M13 11.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" stroke-width="1.1"/></svg>What’s New<span class="newdot" id="newDot" hidden></span></a>
     <a href="#about" data-p="about"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.3"/><path d="M8 7.2v4M8 4.8v.1" stroke-linecap="round"/></svg>About</a>
   </nav>
   <div class="side-foot">
-    <div class="now" id="nowCard" title="Show this theme">
+    <div class="now" id="nowCard" title="Show this wall">
       <div class="th" id="nowTh"><small>Now showing</small><span id="nowName">–</span></div>
       <div class="nlist" id="nowList" hidden></div>
       <div class="bar">
@@ -277,7 +277,7 @@
   <div class="drag-strip"></div>
 
   <section id="themes" class="on">
-    <div class="head"><div><h1>Themes</h1><div class="sub">A living world that reshapes itself around your windows.</div></div></div>
+    <div class="head"><div><h1>Walls</h1><div class="sub">A living world that reshapes itself around your windows.</div></div></div>
     <div class="hero">
       <div class="stage-wrap">
         <div class="stage" id="stage">
@@ -286,7 +286,7 @@
             <div class="menubar"><b>&#63743;</b><b>Finder</b><span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Window</span><span class="r" id="clock"></span><div class="notch" id="notch"></div></div>
             <div id="mws"></div>
           </div>
-          <div class="loading" id="loading"><div><div class="spin"></div>Loading preview…</div></div>
+          <div class="loading" id="loading"><div><div class="spin"></div><span id="loadingTxt">Loading preview…</span></div></div>
           <div class="toolbar">
             <div class="glass seg2" id="modeSeg"><button data-m="mine" class="on">Your desktop</button><button data-m="sample">Sample</button></div>
             <button class="glass ibtn" id="resetBtn" title="Put the windows back"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M2.5 8a5.5 5.5 0 1 0 1.8-4.1"/><path d="M2.3 1.8v3h3"/></svg></button>
@@ -305,14 +305,14 @@
         <div class="kbd"><b>←</b> <b>→</b> browse · <b>Return</b> set as wallpaper</div>
       </div>
     </div>
-    <div class="gal-head"><h3>All themes</h3><div class="chips" id="chips">
+    <div class="gal-head"><h3>All walls</h3><div class="chips" id="chips">
       <button class="chip on" data-f="all">All</button><button class="chip" data-f="low">Battery friendly</button><button class="chip" data-f="play">Interactive</button>
       <button class="chip" data-f="live">Live data</button><button class="chip" data-f="span">Spans displays</button></div></div>
     <div class="grid" id="grid"></div>
   </section>
 
   <section id="displays">
-    <div class="head"><div><h1>Displays</h1><div class="sub">Choose a theme for each display, or one for all of them. Themes that span displays draw one world across every display that shows them.</div></div></div>
+    <div class="head"><div><h1>Displays</h1><div class="sub">Choose a wall for each display, or one for all of them. Walls that span displays draw one world across every display that shows them.</div></div></div>
     <div class="desk" id="desk"></div>
     <div class="group" id="dispPanel"></div>
   </section>
@@ -329,16 +329,16 @@
       <div class="rowx"><div class="tx"><b>Windows</b><span>The scene reshapes itself around your app windows. Off: it carries on behind them as if they weren't there.</span></div><div class="sw" data-k="reactWindows" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>Stage Manager</b><span>The strip of recent apps at the side of the screen.</span></div><div class="sw" data-k="reactStage" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>Desktop widgets</b><span>Clocks, weather and the other widgets on your desktop.</span></div><div class="sw" data-k="reactWidgets" role="switch" tabindex="0"></div></div>
-      <div class="rowx"><div class="tx"><b>Desktop icons</b><span id="iconsNote">Each theme keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.</span></div><div class="sw" data-k="deskIcons" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b>Desktop icons</b><span id="iconsNote">Each wall keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.</span></div><div class="sw" data-k="deskIcons" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>The pointer</b><span>Fish follow it, the snow melts round it, the boat sails to it. Off: the scene ignores it.</span></div><div class="sw" data-k="reactCursor" role="switch" tabindex="0"></div></div>
     </div>
     <div class="group-t" id="dispSetT">Displays</div>
     <div class="group" id="dispSet">
-      <div class="rowx"><div class="tx"><b>One world across displays</b><span>Every theme except Lava Lamp and Wind Tunnel draws one continuous scene across the displays that show it: trains run, koi swim and boats sail from screen to screen, one garden, one castle, one museum wall. Off: each display draws its own.</span></div><div class="sw" data-k="spanWorlds" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b>One world across displays</b><span>Every wall except Lava Lamp and Wind Tunnel draws one continuous scene across the displays that show it: trains run, koi swim and boats sail from screen to screen, one garden, one castle, one museum wall. Off: each display draws its own.</span></div><div class="sw" data-k="spanWorlds" role="switch" tabindex="0"></div></div>
     </div>
     <div class="group-t">Performance</div>
     <div class="group">
-      <div class="rowx"><div class="tx"><b>Frame rate</b><span>Auto runs each theme at a calm pace (30 or less) and smooths up to 60 while you're working on the wallpaper. 60 holds every scene there, the smoothest; 30, 20 or 15 cap it, gentler on battery (a calm scene that needs less still draws less).</span></div><div class="seg" data-k="fps"><button data-v="0">Auto</button><button data-v="60">60</button><button data-v="30">30</button><button data-v="20">20</button><button data-v="15">15</button></div></div>
+      <div class="rowx"><div class="tx"><b>Frame rate</b><span>Auto runs each wall at a calm pace (30 or less) and smooths up to 60 while you're working on the wallpaper. 60 holds every scene there, the smoothest; 30, 20 or 15 cap it, gentler on battery (a calm scene that needs less still draws less).</span></div><div class="seg" data-k="fps"><button data-v="0">Auto</button><button data-v="60">60</button><button data-v="30">30</button><button data-v="20">20</button><button data-v="15">15</button></div></div>
       <div class="rowx"><div class="tx"><b>On battery</b><span id="batNote">What the wallpaper does when your Mac isn't plugged in (or is in Low Power Mode).</span></div><div class="seg" data-k="battery"><button data-v="0">Same</button><button data-v="1">Calmer</button><button data-v="2">Pause</button></div></div>
       <div class="rowx"><div class="tx"><b>Rest when idle</b><span>Pause when nobody has touched the mouse or keyboard for this long, and let go of memory 10 minutes after that. The first touch brings it back.</span></div><div class="seg" data-k="idleMinutes"><button data-v="0">Never</button><button data-v="1">1 min</button><button data-v="3">3 min</button><button data-v="10">10 min</button></div></div>
       <div class="rowx"><div class="tx"><b>Space around windows</b><span>How far the scene keeps back from each window edge.</span></div><div class="seg" data-k="margin"><button data-v="60">60</button><button data-v="100">100</button><button data-v="140">140</button><button data-v="200">200</button></div></div>
@@ -429,7 +429,7 @@ function drawGrid() {
   $('#grid').innerHTML = list.length ? list.map(t => `<div class="card${t.id === sel ? ' sel' : ''}" data-id="${t.id}" tabindex="0" role="button" aria-label="${t.name}${inUse(t.id) ? ', in use' : ''}">
       <div class="th" style="background-image:url(thumbs/${t.id}.jpg)">${inUse(t.id) ? `<span class="badge"><span class="dot"></span>${S.displays.length > 1 ? (n => n === S.displays.length ? 'On all displays' : `On ${n} of ${S.displays.length}`)(S.displays.filter(d => d.theme === t.id).length) : 'In use'}</span>` : ''}</div>
       <div class="meta"><b>${t.name}</b><span><span class="c dot" style="width:6px;height:6px;box-shadow:none;background:${COST[t.cost][1]}"></span>${SHORT[t.cost]}</span></div></div>`).join('')
-    : '<div class="empty">No themes match.</div>';
+    : '<div class="empty">No walls match.</div>';
   $$('.card').forEach(c => { c.addEventListener('click', () => select(c.dataset.id)); c.addEventListener('dblclick', apply);
     c.addEventListener('focus', () => { if (c.dataset.id !== sel) select(c.dataset.id); }); });   // Tab lands on a card: that's the one Return applies
 }
@@ -522,7 +522,7 @@ addEventListener('keydown', e => {
 });
 
 /* ======================= live preview ======================= */
-let pvIcons = '', DESK = null, mode = 'mine', VW = 1512, VH = 982, wins = [], pvReady = false, pvKey = null, pvTimer = 0, pvShowT = 0, pvGen = 0;
+let pvWatch = 0, pvRetried = false, pvIcons = '', DESK = null, mode = 'mine', VW = 1512, VH = 982, wins = [], pvReady = false, pvKey = null, pvTimer = 0, pvShowT = 0, pvGen = 0;
 const MARGIN = () => S.settings.margin || 140;
 const pv = $('#pv'), screenEl = $('#screen'), stageEl = $('#stage');
 const SAMPLE = () => [{ x: Math.round(VW * .15), y: Math.round(VH * .17), w: Math.round(VW * .43), h: Math.round(VH * .45), name: 'Safari' },
@@ -564,11 +564,20 @@ function loadPreview() {
   const t = byId[sel], v = S.variants[sel] || (VARS[sel] && VARS[sel].default), k = pdpr();
   const key = [sel, v, VW, VH, k].join('|');
   if (pvKey === key && pv.getAttribute('src')) return;
-  pvKey = key; pvReady = false; pv.classList.remove('shown'); $('#loading').style.display = '';
-  clearTimeout(pvTimer); clearTimeout(pvShowT); const gen = ++pvGen;
-  pvTimer = setTimeout(() => { if (gen !== pvGen) return; pv.dataset.gen = gen; pv.src = `../${t.page}.html?wallpaper=1&pdpr=${k}${v ? '&v=' + encodeURIComponent(v) : ''}${S.siteQuery || ''}`; }, 140);
+  pvKey = key; pvReady = false; pv.classList.remove('shown'); $('#loading').style.display = ''; $('#loadingTxt').textContent = 'Loading preview…';
+  clearTimeout(pvTimer); clearTimeout(pvShowT); clearTimeout(pvWatch); const gen = ++pvGen;
+  pvTimer = setTimeout(() => { if (gen !== pvGen) return; freePreview(); pv.dataset.gen = gen; pv.src = `../${t.page}.html?wallpaper=1&pdpr=${k}${v ? '&v=' + encodeURIComponent(v) : ''}${S.siteQuery || ''}`;
+    // a preview that never says it's ready (its page failed to start) is tried once more, then said so: never a spinner forever
+    pvWatch = setTimeout(() => { if (gen !== pvGen || pvReady) return;
+      if (!pvRetried) { pvRetried = true; send({ t: 'log', s: 'preview of ' + sel + ' did not start; trying again' }); pvKey = null; loadPreview(); return; }
+      $('#loadingTxt').textContent = 'This preview didn’t start. Choose another wall, or Settings ▸ Reload wallpapers.'; $('#loading').querySelector('.spin').style.display = 'none';
+      send({ t: 'log', s: 'preview of ' + sel + ' did not start' }); }, 10000); }, 140);
 }
-function unloadPreview() { clearTimeout(pvTimer); clearTimeout(pvShowT); pvGen++; pv.src = 'about:blank'; pvKey = null; pvReady = false; }
+// the page being replaced lets go of its graphics at once (not whenever its document is collected): quick switching
+// can't pile up WebGL contexts, which WebKit caps per process (past the cap it drops the oldest, a wallpaper's maybe)
+function freePreview() { try { const d = pv.contentDocument; if (!d) return;
+  d.querySelectorAll('canvas').forEach(c => { const g = c.__twGL; if (g) { const x = g.getExtension('WEBGL_lose_context'); if (x) x.loseContext(); } }); } catch (_) { } }
+function unloadPreview() { clearTimeout(pvTimer); clearTimeout(pvShowT); clearTimeout(pvWatch); pvGen++; freePreview(); pv.src = 'about:blank'; pvKey = null; pvReady = false; }
 const toFrame = s => pv.contentWindow && pv.contentWindow.postMessage({ __tw: s }, '*');
 // the preview is a live theme: while this window sits in the background (another app in front) it rests, a few seconds
 // after you leave; hidden or minimised it rests at once; it carries on the moment you're back
@@ -590,7 +599,7 @@ function sendWins(live) {
 addEventListener('message', e => {
   if (e.source !== pv.contentWindow || !e.data || e.data.__twFrom === undefined) return;
   if (String(e.data.__twFrom) !== 'ready' || +pv.dataset.gen !== pvGen) return;   // an earlier preview, still finishing
-  pvReady = true; pvIcons = ''; send({ t: 'log', s: 'preview ready ' + sel });
+  pvReady = true; pvRetried = false; pvIcons = ''; clearTimeout(pvWatch); const sp = $('#loading').querySelector('.spin'); if (sp) sp.style.display = ''; send({ t: 'log', s: 'preview ready ' + sel });
   toFrame(JSON.stringify({ t: 'desk', x: 0, y: 0, w: VW, h: VH, uw: VW, uh: VH, i: 0, n: 1, mx: VW / 2, my: VH / 2, mw: VW, mh: VH }));
   toFrame(JSON.stringify({ t: 'me', seed: S.seed }));
   sendWins(false);
@@ -632,10 +641,10 @@ function drawDesk() {
   const d = ds.find(x => x.id === selDisp);
   const others = (d.world || []).filter(id => id !== d.id).map(id => S.displays.find(x => x.id === id)).filter(Boolean);
   const curName = byId[S.current] ? byId[S.current].name : esc(S.current);
-  $('#dispPanel').innerHTML = `<div class="rowx"><div class="tx"><b>${esc(dname(d))}${d.main ? ' · main' : ''}</b><span>${d.own ? 'Has its own theme' : (d.main ? 'Shows the default theme' : 'Shows the main theme')} · ${Math.round(d.w)}×${Math.round(d.h)} pt${others.length ? ' · one world with ' + others.map(x => esc(dname(x))).join(', ') : ''}</span></div></div>
+  $('#dispPanel').innerHTML = `<div class="rowx"><div class="tx"><b>${esc(dname(d))}${d.main ? ' · main' : ''}</b><span>${d.own ? 'Has its own wall' : (d.main ? 'Shows the default wall' : 'Shows the main wall')} · ${Math.round(d.w)}×${Math.round(d.h)} pt${others.length ? ' · one world with ' + others.map(x => esc(dname(x))).join(', ') : ''}</span></div></div>
     <div class="tpick"><button data-t="" class="def${d.own ? '' : ' on'}"><div class="th">${d.main ? 'Default' : 'Same as main'}<br>${curName}</div><span>${d.main ? 'Default' : 'Same as main'}</span></button>${THEMES.map(t => `<button data-t="${t.id}" class="${d.own && d.theme === t.id ? 'on' : ''}"><div class="th" style="background-image:url(thumbs/${t.id}.jpg)"></div><span>${t.name}</span></button>`).join('')}</div>`;
   $$('#dispPanel .tpick button').forEach(b => b.addEventListener('click', () => { const v = b.dataset.t || null;
-    send({ t: 'applyDisplay', display: d.id, theme: v }); toast(`${dname(d)}: ${v ? byId[v].name : (d.main ? 'the default theme' : 'same as main')}`, v || S.current); }));
+    send({ t: 'applyDisplay', display: d.id, theme: v }); toast(`${dname(d)}: ${v ? byId[v].name : (d.main ? 'the default wall' : 'same as main')}`, v || S.current); }));
 }
 
 /* ======================= settings ======================= */
@@ -651,7 +660,7 @@ function drawSettings() {
   // desktop icons: say so when macOS hasn't allowed it, and offer the way there
   const denied = S.settings.deskIcons && S.settings.deskIconsState === 'denied';
   $('#iconsNote').innerHTML = denied ? 'macOS hasn’t let Tidewall see Finder yet. <a href="#" id="iconsFix">Open Privacy &amp; Security ▸ Automation</a> and allow <b>Finder</b> under Tidewall.'
-    : 'Each theme keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.';
+    : 'Each wall keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.';
   const fix = $('#iconsFix'); if (fix) fix.addEventListener('click', e => { e.preventDefault(); send({ t: 'openAutomation' }); });
   $('#batNote').textContent = 'What the wallpaper does when your Mac isn’t plugged in (or is in Low Power Mode). Calmer draws at half the rate.' +
     (S.settings.onBattery ? ' Your Mac is on battery now.' : S.settings.lowPower ? ' Low Power Mode is on now.' : '');
@@ -666,10 +675,10 @@ function drawUpdate() {
   const say = { checking: 'Checking for updates…', downloading: `Downloading Tidewall ${u.v}…`, current: `You're up to date${ago ? ' · checked ' + ago : ''}.`,
     failed: `Couldn't check: ${u.err || 'unknown error'}.`, off: u.err || 'Updates are off.',
     skipped: `Tidewall ${u.v} didn't start properly last time, so it won't install by itself. Check now to try it again.`, idle: 'Checks GitHub for new versions.',
-    ready: u.blocked ? `Tidewall ${u.v} is out. ${u.blocked}` : `Tidewall ${u.v} is ready. It installs in a few seconds and reopens.` };
+    ready: u.blocked ? `Tidewall ${u.v} is out. ${u.blocked}` : u.admin ? `Tidewall ${u.v} is ready. Installing it here needs an administrator’s password; it then reopens.` : `Tidewall ${u.v} is ready. It installs in a few seconds and reopens.` };
   $('#updS').textContent = say[u.s] || say.idle;
   const ready = u.s === 'ready';
-  b.textContent = ready ? (u.blocked ? 'Download…' : 'Restart to Update') : 'Check now'; b.classList.toggle('primary', ready);
+  b.textContent = ready ? (u.blocked ? 'Move to Applications' : u.admin ? 'Restart to Update…' : 'Restart to Update') : 'Check now'; b.classList.toggle('primary', ready);
   b.disabled = u.s === 'checking' || u.s === 'downloading' || u.s === 'off';
 }
 $('#updBtn').addEventListener('click', () => send({ t: (S.update || {}).s === 'ready' ? 'installUpdate' : 'checkUpdate' }));
