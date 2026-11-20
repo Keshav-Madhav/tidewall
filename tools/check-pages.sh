@@ -1,5 +1,6 @@
 #!/bin/bash
-# Syntax-checks every inline <script> in the theme pages and the app window (needs node). Used by CI.
+# Syntax-checks every inline <script> in the theme pages and the app window, and the scripts the host injects into
+# every page (themes/host/), with node. Used by CI.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d); fail=0
@@ -14,5 +15,5 @@ for i, (attrs, js) in enumerate(re.findall(r'<script([^>]*)>(.*?)</script>', src
 PY
 done
 shopt -s nullglob
-for js in "$tmp"/*.js "$tmp"/*.mjs themes/*.js; do node --check "$js" 2>/tmp/check.err || { echo "✗ $js"; head -5 /tmp/check.err; fail=1; }; done
+for js in "$tmp"/*.js "$tmp"/*.mjs themes/*.js themes/host/*.js; do node --check "$js" 2>/tmp/check.err || { echo "✗ $js"; head -5 /tmp/check.err; fail=1; }; done
 rm -rf "$tmp"; [ $fail = 0 ] && echo "all pages parse"; exit $fail

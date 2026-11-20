@@ -4,7 +4,7 @@ leaves bare, crops to 16:10 and saves a 960x600 JPEG.   usage: thumbs.py snapsho
 import sys
 from PIL import Image, ImageDraw, ImageFilter
 
-WINS = [((250, 190, 620, 410), 'dark'), ((840, 430, 470, 320), 'light')]   # the showcase layout, in points (main.swift)
+WINS = [((250, 190, 620, 410), 'dark'), ((840, 430, 470, 320), 'light')]   # the showcase layout, in points (Sources/Dev/Bench.swift)
 
 def window(img, k, x, y, w, h, kind):
     x, y, w, h = [v * k for v in (x, y, w, h)]

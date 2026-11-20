@@ -110,7 +110,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             tools/update-sign.swift
-            main.swift
+            Sources/Update/Updater.swift
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4.3.0
         with:
@@ -131,7 +131,7 @@ jobs:
           if [ -f patch-from.txt ]; then while read -r prev; do [ -n "$prev" ] || continue; pz="Tidewall-${GITHUB_REF_NAME}-patch-from-$prev.zip"
             set -- "$@" "$pz" "$prev" "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$pz"; zips+=("$pz"); done < patch-from.txt; fi
           swift tools/update-sign.swift sign "$@" > update.json
-          pub=$(sed -n 's/.*static let publicKeys = \["\([^"]*\)".*/\1/p' main.swift)
+          pub=$(sed -n 's/.*static let publicKeys = \["\([^"]*\)".*/\1/p' Sources/Update/Updater.swift)
           swift tools/update-sign.swift verify "$z" update.json "$pub" ${zips[@]+"${zips[@]}"}   # the app will accept it
       - name: Publish the release
         env:

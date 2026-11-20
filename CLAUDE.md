@@ -6,8 +6,9 @@ and `CONTRIBUTING.md` for the theme contract (messages, required globals) before
 ## Layout
 
 ```
-main.swift              the whole native host (one file, AppKit + WebKit, no dependencies)
+Sources/                the native host (AppKit + WebKit, no dependencies), one folder per concern (below)
 themes/*.html           one page per theme (HTML + canvas 2D / WebGL2), served over the tidewall:// scheme
+themes/host/*.js        injected into every page: frame pacing, GPU-context recovery (early.js), the morph hook (late.js)
 themes/<theme>/         that theme's assets (textures, models, data)
 themes/ui/index.html    the app window (themes gallery + live preview, displays, settings, about)
 themes/ui/thumbs/       gallery thumbnails (tools/thumbs.sh regenerates them)
@@ -17,16 +18,27 @@ tools/                  dev tools: thumbs, page syntax check, memory and GPU mea
 build.sh                → build/Tidewall.app (universal; ad-hoc, or the Tidewall certificate when TIDEWALL_SIGN_ID is set)
 ```
 
-Inside `main.swift`: `Cfg` (settings, user defaults, the time-zone site), `SchemeHandler` (serves `themes/`),
-`earlyScript`/`lateScript` (injected into wallpaper pages), `Wallpaper` (one desktop-level window + web view per
-screen; all screens share one web process via `_setRelatedWebView:`), `Tracker` (polls `CGWindowListCopyWindowInfo`),
-`Usage` (CPU/GPU/memory meter), `LoginItem` (a LaunchAgent), `AppWindow` (the app window and its JS bridge), `App`
-(lifecycle: idle rest, release to still pictures, covered screens, menu), `Bench` (test harness).
+Inside `Sources/`:
+
+```
+main.swift              start-up only: argument overrides, migration, logging, single instance, run
+App/                    `App`: lifecycle (idle rest, release to still pictures, covered screens)
+Config/                 `Cfg` (settings, user defaults, the time-zone site), `TestIsolation`, launch arguments
+Pages/                  `SchemeHandler` (serves `themes/`), `HostScript` (loads themes/host/*.js into every page)
+Walls/                  `Wallpaper` (one desktop-level window + web view per screen; all share one web process via
+                        `_setRelatedWebView:`), display frames and pretend displays
+Desktop/                `Tracker` (polls `CGWindowListCopyWindowInfo`), desktop icons
+UI/                     `AppWindow` (the app window and its JS bridge, `TitlebarDrag`), the menus
+Update/                 `Updater` (signed feed, patches, the swap helper), `Mover` (offers to move into Applications)
+Support/                `Usage` (CPU/GPU/memory meter), problem reports, small extensions
+System/                 `LoginItem` (a LaunchAgent)
+Dev/                    `Bench` and `Choreo`: the test harness behind --bench
+```
 
 ## Commands
 
 ```sh
-swiftc -O main.swift -o tidewall -framework Cocoa -framework WebKit -framework IOKit   # dev build (must have no warnings)
+tools/dev-build.sh      # dev build → ./tidewall (must have no warnings)
 ./tidewall --ui-only --themes "$PWD/themes" [--appearance light] [--select railway] [--page settings]   # just the app window
 ./tidewall --bench --themes "$PWD/themes" --theme railway --layout cascade --secs 14 --snapshot out.png  # render one theme
 ./build.sh                                  # the app
@@ -34,6 +46,8 @@ tools/check-pages.sh                        # syntax-check every page's scripts 
 tools/smooth.sh [--update] [wall …]         # smoothness through a window move + settle vs tools/smooth-baseline.json
 tools/regress.sh [--quick] [--update-visuals]   # the regression suite (release.sh runs it): every wall solo and on 3
                                             # pretend displays, picture checks + a contact sheet, Settings stress
+tools/update-test.sh [--quick]              # self-update end to end, isolated: full, patch, admin path (no password),
+                                            # tampered and unsigned releases refused, rollback (release.sh runs --quick)
 ./tidewall --print-report                   # what About ▸ Report a Problem sends (scrubbed log tail included)
 ./tidewall --bench --behind …               # test windows one level below the desktop (behind your wallpaper) and the
                                             # app window never brought forward: tests run unseen while you work
@@ -65,14 +79,14 @@ from source, or two wallpapers stack.
 - The key lives in the `release` environment (v* tags only). The publish job runs no repo build scripts. The
   "Protect release tags" ruleset means a pushed `vX.Y.Z` tag can't be moved or deleted: a broken release is fixed
   with the next version, never by re-tagging.
-- `Mover` (end of main.swift): opened outside an Applications folder, the app offers once to move itself there
+- `Mover` (`Sources/Update/Mover.swift`): opened outside an Applications folder, the app offers once to move itself there
   (resolves App Translocation, never downgrades an installed copy). Release builds only; test it in a dev build with
   `TIDEWALL_UPDATE_MOVE_TEST=1 TIDEWALL_UPDATE_MOVE_DEST=/some/dir`.
 - The app window's page fills the title-bar strip and WebKit ignores `-webkit-app-region`, so native `TitlebarDrag`
   strips (top 28 pt, sidebar top 52 pt) move the window. `./tidewall --ui-only --themes "$PWD/themes" --hittest` prints
   which view a click lands on across the top (the traffic lights must stay `_NSTheme…Widget`).
 - WebGL themes can lose their GPU context when displays sleep/wake or reconnect; they'd then show only their CSS
-  background. `earlyScript` wraps `getContext` in every page: a lost context reports and reloads the page, and
+  background. `themes/host/early.js` wraps `getContext` in every page: a lost context reports and reloads the page, and
   `checkGPUContexts()` re-checks after wake/unlock/display changes. Test with `--bench … --lose-gl-at 6`.
   (Bench switches for checks like this: `--paused`, `--testpause T`, `--reload-at T`, `--lose-gl-at T`,
   `--resize-at T` (the real display-change path) vs `--resize-raw-at T` (the old behaviour), `--cycle S` (every theme,
@@ -106,12 +120,12 @@ from source, or two wallpapers stack.
   log `Tidewall-isolated-test.log`, updater folder `~/Library/Caches/app.tidewall.isolated-test`, no login-item writes,
   no replacing or signalling the running Tidewall, windows below the desktop level. Without it a test copy (a higher
   version) quits your real Tidewall, takes its login item and writes into `app.tidewall`. Release builds ignore the key.
-- Test an update locally without publishing: build a higher version, sign it (`TIDEWALL_UPDATE_KEY=… swift
-  tools/update-sign.swift sign …`), serve it with `python3 -m http.server`, then run an installed copy with
-  `TIDEWALL_UPDATE_FEED=http://127.0.0.1:PORT/update.json TIDEWALL_UPDATE_INSTALL_NOW=1` (a development build, with a
-  throwaway key swapped into `publicKeys`, so you never need the real one locally). The swap is a detached helper (its
-  own session and a clean environment). It renames the old app to `.tidewall-update/previous.app` beside it, opens the
-  new one and waits 20 s for `~/Library/Caches/app.tidewall/update-alive`. If that doesn't arrive, it rolls back and
+- `tools/update-test.sh` tests updates locally without publishing, all isolated: it builds 90.0.0 and 90.0.1, signs a
+  feed with a throwaway key (`TIDEWALL_UPDATE_TESTKEY`), serves it with `python3 -m http.server`, and runs the old copy
+  with `TIDEWALL_UPDATE_FEED=http://127.0.0.1:PORT/…json TIDEWALL_UPDATE_INSTALL_NOW=1`. `TIDEWALL_UPDATE_ADMIN_DRYRUN=1`
+  walks an administrator's install without a password; Info.plist `TidewallTestNeverAlive` makes a release that never
+  comes up (rollback). The swap is a detached helper (its own session and a clean environment). It renames the old app to `.tidewall-update/previous.app` beside it, opens the
+  new one and waits up to 3 minutes for `~/Library/Caches/app.tidewall/update-alive`. If that doesn't arrive, it rolls back and
   writes `update-result`, which the next launch reads (`update.failed` in defaults).
 
 ## Rules the project lives by

@@ -11,8 +11,9 @@ FW="-framework Cocoa -framework WebKit -framework IOKit"
 # RELEASE=1 (the release workflow) makes a release build; anything else is a development build, which never updates
 # itself and is the only kind that honours the TIDEWALL_UPDATE_* test variables
 DEV="-D TIDEWALL_DEV"; [ "${RELEASE:-}" = 1 ] && DEV=""
-swiftc -O main.swift -target arm64-apple-macos14 -o build/tidewall-arm64 $FW $DEV
-swiftc -O main.swift -target x86_64-apple-macos14 -o build/tidewall-x86_64 $FW $DEV
+SRC=$(find Sources -name '*.swift' | sort)
+swiftc -O $SRC -target arm64-apple-macos14 -o build/tidewall-arm64 $FW $DEV
+swiftc -O $SRC -target x86_64-apple-macos14 -o build/tidewall-x86_64 $FW $DEV
 lipo -create build/tidewall-arm64 build/tidewall-x86_64 -output tidewall; rm build/tidewall-arm64 build/tidewall-x86_64
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp tidewall "$APP/Contents/MacOS/Tidewall"

@@ -25,14 +25,14 @@ PY=""; for p in python3 /Library/Frameworks/Python.framework/Versions/Current/bi
   if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import PIL' 2>/dev/null; then PY="$p"; break; fi; done
 
 echo "building (development build)…"
-swiftc -O main.swift -o tidewall -framework Cocoa -framework WebKit -framework IOKit -D TIDEWALL_DEV > "$out/build.log" 2>&1 \
+tools/dev-build.sh > "$out/build.log" 2>&1 \
   || { echo "✗ the build failed:"; grep -m5 "error" "$out/build.log"; exit 1; }
 rm -f "$out"/w-* "$out"/solo-* "$out"/stress.log "$out"/sheet.jpg   # (an old run's pictures must never stand in for this one's)
 bash tools/check-pages.sh >/dev/null || { echo "✗ a page doesn't parse (tools/check-pages.sh)"; exit 1; }
 # every wall that animates a layout change says so while it settles (window.__twSettle: the full frame rate until it
 # has; the smoothness check verifies the rate, this that the call is still there)
 for f in inkmap flat meadow garden estate railway; do grep -q "__twSettle" "$TH/$f.html" || { echo "✗ $f.html no longer calls __twSettle while it settles: its transitions would drop to the calm rate"; exit 1; }; done
-grep -q "window.__twSettle((typeof morphDur" main.swift || { echo "✗ main.swift's commit() no longer asks for the full rate during a morph"; exit 1; }
+grep -q "window.__twSettle((typeof morphDur" themes/host/late.js || { echo "✗ themes/host/late.js: commit() no longer asks for the full rate during a morph"; exit 1; }
 
 # the weather service (Wind Map's two calls) being busy or out of its daily quota isn't a Tidewall fault: only those
 # call sites' errors are excused, nothing else that merely mentions a fetch

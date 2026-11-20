@@ -1,7 +1,7 @@
 #!/bin/bash
 # Ships a new version:   tools/release.sh 1.0.2
 #   1. checks you're on a clean, up-to-date main and CHANGELOG.md has a "## [1.0.2]" section, then runs
-#      tools/regress.sh (and asks you to confirm its contact sheet looks right)
+#      tools/regress.sh (and asks you to confirm its contact sheet looks right) and tools/update-test.sh --quick
 #   2. writes VERSION, commits "Release 1.0.2", tags v1.0.2 and pushes both
 #   3. GitHub Actions (.github/workflows/release.yml) builds, signs and publishes the release; every installed copy
 #      picks it up on its next check (launch, or every 6 h) and installs it while the screen is locked.
@@ -20,6 +20,7 @@ git rev-parse -q --verify "refs/tags/v$v" >/dev/null && { echo "✗ tag v$v alre
 # TIDEWALL_SKIP_REGRESS=1 skips it, for a release that changes nothing the suite runs (say, only the workflow)
 if [ "${TIDEWALL_SKIP_REGRESS:-}" = 1 ]; then echo "⚠ regression suite skipped (TIDEWALL_SKIP_REGRESS=1)"
 else tools/regress.sh || { echo "✗ the regression suite failed: no release"; exit 1; }
+  tools/update-test.sh --quick || { echo "✗ the update test failed: no release (this version might not update the next)"; exit 1; }
   read -r -p "Looked at the contact sheet above, and it's all right? [y/N] " ok || ok=""   # (no terminal: no)
   [ "$ok" = y ] || [ "$ok" = Y ] || { echo; echo "✗ not released (answer y once you've looked at the sheet)"; exit 1; }
 fi

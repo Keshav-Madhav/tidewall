@@ -28,7 +28,6 @@
 <div id="cap"></div>
 <script>
 'use strict';
-window.__noMask = true;
 let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
 let FB = null; function commit() { } function refresh() { }          // hooks the host calls on every theme; this one has nothing to commit
 const P = { quality: 1 };                                            // read by the host's bench probe

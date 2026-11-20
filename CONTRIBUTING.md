@@ -1,6 +1,6 @@
 # Contributing to Tidewall
 
-Thanks for wanting to help. Tidewall is a small project: one Swift file for the host (`main.swift`), one HTML page per
+Thanks for wanting to help. Tidewall is a small project: a small Swift host (`Sources/`, one folder per concern), one HTML page per
 theme (`themes/*.html`), and one HTML page for the app window (`themes/ui/index.html`). No package manager, no build
 system beyond `swiftc`.
 
@@ -9,7 +9,7 @@ system beyond `swiftc`.
 Requires macOS 14+ and the Xcode command-line tools (`xcode-select --install`).
 
 ```sh
-swiftc -O main.swift -o tidewall -framework Cocoa -framework WebKit -framework IOKit
+tools/dev-build.sh                           # → ./tidewall, the development build
 ./tidewall --themes "$PWD/themes"            # run from source (quit any installed Tidewall first)
 ./tidewall --ui-only --themes "$PWD/themes"  # just the app window, no wallpapers: for working on the interface
 ./build.sh                                   # the full app: build/Tidewall.app
@@ -47,7 +47,6 @@ display) at `tidewall://app/<page>.html?wallpaper=1`, plus `&v=<variant>` if the
 
 ### What the page must do
 
-- Set `window.__noMask = true` (themes draw everything themselves).
 - Define the globals the host's test probe reads: `FB`, `commit()`, `refresh()`, `P` (an object), `fieldMs` (a
   number: how long the last expensive redraw took) and `cv` (the main canvas). Dummies are fine:
   `let FB = null; function commit() {} function refresh() {}`.
@@ -89,9 +88,21 @@ Plan, Model Railway) all follow one recipe:
 4. **Measure**: `--bench --profile`, and `tools/mem.sh`. On WebKit, the cost of a 2D canvas is often in the raster
    *flush*, not your JavaScript: thousands of scaled `drawImage` calls are expensive; pre-scale sprites once.
 
+### Frame rate
+
+The host paces every page's `requestAnimationFrame` (`themes/host/early.js`): a calm rate at rest (30), every frame the
+display shows while a window is dragged, 60 while the pointer is over the wallpaper. Three hooks let a theme take part:
+
+- `window.__twSettle(ms)`: call it every frame while your picture is still changing on its own (a morph, things
+  easing into place, a cross-fade). The page gets the full rate until then; without it a transition plays at the calm
+  rate and visibly steps. `tools/smooth.sh` measures it, and fails a wall that drops to its calm rate mid-transition.
+- `window.__twCalm = n`: rest slower than 30 when the scene is nearly still (Ink Map rests at 12).
+- `window.__twMaxRate()`: the most frames a second the page can get right now. Something racing across the screen
+  should move no further per frame than this allows, or it jumps.
+
 ### Adding it to the app
 
-1. `main.swift`: add the theme to `Cfg.themes` (id and "Name · cost") and, if the page name differs from the id, to
+1. `Sources/Config/Config.swift`: add the theme to `Cfg.themes` (id and "Name · cost") and, if the page name differs from the id, to
    the page map in `Wallpaper.load()`.
 2. `themes/ui/index.html`: add it to `THEMES` (name, page, cost 0–4, filter tags, description).
 3. A thumbnail: `tools/thumbs.sh <id>` renders it on the `showcase` desktop into `themes/ui/thumbs/<id>.jpg`.

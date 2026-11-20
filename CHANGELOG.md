@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.2.7]
+
+### Steadier, safer updates
+- An update gets three minutes, not one, to start before it's rolled back: a slow Mac's first look at a new app can
+  take a while. And a version that fails once is tried again later; only one that fails twice waits for a newer one.
+- A new version that started but never reported in could clear away the copy it was meant to be rolled back to, and
+  the rollback then quietly kept the broken one. The previous copy now stays until the new one has reported in.
+- Installing where only an administrator can write (Tidewall installed from another account) no longer trusts
+  anything your own account could change between the password prompt and the install: the install script goes to the
+  prompt directly, and the new app is copied somewhere private and checked again before it's put in place.
+- A new end-to-end test runs a real update before every release: a full download, a patch, the administrator's path,
+  a tampered and an unsigned release (both refused) and a rollback.
+
+### Fixed
+- If you came from Driftland, its frame rate (often 30) came across with you and, since 1.2.6, held even transitions
+  at 30. It's back to Auto, once (unless you've changed it since).
+- The walls now see Tidewall's own Settings window like any other window: Ink Map's boat no longer waits underneath it.
+- Wind Map put five seas in the wrong place (the Bering Sea off Scotland, the North Pacific in the Sahara). And when the
+  free weather service's daily limit is reached, it now says so, drops "LIVE" from its title and slows its stand-in
+  air to a drift, instead of a breeze that looked like a forecast.
+- Settings described Frame rate as it was before 1.2.6 ("smooths up to 60"); it now says what Auto does: a calm pace at
+  rest, every frame your display shows while a window moves or a scene settles, 60 while the pointer is on the wallpaper.
+- An update check that got an unreadable answer said "the update feed answered 200"; it now says the update
+  information couldn't be read.
+
+### Under the hood
+- The app's code is split from one 2,600-line file into small, focused parts, and the scripts every wall runs moved
+  into their own files. Release builds no longer carry the test harness, and a mask every wall had switched off is gone.
+
 ## [1.2.6]
 
 ### Smoother and sharper

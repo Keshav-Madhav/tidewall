@@ -41,7 +41,6 @@ let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1;
 let OX = 0, OY = 0, SW = innerWidth, SH = innerHeight;
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 let icons = [], paused = false, fpsEMA = 0, fieldMs = 0;
-window.__noMask = true;                                    // static map: nothing to save by masking
 
 /* ---------- noise (JS side, for the field warp) ---------- */
 const h2 = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
