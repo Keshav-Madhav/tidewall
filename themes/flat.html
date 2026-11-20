@@ -1115,6 +1115,7 @@ function frame(now) {
   lastT = now;
   if (pendingCommit) { pendingCommit = false; commit(); }              // window updates are laid once a frame
   curMix = mixAt(now);
+  if (curMix < 1 && window.__twSettle) window.__twSettle(150);   // a morph plays at the full rate until it has settled
   if (Span.leader()) { stepKayaks(dt, now); stepBirds(dt); sendSea(now); } else applySea();
   draw(now);
   if (++frameN % 10 === 0) updateStats();

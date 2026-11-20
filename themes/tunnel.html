@@ -511,7 +511,9 @@ const handle = m => {
 };
 function setTargets() { }                                             // windows don't touch the air
 function buildRetrying(tries = 0) {
-  build().catch(e => { post('JSERR build ' + e.message + ' ' + (e.stack || '').split('\n')[0]); if (tries < 3) setTimeout(() => buildRetrying(tries + 1), 4000 * (tries + 1)); });
+  // a failure is only an error once the retries are spent (a module fetch cut short while the page is replaced, say)
+  build().catch(e => { const m = e.message + ' ' + (e.stack || '').split('\n')[0];
+    if (tries < 3) { post('NOTE build failed, retrying: ' + m); setTimeout(() => buildRetrying(tries + 1), 4000 * (tries + 1)); } else post('JSERR build ' + m); });
 }
 let iconWait = MODEL.none ? setTimeout(() => { iconWait = 0; buildRetrying(); }, 1500) : (buildRetrying(), 0);   // no model: wait a moment for the icons, so it's built once, the right way round
 wake();

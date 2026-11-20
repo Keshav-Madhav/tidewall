@@ -365,6 +365,7 @@
         <div class="group">
           <div class="rowx"><div class="tx"><b id="updT">Software update</b><span id="updS">Checks GitHub for new versions.</span></div><button class="btn" id="updBtn">Check now</button></div>
           <div class="rowx"><div class="tx"><b>Update automatically</b><span>Download new versions and install them while your screen is locked.</span></div><div class="sw" data-k="autoUpdate" role="switch" tabindex="0"></div></div>
+          <div class="rowx"><div class="tx"><b>Something not right?</b><span>Opens a filled-in GitHub issue and copies the end of Tidewall’s log for you to paste in if you like. Your name, folders and location are taken out; nothing is sent until you send it.</span></div><button class="btn" id="reportBtn">Report a Problem…</button></div>
         </div>
       </div>
       <div class="credits">Tidewall began as a fork of <a href="#" data-url="https://github.com/BLEZZ0102/Deskland">Deskland</a>. Data, models, paintings and libraries keep their own licences: Natural Earth, Open-Meteo, d3-celestial, three.js, the Smithsonian, NASA, Poly Haven, Khronos and The Met. Some textures and models were generated for Tidewall.</div>
@@ -681,6 +682,7 @@ function drawUpdate() {
   b.textContent = ready ? (u.blocked ? 'Move to Applications' : u.admin ? 'Restart to Update…' : 'Restart to Update') : 'Check now'; b.classList.toggle('primary', ready);
   b.disabled = u.s === 'checking' || u.s === 'downloading' || u.s === 'off';
 }
+$('#reportBtn').addEventListener('click', () => send({ t: 'report' }));
 $('#updBtn').addEventListener('click', () => send({ t: (S.update || {}).s === 'ready' ? 'installUpdate' : 'checkUpdate' }));
 $('#quitBtn').addEventListener('click', () => send({ t: 'quit' }));
 

@@ -31,6 +31,12 @@ swiftc -O main.swift -o tidewall -framework Cocoa -framework WebKit -framework I
 ./tidewall --bench --themes "$PWD/themes" --theme railway --layout cascade --secs 14 --snapshot out.png  # render one theme
 ./build.sh                                  # the app
 tools/check-pages.sh                        # syntax-check every page's scripts (CI runs this and build.sh)
+tools/smooth.sh [--update] [wall …]         # smoothness through a window move + settle vs tools/smooth-baseline.json
+tools/regress.sh [--quick] [--update-visuals]   # the regression suite (release.sh runs it): every wall solo and on 3
+                                            # pretend displays, picture checks + a contact sheet, Settings stress
+./tidewall --print-report                   # what About ▸ Report a Problem sends (scrubbed log tail included)
+./tidewall --bench --behind …               # test windows one level below the desktop (behind your wallpaper) and the
+                                            # app window never brought forward: tests run unseen while you work
 tools/thumbs.sh <theme>                     # regenerate a gallery thumbnail
 tools/mem.sh <theme> [--small]              # memory footprint of a theme's page
 ./tidewall --bench … --film DIR --film-start S --film-dur S --film-move dx,dy   # promo footage: timestamped 1920 px frames while a window glides
@@ -39,7 +45,7 @@ tools/mem.sh <theme> [--small]              # memory footprint of a theme's page
 ./tidewall --ui-only --demo …               # the app window plays a scripted demo (a cursor drags the preview's window)
 ```
 
-There are no unit tests. Verify by looking: `--bench --snapshot` (and `--frames DIR --every S` for motion, `--hop S`
+There are no unit tests: `tools/regress.sh` is the safety net (JS errors, crashes, pages that never get ready, blank walls; `tools/visual-check.py` compares each wall with `tools/visual-baseline.json`, and after a deliberate visual change, `--update-visuals` once you have looked at the sheet). Beyond that, verify by looking: `--bench --snapshot` (and `--frames DIR --every S` for motion, `--hop S`
 for a window moving) and read the image. `--bench` prints `window.__dbg()` every 3 s; themes put their state there.
 Run benches one at a time; several at once skew each other. Quit any running Tidewall before running `./tidewall`
 from source, or two wallpapers stack.
@@ -82,6 +88,24 @@ from source, or two wallpapers stack.
   / `TIDEWALL_SIGN_PASS`, with a backup in the maintainer's Keychain ("Tidewall code-signing certificate …"). macOS
   keys Tidewall's permissions to this identity: **never ship a release signed with anything else** (CI checks), and
   changing certificates (or moving to an Apple Developer ID) costs every user one more permission prompt.
+- **Quality never drops silently** (the user, 2026-11-20, after 1.1.0's pacer had made transitions jumpy and capped
+  them at 60 Hz, and seven walls had been drawn at 1.5×): `tools/smooth.sh` (part of regress.sh) measures every wall's
+  frame rate through a window move and its settle against `tools/smooth-baseline.json` and fails a wall that got less
+  smooth or stays boosted at rest; regress.sh also fails any wall drawing below the screen's pixel scale (`dpr=` in the
+  bench line). Only re-record references (`tools/smooth.sh --update`) after a deliberate, looked-at change, never to
+  make a slower wall pass. Save power at rest (calm rates), never mid-transition: a wall that's still changing calls
+  `window.__twSettle(150)` each frame until it has settled (full rate, and the check verifies it really got it;
+  regress.sh fails if one of the transition walls loses the call). A new wall with a layout transition must do the
+  same, and be added to that list in regress.sh. Auto's full rate (drags, settles: `__twBoost`/`__twSettle`) is the display's own
+  maximum (`NSScreen.maximumFramesPerSecond`); the pointer over the wallpaper (`__twHover`) gets at most 60; at rest the
+  wall's calm rate. Prefer making idle motion slow enough that each calm-rate step is ≤ ~1 retina px (an illusion
+  of smoothness for free) over raising calm rates; CSS transitions to glide sprites cost more in WebKit (+5 points of
+  CPU on Ink Map, measured) than they save. Measure on mains power with Low Power Mode off.
+- **Update tests on your own Mac**: give every test app (clients AND the test release) the Info.plist key
+  `TidewallIsolatedTest` = true. Development builds then keep to themselves: settings suite `tidewall.isolated-test`,
+  log `Tidewall-isolated-test.log`, updater folder `~/Library/Caches/app.tidewall.isolated-test`, no login-item writes,
+  no replacing or signalling the running Tidewall, windows below the desktop level. Without it a test copy (a higher
+  version) quits your real Tidewall, takes its login item and writes into `app.tidewall`. Release builds ignore the key.
 - Test an update locally without publishing: build a higher version, sign it (`TIDEWALL_UPDATE_KEY=… swift
   tools/update-sign.swift sign …`), serve it with `python3 -m http.server`, then run an installed copy with
   `TIDEWALL_UPDATE_FEED=http://127.0.0.1:PORT/update.json TIDEWALL_UPDATE_INSTALL_NOW=1` (a development build, with a

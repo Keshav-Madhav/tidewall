@@ -100,6 +100,13 @@ The only network use is **Wind Map**, which fetches public weather data for a gr
 [Open-Meteo](https://open-meteo.com) (no account, no identifiers). **Celestial Atlas** works out your city from your
 Mac's time zone, locally.
 
+## Something wrong?
+
+Choose **Tidewall ▸ About ▸ Report a Problem…**. It opens a GitHub issue already filled in with what's needed to fix it
+(versions, Mac model, displays, walls and settings) and puts the end of Tidewall's log on your clipboard, with your
+name, folders and location taken out: paste it in if you're happy to, add what you saw, and send it. The full log is at
+`~/Library/Logs/Tidewall.log`.
+
 ## Build from source
 
 Requires the Xcode command-line tools (`xcode-select --install`).

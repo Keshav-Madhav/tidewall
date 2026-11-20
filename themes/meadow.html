@@ -970,6 +970,7 @@ function draw(now) {
   // 15 times a second, and while windows move; with nobody walking the meadow, nothing else changes between those
   // moments, so the frame isn't drawn at all
   const morphing = curMix < 1, circDue = morphing || !circTex || now - circAt >= 66;
+  if (morphing && window.__twSettle) window.__twSettle(150);         // a morph plays at the full rate until it has settled
   window.__twCalm = actor || cat ? 30 : 15;                 // only the clouds moving: 15 frames a second is plenty
   if (!actor && !cat && !circDue && !redraw) return;
   if (circDue) { uploadCircles((now - T0) / 1000); circAt = now; }

@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.2.6]
+
+### Smoother and sharper
+- **As smooth as your display, where it shows.** On Auto, a window being dragged and a scene settling after it get as
+  many frames as your screen shows: 120 a second on a ProMotion MacBook, 100 on a 100 Hz monitor (since 1.1.0 they had
+  stopped at 60, half of what 1.0 drew). The pointer wandering over the wallpaper gets 60, which looks just as smooth
+  for things following it and costs less; at rest every wall keeps its calm rate.
+- **Ink Map's boat races smoothly.** Sent to a pointer far away, it got the map's calm 30 frames a second and jumped
+  up to 8 points a frame. It now gets every frame the display shows while it races (≈2 points a step at 120), and
+  where frames are scarce (a lower Frame rate, Calmer on battery) it sails a little slower instead of jumping.
+- **Ink Map's ships glide.** At the map's calm 12 frames a second, the ship stepped 2 pixels a frame; it and the sea
+  serpent now sail a little slower, so each step is about a pixel and reads as smooth motion, at no extra cost.
+- **Full resolution again.** Beach, Meadow, Koi Reef, Snowfall, Wind Map, Wind Tunnel and Lava Lamp had been drawn at
+  1.5× (Lava 1.25×) on retina screens since 1.1.0 to save graphics work, which made them soft. Every wall now draws at
+  your display's own resolution (a point or two of GPU and some memory more, measured).
+- **Islands, beds and towns settle smoothly again.** Since 1.1.0 a wall drops to a slow "calm" frame rate (12 fps on
+  Ink Map) to save power once nothing is happening, and it dropped there as soon as you let go of a window, while the
+  islands were still growing into their new shape. Now a wall keeps its full frame rate until its change has settled,
+  then rests: Ink Map's morph went from ≈30 fps with stalls of 84 ms to ≈60 fps, and Beach, Garden Plan, Marauders and
+  Model Railway hold their full rate through the whole transition. Resting costs no more than before.
+
+### Help
+- **Report a Problem** (Tidewall ▸ About). Opens a GitHub issue already filled in with what's needed to fix it:
+  Tidewall's and macOS's versions, your Mac model, each display and its wall, and your settings. The end of Tidewall's
+  log goes on your clipboard, to paste in if you're happy to (it never goes to GitHub by itself). Your name, folders,
+  place and coordinates are taken out of both.
+
+### Updates
+- **Skipped a release? Still a small download.** Releases now carry patches from the last few versions, not just the
+  one before, so a Mac that was off for a couple of releases still fetches only what changed. (Copies from this version
+  on; earlier ones read only the newest patch.)
+- **Intel Macs get patches too.** They used to check the downloaded patch against the wrong half of the universal app,
+  reject it and fetch the whole release every time.
+
 ## [1.2.5]
 
 ### Updates

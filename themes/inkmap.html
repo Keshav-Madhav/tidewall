@@ -30,7 +30,7 @@
 <script>
 'use strict';
 const INK = 'rgba(58,42,28,0.92)';
-window.__twCalm = 12;                                    // frames a second while nobody's working here: the ships (13 pt/s) and the serpent (7)
+window.__twCalm = 12;                                    // frames a second while nobody's working here: the ships (8 pt/s) and the serpent (6)
 // move about a point a step; the boat under way asks for more (its wake is laid frame by frame). (A CSS transition to
 // glide them between steps was tried: the compositor then animates at the display's full rate, which cost more.)
 const P = { quality: 2, sigma: 70, warp: 30 };            // P.quality only for bench compatibility
@@ -463,8 +463,10 @@ const serpent = makeSprite(96, 40, x => {
 });
 document.body.appendChild(compass);
 const movers = [
-  { el: ship, w: 64, h: 56, x: 0, y: 0, a: 0.4, v: 13, bob: 0, phase: 0, flip: 1 },
-  { el: serpent, w: 96, h: 40, x: 0, y: 0, a: 2.6, v: 7, bob: 1, phase: 2, flip: 1 },
+  // speeds matched to the calm 12 frames a second: each step stays around a retina pixel or less, so they glide
+  // (at 13 pt/s the ship stepped 2 px a frame, visibly; drawing more frames instead cost 65% more CPU at rest)
+  { el: ship, w: 64, h: 56, x: 0, y: 0, a: 0.4, v: 8, bob: 0, phase: 0, flip: 1 },
+  { el: serpent, w: 96, h: 40, x: 0, y: 0, a: 2.6, v: 6, bob: 1, phase: 2, flip: 1 },
 ];
 function spawn(m) {
   let best = -1e9;
@@ -698,7 +700,10 @@ function stepBoat(dt, t) {
     if (w) [tx, ty] = w;
     else if (here < 0 && Math.hypot(tx - B.x, ty - B.y) > 260) { portage = now + 1400; B.o = 0; boat.style.opacity = 0; drawBoat(t); return; }
   }
-  const dx = tx - B.x, dy = ty - B.y, d = Math.hypot(dx, dy), maxV = 230;
+  // its top speed fits the frames it can get: about 3 pt a step (230 pt/s at 120 a second, slower when frames are
+  // scarce: a boat racing at 230 pt/s on 30 frames a second jumped 8 pt a frame and stuttered)
+  const rateMax = window.__twMaxRate ? window.__twMaxRate() : 60, maxV = Math.min(230, 3.2 * rateMax);
+  const dx = tx - B.x, dy = ty - B.y, d = Math.hypot(dx, dy);
   const want = d < 12 ? 0 : Math.min(maxV, (d - 12) * 1.8);
   let dvx = d > 1 ? dx / d * want : 0, dvy = d > 1 ? dy / d * want : 0;
   // feel the coast ahead and steer along it
@@ -718,6 +723,7 @@ function drawBoat(t) {
   const sp = Math.hypot(B.vx, B.vy), bob = Math.sin(t * 2.1) * 1.2 * (1 - Math.min(1, sp / 230) * .6), x = B.x - OX, y = B.y - OY;
   boat.style.transform = `translate3d(${(x - 30).toFixed(1)}px,${(y - 44 + bob).toFixed(1)}px,0) rotate(${B.tilt.toFixed(3)}rad) scaleX(${B.flip.toFixed(3)})`;
   window.__twCalm = sp > 8 ? 30 : 12;                                  // under way: its wake wants frames
+  if (sp > 40 && window.__twSettle) window.__twSettle(150);             // racing to you: every frame the display shows, until it slows
   if (sp > 30) inkWake.feed(x - B.vx / sp * 26, y - B.vy / sp * 26 + 4, Math.atan2(B.vy, B.vx), performance.now()); else inkWake.reset();
   inkWake.draw(performance.now());
 }
@@ -752,10 +758,14 @@ function frame0(now) {
     mixNow = mixAt(now);
     renderMap(); needMap = false;
   }
+  // a changing map plays at the full rate until it has settled (the calm rate, 12 fps, is for a map at rest: a morph or
+  // a town easing in drawn at it steps visibly); renewed every frame it's still moving, so it stops the moment it rests
+  const settling = morphing;
   if (FB) { const t = Span.secs(16384);                     // (the world's clock: a ship's bob matches across a seam)
     if (Span.leader()) { for (const m of movers) { if (m.el.style.opacity === '0') m.el.style.opacity = 1; stepMover(m, dt, t); } stepBoat(dt, t); sendSea(now); }
     else applySea(t); }
-  if (stepTowns(dt)) renderMap();
+  if (stepTowns(dt)) { renderMap(); if (window.__twSettle) window.__twSettle(150); }
+  else if (settling && window.__twSettle) window.__twSettle(150);
   if (layoutDirty && !morphing && now - lastLandChange > 600) layoutOverlay();
   requestAnimationFrame(frame);            // sprites keep sailing; the map only re-renders when the land changes
 }

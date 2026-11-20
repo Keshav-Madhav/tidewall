@@ -20,7 +20,7 @@ import Darwin
 // MARK: - Config
 
 enum Cfg {
-  static let d = UserDefaults.standard
+  static let d = TestIsolation.on ? UserDefaults(suiteName: "tidewall.isolated-test")! : UserDefaults.standard
   static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
   /// Tidewall was called Driftland: bring its choices along, once
   static func migrate() {
@@ -40,8 +40,11 @@ enum Cfg {
   /// and look the same a little under retina (the window server scales them up smoothly), at a fraction of the GPU
   /// work and memory; the crisp ones (ink, lettering, sprites) stay at full sharpness. --fullres (dev) turns it off
   static func renderCap(_ t: String) -> Double {
-    if CommandLine.arguments.contains("--fullres") { return 8 }
-    return ["lava": 1.25, "reef": 1.5, "beach": 1.5, "meadow": 1.5, "tunnel": 1.5, "wind": 1.5, "snow": 1.5][t] ?? 8
+    // every wall draws at the display's own resolution. (1.1.0 drew seven of them at 1.5× on retina screens to save
+    // GPU; measured at full resolution they cost +0.1-2.4 points of GPU and 12-84 MB, and they looked soft: quality is
+    // not traded for speed. --lowres-test keeps the old caps, for comparisons only.)
+    if CommandLine.arguments.contains("--lowres-test") { return ["lava": 1.25, "reef": 1.5, "beach": 1.5, "meadow": 1.5, "tunnel": 1.5, "wind": 1.5, "snow": 1.5][t] ?? 8 }
+    return 8
   }
   static let spanThemes: Set<String> = ["celestial", "snow", "wind", "railway", "reef", "inkmap", "garden", "gallery", "beach", "meadow", "estate"]
   /// displays showing the same spanning theme share one world (off: each display draws its own)
@@ -131,9 +134,26 @@ enum Cfg {
   static var mask: Bool { get { d.object(forKey: "mask") as? Bool ?? false }   /* every theme opts out of the mask now */ set { d.set(newValue, forKey: "mask") } }
 }
 
+/// Development builds only: a copy whose Info.plist says TidewallIsolatedTest (the update tests make such copies, and
+/// their releases) keeps entirely to itself: its own settings and log, never replaces or signals the Tidewall you're
+/// running, never touches the login item, and draws behind your wallpaper. Release builds ignore the key.
+enum TestIsolation {
+#if TIDEWALL_DEV
+  static let on = Bundle.main.object(forInfoDictionaryKey: "TidewallIsolatedTest") as? Bool ?? false
+#else
+  static let on = false
+#endif
+}
 let args = CommandLine.arguments
 func argValue(_ k: String) -> String? { args.firstIndex(of: k).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
 let benchMode = args.contains("--bench")
+// dev: --behind puts every test window behind the real wallpaper and never brings the app forward, so the regression
+// suite runs while you work without drawing over your desktop or taking the keyboard (pages still render: bench turns
+// WebKit's occlusion detection off)
+let benchBehind = (benchMode && args.contains("--behind")) || TestIsolation.on
+/// …one level below the desktop's own: under your wallpaper (Tidewall's or the system's) whatever orders what
+let behindLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) - 1)
+var shotsPending = 0                        // dev: --snapshot pictures not yet written (the run waits for them)
 let stock = args.contains("--stock")   // baseline: native dpr, theme's own pacing, no mask
 let themesRoot: URL = {
   if let p = argValue("--themes") { return URL(fileURLWithPath: p).standardized }
@@ -146,6 +166,7 @@ if let v = argValue("--mask") { Cfg.mask = v == "1" }
 if let v = argValue("--margin") { Cfg.margin = Double(v)! }
 Cfg.migrate()
 if args.contains("--print-site") { print(Cfg.site.map { "\($0.name) \($0.lat),\($0.lon) \($0.cc)" } ?? "none", Cfg.homeRegion ?? "-"); exit(0) }   // dev
+if args.contains("--print-report") { print(ProblemReport.clipboardText()); print("---- issue URL ----\n" + ProblemReport.issueURL().absoluteString); exit(0) }   // dev: what Report a Problem sends
 if args.contains("--install-login-item") { LoginItem.set(true); print(LoginItem.plist.path); exit(0) }
 if stock { Cfg.mask = false }
 
@@ -158,7 +179,7 @@ if Bundle.main.bundleIdentifier != nil && !benchMode {
     let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     // opened first, swapped in only if that worked (a failed freopen would leave fd 1 free for whatever opens next)
-    let fd = open(dir.appendingPathComponent("Tidewall.log").path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+    let fd = open(dir.appendingPathComponent(TestIsolation.on ? "Tidewall-isolated-test.log" : "Tidewall.log").path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
     if fd >= 0 { fflush(stdout); dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO); close(fd) }
   }
 }
@@ -211,7 +232,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
 }
 
 /// Runs before any page script.
-func earlyScript(fps: Double, opaque: Bool, cap: Double = 8) -> String { """
+func earlyScript(fps: Double, opaque: Bool, cap: Double = 8, maxHz: Int = 60) -> String { """
 (() => {
   // the theme's sharpness cap: the page sees a devicePixelRatio no higher than it (the host scales its messages the same)
   if (\(cap) < 8) {
@@ -273,19 +294,34 @@ func earlyScript(fps: Double, opaque: Bool, cap: Double = 8) -> String { """
   // wax, gardeners). A frame rate picked in Settings replaces all of it. Between frames the
   // page sleeps on a timer instead of waking at every vsync.
   // a picked rate: 60 holds every scene there; 30, 20 or 15 cap it (a calm scene that asks for less still gets less)
-  const pick = \(fps), CALM = pick > 0 ? pick : 30, LIVE = pick > 0 ? pick : 60, calmAt = () => pick >= 60 ? pick : Math.min(CALM, window.__twCalm || CALM);
-  let boostUntil = 0, paceK = 1;                                      // paceK: 2 on battery when Settings says calmer
+  // Auto: while things move or settle, as many frames as this display shows (120 on a ProMotion screen, 100 on a
+  // 100 Hz monitor); 60 capped that from 1.1.0, half of what 1.0 drew on the same Mac
+  const pick = \(fps), CALM = pick > 0 ? pick : 30, LIVE = pick > 0 ? pick : Math.max(60, \(maxHz)), calmAt = () => pick >= 60 ? pick : Math.min(CALM, window.__twCalm || CALM);
+  // two kinds of "something is happening": a window being dragged or a scene settling gets every frame the display
+  // shows (brief, and the motion the eye follows most); the pointer wandering over the wallpaper gets 60 (things that
+  // follow it look smooth at 60, and the pointer can wander for minutes: 120 cost 3-5 points of CPU more, measured)
+  let boostUntil = 0, hoverUntil = 0, paceK = 1;                       // paceK: 2 on battery when Settings says calmer
+  const HOVER = Math.min(LIVE, 60);
+  // the most frames a second this page can get right now (a Frame rate picked in Settings, the display, half on battery
+  // when Settings says calmer): fast movers keep each step small by moving no faster than this allows
+  window.__twMaxRate = () => LIVE / paceK;
+  window.__twHover = ms => { const u = performance.now() + ms; if (u > hoverUntil) hoverUntil = u; };
   window.__twBoost = ms => { const u = performance.now() + ms; if (u > boostUntil) boostUntil = u; };
+  // a wall whose picture is still changing (a morph, beds easing, a cross-fade) says so every frame: it gets the full
+  // rate until it has settled, and tools/smooth.sh checks that it really does (__twSettling, read by its probe)
+  let settleUntil = 0;
+  window.__twSettle = ms => { const u = performance.now() + ms; if (u > settleUntil) settleUntil = u; window.__twBoost(ms); };
+  window.__twSettling = () => performance.now() < settleUntil;
   { const deliver = window.__hostSend;
     window.__hostSend = s => { if (s.startsWith('{"t":"pace"')) { paceK = +JSON.parse(s).k || 1; return; }
       const cur = s.startsWith('{"t":"cursor"') && s.charCodeAt(13) === 44;   // the pointer, not cursorOff
       if (s.startsWith('{"t":"dicons"')) window.__dicons = s;            // (kept for the bench probes)
       if (cur) window.__twOver = s.indexOf('"w":1') >= 0;
-      if ((cur && !window.__twOver) || window.__live) window.__twBoost(900); deliver(s); }; }   // the pointer over the wallpaper ({"t":"cursor…, not over a window), or a live drag
+      if (window.__live) window.__twBoost(900); else if (cur && !window.__twOver) window.__twHover(900); deliver(s); }; }   // the pointer over the wallpaper ({"t":"cursor…, not over a window), or a live drag
   const raf = window.requestAnimationFrame.bind(window);
   let due = 0, lastT = -1, go = false;
   window.requestAnimationFrame = cb => raf(function tick(t) {
-    if (t !== lastT) { lastT = t; const iv = paceK * 1000 / (performance.now() < boostUntil ? LIVE : calmAt()); go = t + 2 >= due; if (go) due = Math.max(due + iv, t); }
+    if (t !== lastT) { lastT = t; const n = performance.now(), iv = paceK * 1000 / (n < boostUntil ? LIVE : n < hoverUntil ? Math.max(HOVER, calmAt()) : calmAt()); go = t + 2 >= due; if (go) due = Math.max(due + iv, t); }
     if (!go) { const wait = due - t - 6; if (wait > 4) setTimeout(() => raf(tick), wait); else raf(tick); return; }
     if (window.__prof) { const a = performance.now(); cb(t); const p = window.__prof; p.n++; p.ms += performance.now() - a; } else cb(t);
   });
@@ -314,7 +350,10 @@ let lateScript = """
   // Lever 2: live drags snap the field; anything else keeps the theme's own slow morph.
   window.__live = false;
   const commit0 = commit;
-  commit = function (fromEmpty) { if (window.__live && !fromEmpty && FB) { refresh(); return; } return commit0(fromEmpty); };
+  // a morph plays at the full rate to its end: the pacer's calm rate (12 fps on Ink Map) is for a scene at rest, and a
+  // settling island drawn at it steps visibly (a drag's own boost ends 0.9 s after the window stops; the morph doesn't)
+  const settle = () => { if (window.__twSettle) window.__twSettle((typeof morphDur === 'number' ? morphDur : 1500) + 250); };
+  commit = function (fromEmpty) { if (window.__live && !fromEmpty && FB) { refresh(); return; } settle(); return commit0(fromEmpty); };
   if (window.__noMask) { webkit.messageHandlers.host.postMessage('patched'); return; }
   // Lever 3: stencil out the windows (canvas px rects [x0,y0,x1,y1]).
   const vs = `#version 300 es
@@ -392,7 +431,7 @@ final class StillWall {
     // one bitmap, handed straight to the layer (an image view would keep extra copies of the picture)
     let v = NSView(frame: NSRect(origin: .zero, size: frame.size)); v.wantsLayer = true
     var r = NSRect(origin: .zero, size: image.size); v.layer?.contents = image.cgImage(forProposedRect: &r, context: nil, hints: nil); v.layer?.contentsGravity = .resizeAspectFill
-    window.contentView = v; window.setFrame(frame, display: true); window.orderFront(nil)
+    window.contentView = v; window.setFrame(frame, display: true); if benchBehind { window.level = behindLevel; window.orderBack(nil) } else { window.orderFront(nil) }
   }
   func close() { window.orderOut(nil); window.close() }
 }
@@ -424,7 +463,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     let ucc = cfg.userContentController
     if let k = argValue("--timescale").flatMap(Double.init), k != 1 { ucc.addUserScript(WKUserScript(source: timescaleScript(k), injectionTime: .atDocumentStart, forMainFrameOnly: true)) }
-    ucc.addUserScript(WKUserScript(source: earlyScript(fps: stock ? 0 : Cfg.fps, opaque: !stock && !args.contains("--no-opaque"), cap: Double(cap)), injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    ucc.addUserScript(WKUserScript(source: earlyScript(fps: stock ? 0 : Cfg.fps, opaque: !stock && !args.contains("--no-opaque"), cap: Double(cap), maxHz: screen.maximumFramesPerSecond), injectionTime: .atDocumentStart, forMainFrameOnly: true))
     ucc.addUserScript(WKUserScript(source: lateScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
     window = fakeFrame != nil ? FreeSizeWindow(contentRect: winRect, styleMask: .borderless, backing: .buffered, defer: false)   // dev: a pretend display's own size
       : NSWindow(contentRect: winRect, styleMask: .borderless, backing: .buffered, defer: false)
@@ -449,7 +488,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     window.contentView = web
     window.setFrame(winRect, display: false)
     if hidden { window.alphaValue = 0 }      // built behind the still picture; shown once it has drawn
-    window.orderFront(nil)
+    if benchBehind { window.level = behindLevel; window.orderBack(nil) } else { window.orderFront(nil) }
     load()
   }
 
@@ -539,7 +578,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
       sendDesk(); send("{\"t\":\"me\",\"seed\":\(Cfg.seed)}"); sendDeskIcons(); if delegate.paceK != 1 { sendPace() }
       if let p = pending { pending = nil; p() } else if let a = lastArgs { update(rects: a.0, owners: a.1, live: false, pause: a.3) }
       return }
-    if s.hasPrefix("JSERR") || s == "patched" || (s.hasPrefix("STAT") && ProcessInfo.processInfo.environment["TIDEWALL_STAT"] != nil) { log("[\(screenID)] \(s)") }
+    if s.hasPrefix("JSERR") || s.hasPrefix("NOTE") || s == "patched" || (s.hasPrefix("STAT") && ProcessInfo.processInfo.environment["TIDEWALL_STAT"] != nil) { log("[\(screenID)] \(s)") }
   }
   private var crashes: [Double] = []
   func webViewWebContentProcessDidTerminate(_ w: WKWebView) {
@@ -874,6 +913,103 @@ final class DeskIcons {
   }
 }
 
+/// Tidewall ▸ About ▸ Report a problem: everything someone fixing it needs (versions, Mac model, displays and walls,
+/// settings, the end of the log) and nothing that says who or where you are. The issue form opens with the summary; the
+/// log goes only on the clipboard, for you to paste in (a URL would hand it to GitHub before you'd sent anything).
+enum ProblemReport {
+  static let newIssue = "https://github.com/Keshav-Madhav/tidewall/issues/new"
+  static func sysctl(_ k: String) -> String {
+    var n = 0; guard sysctlbyname(k, nil, &n, nil, 0) == 0, n > 0 else { return "?" }
+    var b = [CChar](repeating: 0, count: n); guard sysctlbyname(k, &b, &n, nil, 0) == 0 else { return "?" }
+    return String(cString: b)
+  }
+  private static func replace(_ t: String, _ pattern: String, _ with: String, _ opts: NSRegularExpression.Options = []) -> String {
+    guard let re = try? NSRegularExpression(pattern: pattern, options: opts) else { return t }
+    return re.stringByReplacingMatches(in: t, range: NSRange(t.startIndex..., in: t), withTemplate: with)
+  }
+  /// no home folder, account or full name (any part of it, any case), drive names, place, time zone or coordinates
+  /// (the walls' addresses carry the place for the weather and Wind Map's region is your country)
+  static func scrub(_ s: String) -> String {
+    var t = s.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
+    t = replace(t, "/Users/[^/\\s:]+", "/Users/<you>")
+    t = replace(t, "/Volumes/[^/\\n:]+", "/Volumes/<drive>")
+    // the account name however a path mangles it ("jo_smith" also as jo-smith, jo.smith: folders made from paths),
+    // then the full name and each part of it: 4 letters or more matched even inside other words ("josmith"), 3 only
+    // as a word of its own (so "Ann" leaves "annotation" alone)
+    let flex = { (n: String) in n.map { "_-. ".contains($0) ? "[-_. ]?" : NSRegularExpression.escapedPattern(for: String($0)) }.joined() }
+    for n in [NSUserName(), NSFullUserName()] where n.count >= 3 { t = replace(t, flex(n), "<you>", .caseInsensitive) }
+    for part in Set(NSFullUserName().split(whereSeparator: { !$0.isLetter }).map(String.init)).sorted(by: { $0.count > $1.count }) where part.count >= 3 {
+      let e = NSRegularExpression.escapedPattern(for: part)
+      t = replace(t, part.count >= 4 ? e : "(?<![A-Za-z])" + e + "(?![A-Za-z])", "<you>", .caseInsensitive) }
+    if let site = Cfg.site {
+      for p in [site.tz, site.name, site.name.replacingOccurrences(of: " ", with: "_"), site.tz.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""] where p.count >= 3 {
+        t = replace(t, NSRegularExpression.escapedPattern(for: p), "<place>", .caseInsensitive) } }
+    t = replace(t, "([?&;])(site|lat|lon|latitude|longitude|tz|timezone|v|region)=[^&\\s:]*", "$1$2=…")
+    return t
+  }
+  /// the last lines of the log that fit in max characters (the twice-a-second pacing lines left out)
+  static func logTail(_ max: Int) -> String {
+    let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Tidewall.log")
+    guard let h = try? FileHandle(forReadingFrom: url) else { return "(no log yet)" }
+    let end = (try? h.seekToEnd()) ?? 0; try? h.seek(toOffset: end > 150_000 ? end - 150_000 : 0)
+    var lines = String(decoding: h.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n"); try? h.close()
+    if end > 150_000, !lines.isEmpty { lines.removeFirst() }          // (read from mid-line: the first is a fragment)
+    var out: [Substring] = [], used = 0
+    for l in lines.reversed() where !l.hasPrefix("HOST polls") {
+      let line = l.prefix(300); if used + line.count + 1 > max { break }; out.append(line); used += line.count + 1 }
+    return scrub(out.reversed().joined(separator: "\n"))
+  }
+  /// a display as the report names it: the model for a monitor, but a Sidecar iPad or AirPlay screen is named by its
+  /// owner ("Jo's iPad"), so anything that isn't plainly a model is just "a named display"
+  static func displayName(_ s: NSScreen) -> String {
+    let n = s.localizedName
+    if n.hasPrefix("Built-in") { return n }
+    if n.contains("’") || n.contains("'") || n.range(of: "iPad|iPhone|TV|AirPlay|Sidecar", options: .regularExpression) != nil { return "a named display" }
+    return n
+  }
+  /// what goes in the issue (no log: GitHub would have it the moment the page opened, before you'd sent anything)
+  static func summary() -> String {
+    let os = ProcessInfo.processInfo.operatingSystemVersionString.replacingOccurrences(of: "Version ", with: "")
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+    let name = { (id: String) in Cfg.themes.first { $0.0 == id }.map { String($0.1.split(separator: "·").first ?? "").trimmingCharacters(in: .whitespaces) } ?? id }
+    let displays = NSScreen.screens.map { "\(displayName($0)) \(Int($0.frame.width))×\(Int($0.frame.height)) @\(Int($0.backingScaleFactor))x: \(name(Cfg.theme(for: $0.displayID)))" }
+    let reacts = [("windows", Cfg.reactWindows), ("Stage Manager", Cfg.reactStage), ("widgets", Cfg.reactWidgets), ("pointer", Cfg.reactCursor)]
+    let settings = [
+      "frame rate \(Cfg.fps == 0 ? "Auto" : "\(Int(Cfg.fps))")", "on battery \(["same", "calmer", "paused"][Cfg.battery])",
+      "rest when idle \(Cfg.idleMinutes > 0 ? "\(Int(Cfg.idleMinutes)) min" : "never")", "desktop icons \(Cfg.deskIcons ? "on" : "off")",
+      "reacts to \(reacts.filter { $0.1 }.map { $0.0 }.joined(separator: ", ").nilIfEmpty ?? "nothing")",
+      "updates \(Cfg.autoUpdate ? "automatic" : "manual")", "paused \(Cfg.d.bool(forKey: "paused") ? "yes" : "no")"]
+    return scrub("""
+    ### What happened?
+    <!-- What did you see, and what were you doing just before? A screenshot or a short screen recording helps a lot. -->
+
+
+    ### This Mac
+    - Tidewall \(Cfg.version) (\(build)), macOS \(os)
+    - \(sysctl("hw.model")), \(sysctl("machdep.cpu.brand_string"))
+    \(displays.map { "- " + $0 }.joined(separator: "\n"))
+    - \(settings.joined(separator: " · "))
+    """)
+  }
+  /// the issue form, and the clipboard with the same text plus the end of the log
+  static func clipboardText() -> String { summary() + "\n\n### The end of Tidewall's log\n```\n" + logTail(12_000) + "\n```\n" }
+  static func issueURL() -> URL {
+    var c = URLComponents(string: newIssue)!
+    c.queryItems = [URLQueryItem(name: "body", value: summary() + "\n\n### The end of Tidewall's log\n<!-- Tidewall copied it to your clipboard: paste it here (⌘V) if you're happy to share it. Your name, folders and location are already taken out. -->\n")]
+    c.percentEncodedQuery = c.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")   // (a "+" would arrive as a space)
+    return c.url ?? URL(string: newIssue)!
+  }
+  static func send() {
+    // dev/tests: TIDEWALL_REPORT_DRYRUN=<file> writes what would go on the clipboard there and logs the issue address,
+    // leaving your clipboard and browser alone
+    if let f = ProcessInfo.processInfo.environment["TIDEWALL_REPORT_DRYRUN"] {
+      try? clipboardText().write(toFile: f, atomically: true, encoding: .utf8); log("[report] \(issueURL().absoluteString)"); return }
+    let pb = NSPasteboard.general; pb.clearContents(); pb.setString(clipboardText(), forType: .string)
+    NSWorkspace.shared.open(issueURL())
+  }
+}
+extension String { var nilIfEmpty: String? { isEmpty ? nil : self } }
+
 final class Usage {
   typealias RespFn = @convention(c) (pid_t) -> pid_t
   private static let responsible: RespFn? = {
@@ -967,12 +1103,13 @@ enum LoginItem {
   static var blocked: Bool { enabled && SMAppService.statusForLegacyPlist(at: plist) == .requiresApproval }
   /// the app was moved (say into /Applications) since the login item was made: point it at where the app is now
   static func refresh() {
-    guard enabled, Bundle.main.bundleIdentifier != nil, let d = NSDictionary(contentsOf: plist), let a = d["ProgramArguments"] as? [String],
+    guard !TestIsolation.on, enabled, Bundle.main.bundleIdentifier != nil, let d = NSDictionary(contentsOf: plist), let a = d["ProgramArguments"] as? [String],
           let first = a.first, first != URL(fileURLWithPath: CommandLine.arguments[0]).standardized.resolvingSymlinksInPath().path else { return }
     set(true); log("login item: now opens \(CommandLine.arguments[0])")
   }
   /// returns why it couldn't, if it couldn't
   @discardableResult static func set(_ on: Bool) -> String? {
+    if TestIsolation.on { return nil }                                   // (an isolated test copy leaves yours alone)
     try? FileManager.default.removeItem(at: oldPlist)                    // the agent from before the rename
     if !on { try? FileManager.default.removeItem(at: plist); return nil } // takes effect from the next login
     let exe = URL(fileURLWithPath: CommandLine.arguments[0]).standardized.resolvingSymlinksInPath().path
@@ -1022,10 +1159,15 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
 
   private var pendingPage: String?
   func show(page: String? = nil) {
-    NSApp.setActivationPolicy(.regular)
+    if !benchBehind { NSApp.setActivationPolicy(.regular) }   // (no Dock icon for a test run behind the wallpaper)
     let fresh = window == nil
     if fresh { build() }
-    window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    if benchBehind, let w = window {          // dev: tests drive it unseen (behind the wallpaper, never key or active)
+      w.level = behindLevel; w.orderBack(nil)
+      if let wv = web, wv.responds(to: NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")),
+         let imp = class_getMethodImplementation(type(of: wv), NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")) {
+        typealias F = @convention(c) (AnyObject, Selector, Bool) -> Void; unsafeBitCast(imp, to: F.self)(wv, NSSelectorFromString("_setWindowOcclusionDetectionEnabled:"), false) }
+    } else { window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     if let page { if fresh { pendingPage = page } else { js("{\"t\":\"show\",\"page\":\"\(page)\"}") } }   // a new window: once it says hello
   }
   private func build() {
@@ -1098,7 +1240,7 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
     return (try? JSONSerialization.data(withJSONObject: d)).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
   }
   func pushState() {
-    guard let app, web != nil else { return }
+    guard app != nil, web != nil else { return }
     if !fakeWorld.isEmpty {                                          // dev: the harness's pretend displays, as the window would list real ones
       let ids = fakeWorld.keys.sorted(), main = ids.first { fakeWorld[$0]?.origin == .zero }
       let ds = ids.map { id -> [String: Any] in let f = fakeWorld[id]!, t = Cfg.theme(for: id)
@@ -1124,7 +1266,7 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
     if let d = try? JSONSerialization.data(withJSONObject: st), let s = String(data: d, encoding: .utf8) { js(s) }
   }
   func userContentController(_ u: WKUserContentController, didReceive m: WKScriptMessage) {
-    if m.name == "host" { let s = "\(m.body)"; if s.hasPrefix("JSERR") { log("[preview] \(s)") }; return }
+    if m.name == "host" { let s = "\(m.body)"; if s.hasPrefix("JSERR") || s.hasPrefix("NOTE") { log("[preview] \(s)") }; return }
     guard m.frameInfo.isMainFrame, let app, let str = m.body as? String, let d = str.data(using: .utf8),
           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let t = o["t"] as? String else { return }
     switch t {
@@ -1135,6 +1277,7 @@ final class AppWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNav
       return
     case "notesSeen": Cfg.notesSeen = Cfg.version; app.buildMenu()
     case "desktop": js("{\"t\":\"desktop\",\"d\":\(desktopJSON(display: (o["display"] as? Int).flatMap { CGDirectDisplayID(exactly: $0) }))}"); return
+    case "report": ProblemReport.send(); toast("The end of Tidewall’s log is on your clipboard: paste it into the issue if you’re happy to share it."); return
     case "openAutomation": NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!); return
     case "open": if let s = o["url"] as? String, let url = URL(string: s), ["https", "http"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }; return
     case "log": log("[ui] \(o["s"] as? String ?? "")"); return
@@ -1463,7 +1606,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
       if Cfg.notesSeen == nil && !updater.justUpdated { Cfg.notesSeen = Cfg.version }   // a fresh install: nothing to announce
       DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.updater.cameUp() }
       if let from = argValue("--updated-from") { log("[update] updated from \(from) to \(Cfg.version)") }
-      DistributedNotificationCenter.default().addObserver(forName: .init("app.tidewall.show"), object: nil, queue: .main) { [weak self] _ in self?.appWindow.show() }
+      if !TestIsolation.on { DistributedNotificationCenter.default().addObserver(forName: .init("app.tidewall.show"), object: nil, queue: .main) { [weak self] _ in self?.appWindow.show() } }
       buildMenu()
       if Bundle.main.bundleIdentifier == nil, let i = NSImage(contentsOf: themesRoot.appendingPathComponent("ui/icon.png")) { NSApp.applicationIconImage = i }
       buildMainMenu { [weak self] in self?.appWindow.show(page: "about") }
@@ -1783,6 +1926,7 @@ enum Bench {
     // --hop S: the first window glides to a new spot (over 0.4 s), S seconds before the snapshot
     if let hop = argValue("--hop"), let before = Double(hop), !sweep {
       let start = secs - 1 - before - 0.4, from = fixed[0], to = from.offsetBy(dx: 380, dy: 200)
+      DispatchQueue.main.asyncAfter(deadline: .now() + max(2, start)) { log(String(format: "bench: hop starts %.0f", Date().timeIntervalSince1970 * 1000)) }   // (the smoothness check lines its frame times up with this)
       for i in 0...12 { DispatchQueue.main.asyncAfter(deadline: .now() + max(2, start) + Double(i) * 0.4 / 12) {
         let t = Double(i) / 12, e = t * t * (3 - 2 * t)
         app.lastRects[0] = CGRect(x: from.minX + (to.minX - from.minX) * e, y: from.minY + (to.minY - from.minY) * e, width: from.width, height: from.height)
@@ -1800,7 +1944,7 @@ enum Bench {
     }
     Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
       for w in app.walls.values where w.cgFrame.origin == .zero {
-        w.web.evaluateJavaScript("(()=>{try{return [(window.__prof?('JSms/frame='+(__prof.ms/Math.max(1,__prof.n)).toFixed(2)+' frames/s='+(__prof.n/((performance.now()-__prof.t0)/1000)).toFixed(1)):''),(typeof window.__dbg==='function'?__dbg():''), (typeof icons!=='undefined'?'icon0='+JSON.stringify(icons[0]&&{x:icons[0].x|0,y:icons[0].y|0,w:icons[0].w|0,h:icons[0].h|0})+' s@c='+(typeof curS==='function'&&icons[0]?curS(icons[0].x+icons[0].w/2,icons[0].y+icons[0].h/2).toFixed(0):'-')+' frames='+(typeof frameN!=='undefined'?frameN:'-')+' icons='+icons.length+' mix='+(typeof curMix!=='undefined'?curMix.toFixed(2):'-')+' from/to='+(typeof fromI!=='undefined'?fromI+'/'+toI:'-')+' morphT0='+(typeof morphT0!=='undefined'?(morphT0|0):'-')+' FB='+(typeof FB!=='undefined'&&!!FB)+' iconsSeen='+(typeof iconsSeen!=='undefined'?iconsSeen:'-'):''), devicePixelRatio, cv.width+'x'+cv.height, cv._scale, P.quality, Math.round(fpsEMA), fieldMs.toFixed(1), (window.__gl?window.__gl.drawingBufferWidth:0)+'x'+(window.__gl?window.__gl.drawingBufferHeight:0), paused].join(' ')}catch(e){return 'page loading'}})()") { r, _ in
+        w.web.evaluateJavaScript("(()=>{try{return [(window.__prof?('JSms/frame='+(__prof.ms/Math.max(1,__prof.n)).toFixed(2)+' frames/s='+(__prof.n/((performance.now()-__prof.t0)/1000)).toFixed(1)):''),(typeof window.__dbg==='function'?__dbg():''), (typeof icons!=='undefined'?'icon0='+JSON.stringify(icons[0]&&{x:icons[0].x|0,y:icons[0].y|0,w:icons[0].w|0,h:icons[0].h|0})+' s@c='+(typeof curS==='function'&&icons[0]?curS(icons[0].x+icons[0].w/2,icons[0].y+icons[0].h/2).toFixed(0):'-')+' frames='+(typeof frameN!=='undefined'?frameN:'-')+' icons='+icons.length+' mix='+(typeof curMix!=='undefined'?curMix.toFixed(2):'-')+' from/to='+(typeof fromI!=='undefined'?fromI+'/'+toI:'-')+' morphT0='+(typeof morphT0!=='undefined'?(morphT0|0):'-')+' FB='+(typeof FB!=='undefined'&&!!FB)+' iconsSeen='+(typeof iconsSeen!=='undefined'?iconsSeen:'-'):''), 'dpr=' + devicePixelRatio, cv.width+'x'+cv.height, cv._scale, P.quality, Math.round(fpsEMA), fieldMs.toFixed(1), (window.__gl?window.__gl.drawingBufferWidth:0)+'x'+(window.__gl?window.__gl.drawingBufferHeight:0), paused].join(' ')}catch(e){return 'page loading'}})()") { r, _ in
           let pid = webPid(w.web)
           log("bench fps/fieldMs/buffer/paused: \(r ?? "nil")  webpid=\(pid)  polls=\(app.tracker.polls) avgPollMs=\(String(format: "%.2f", app.tracker.pollMs / Double(max(app.tracker.polls, 1))))")
         }
@@ -1875,24 +2019,30 @@ enum Bench {
           let base = (shot as NSString).deletingPathExtension
           var lay: [String] = []
           for (id, w) in app.walls { let f = w.cgFrame; lay.append("\"\(id)\":[\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))]")
+            shotsPending += 1
             w.web.takeSnapshot(with: nil) { img, _ in
+              shotsPending -= 1
               if let img, let r = NSBitmapImageRep(data: img.tiffRepresentation!) { try? r.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: "\(base)-\(id).png")) } } }
           try? "{\(lay.joined(separator: ","))}".write(toFile: "\(base)-layout.json", atomically: true, encoding: .utf8); log("snapshots -> \(base)-*.png")
           return
         }
         guard let w = app.walls.values.first(where: { $0.cgFrame.origin == .zero }) else { return }
+        shotsPending += 1
         w.web.takeSnapshot(with: nil) { img, _ in
+          shotsPending -= 1
           if let img, let r = NSBitmapImageRep(data: img.tiffRepresentation!) { try? r.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: shot)); log("snapshot -> \(shot)") }
         }
       }
     }
-    DispatchQueue.main.asyncAfter(deadline: .now() + secs) { NSApp.terminate(nil) }
+    // (snapshots still being taken: up to 15 s more for them; a page that heavy still makes its picture)
+    func quitWhenShot(_ left: Int) { if shotsPending > 0 && left > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { quitWhenShot(left - 1) } } else { NSApp.terminate(nil) } }
+    DispatchQueue.main.asyncAfter(deadline: .now() + secs) { quitWhenShot(75) }
   }
 }
 
 // one Tidewall at a time: opening a second copy shows the running one's window instead, unless this copy is newer
 // (you downloaded an update by hand): then the old one is asked to quit and this one carries on
-if !benchMode && !args.contains("--ui-only"), let id = Bundle.main.bundleIdentifier {
+if !benchMode && !TestIsolation.on && !args.contains("--ui-only"), let id = Bundle.main.bundleIdentifier {
   let others = NSRunningApplication.runningApplications(withBundleIdentifier: id).filter { $0.processIdentifier != getpid() }
   if !others.isEmpty {
     let ver = { (a: NSRunningApplication) in a.bundleURL.flatMap { NSDictionary(contentsOf: $0.appendingPathComponent("Contents/Info.plist"))?["CFBundleShortVersionString"] as? String } ?? "0" }
@@ -1999,7 +2149,7 @@ final class Updater {
   private(set) var justUpdated = args.contains("--updated-from")
   private let fm = FileManager.default
   /// downloads (Caches) and the helper's notes to the next launch
-  private let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("app.tidewall")
+  private let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(TestIsolation.on ? "app.tidewall.isolated-test" : "app.tidewall")
   private var dl: URL { caches.appendingPathComponent("update") }
   private var alive: URL { caches.appendingPathComponent("update-alive") }
   private var result: URL { caches.appendingPathComponent("update-result") }
@@ -2117,6 +2267,18 @@ final class Updater {
             patch = Patch(from: pf, url: pu, sha: ps, size: pz) }
         } else { log("[update] the patch information isn't signed by Tidewall; ignoring it") }
       }
+      // a patch from this version further down the list (when this copy skipped a release): each entry is trusted only
+      // under its own signature, over the same message as signature2 with its own from, hash and size
+      if patch == nil, let list = o["patches"] as? [[String: Any]], let cd = o["cdhash"] as? String {
+        for p in list where p["from"] as? String == Cfg.version {
+          guard let ps = p["sha256"] as? String, let pz = (p["size"] as? NSNumber)?.intValue, pz > 0,
+                let s = (p["signature"] as? String).flatMap({ Data(base64Encoded: $0) }),
+                Self.signature2Valid(s, v, sha, size, minOS, notes, cd, Cfg.version, ps, pz) else {
+            log("[update] the patch from \(Cfg.version) isn't signed by Tidewall; ignoring it"); continue }
+          guard let us = p["url"] as? String, let pu = URL(string: us), pu.scheme == "https" || Self.env["TIDEWALL_UPDATE_FEED"] != nil else { continue }
+          cdhash = cd; patch = Patch(from: Cfg.version, url: pu, sha: ps, size: pz); break
+        }
+      }
       if !manual && !fromWindow && self.hasFailed(v) { log("[update] \(v) failed to install before; waiting for a newer one (or Check for Updates…)"); self.state = .skipped(v); return }
       self.notes = notes                                  // plain text: never render it as HTML
       log("[update] \(v) is available (have \(Cfg.version)); downloading")
@@ -2224,7 +2386,9 @@ final class Updater {
   /// The bundle's code-directory hash, if its signature (which seals every file in it) verifies; nil if it doesn't
   private func codeHash(_ app: URL) -> String? {
     guard run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path]).0 == 0 else { return nil }
-    let out = run("/usr/bin/codesign", ["-dv", "--verbose=4", app.path]).1
+    // the Apple-silicon slice's hash, on any Mac: the release records that one (codesign otherwise reports this Mac's
+    // own slice, and an Intel Mac's never matched, so it never got a patch)
+    let out = run("/usr/bin/codesign", ["-dv", "--verbose=4", "--arch", "arm64", app.path]).1
     return out.split(separator: "\n").first { $0.hasPrefix("CDHash=") }.map(String.init)
   }
 

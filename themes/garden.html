@@ -701,6 +701,7 @@ function loop0(now) {
   const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 30; lastT = now;
   fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
   const moving = stepLayout(dt);
+  if (moving) window.__twSettle && window.__twSettle(150);   // the plan easing to a new layout plays at the full rate until it has settled
   if (moving || dirty) { render(); dirty = false; }
   if (Span.leader()) { stepGardeners(dt, moving); stepBirds(dt); sendLife(now); }
   else applyLife();

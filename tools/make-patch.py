@@ -31,7 +31,8 @@ def files(root):
 
 
 def cdhash(app):
-    r = subprocess.run(["codesign", "-dv", "--verbose=4", app], capture_output=True, text=True)
+    # the Apple-silicon slice's, on any Mac (what the release records and the app compares)
+    r = subprocess.run(["codesign", "-dv", "--verbose=4", "--arch", "arm64", app], capture_output=True, text=True)
     for line in (r.stdout + r.stderr).splitlines():
         if line.startswith("CDHash="):
             return line.split("=", 1)[1].strip().lower()

@@ -1419,6 +1419,7 @@ function loop0(now) {
   const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 30; lastT = now; frameDT = dt;
   fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt; if (dt > .05) { slow++; SL[lastWork] = (SL[lastWork] || 0) + 1; } worst = Math.max(worst, dt); lastWork = 'idle';
   if (stepLayout(dt) || dirty) { if (!pendSince) pendSince = now; lastMoveT = now; dirty = false; needLand = true; }
+  if (now - blendT0 < BLEND + 60) window.__twSettle && window.__twSettle(150);   // the cross-fade to a new layout (trains gliding onto their new track) at the full rate
   easeScenery(dt);
   if (swDirty) { needDraw = true; swDirty = false; }
   if (stage) { lastWork = 'draw'; present(!first); first = false; stage = 0; lastPresent = now; nDraw++; presentGen = rebuildGen; blendT0 = now; }

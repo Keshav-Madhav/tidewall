@@ -64,17 +64,28 @@ jobs:
           codesign --verify -R="identifier \"app.tidewall\" and certificate root = H\"$sha1\"" "$a" || { echo "::error::not signed with Tidewall's certificate (macOS would ask everyone for its permissions again)"; exit 1; }
           lipo -archs $a/Contents/MacOS/Tidewall | grep -q arm64 && lipo -archs $a/Contents/MacOS/Tidewall | grep -q x86_64 || { echo "::error::not universal"; exit 1; }
           awk -v v="$v" '$0 ~ "^## \\[?"v {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
-      - name: Make the patch from the previous release (only what changed; checked the way the updater applies it)
+      - name: Make patches from the last few releases (only what changed; each checked the way the updater applies it)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # the release this one follows is still "latest" (this one isn't published yet); no previous one, or any
-          # problem at all: no patch, and every copy fetches the whole zip as before
-          prev=$(curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/update.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])') || prev=""
-          if [ -z "$prev" ] || [ "v$prev" = "$GITHUB_REF_NAME" ]; then echo "no previous release: no patch"; exit 0; fi
-          curl -fsSL -o prev.zip "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$prev/Tidewall-v$prev.zip" || { echo "::warning::couldn't fetch $prev: no patch"; exit 0; }
-          mkdir prev && ditto -x -k prev.zip prev
-          p="Tidewall-${GITHUB_REF_NAME}-patch-from-$prev.zip"
-          if python3 tools/make-patch.py prev/Tidewall.app check/Tidewall.app "$p"; then echo "$prev" > patch-from.txt
-          else echo "::warning::the patch from $prev didn't check out: no patch"; rm -f "$p"; fi
+          # the newest previous release first (it's the "patch" copies 1.2.2-1.2.5 read); copies on 1.2.6 and later
+          # find their own version in "patches". Any problem with one: no patch from it, and those copies fetch the
+          # whole zip as before
+          : > patch-from.txt
+          prevs=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=20" --jq '[.[] | select(.draft|not) | select(.prerelease|not) | .tag_name] | .[]' | sed 's/^v//' | grep -vxF "${GITHUB_REF_NAME#v}" | head -4) || prevs=""
+          [ -n "$prevs" ] || { echo "no previous release: no patches"; exit 0; }
+          n=0
+          for prev in $prevs; do
+            # copies before 1.2.6 read only the first patch: a later one from such a version would never be used
+            n=$((n + 1)); if [ $n -gt 1 ] && [ "$(printf '%s\n%s\n' "$prev" 1.2.6 | sort -V | head -1)" != 1.2.6 ]; then echo "no patch from $prev (it reads only the first)"; continue; fi
+            if ! curl -fsSL -o "prev-$prev.zip" "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$prev/Tidewall-v$prev.zip"; then echo "::warning::couldn't fetch $prev: no patch from it"; continue; fi
+            if ! { mkdir "prev-$prev" && ditto -x -k "prev-$prev.zip" "prev-$prev"; }; then echo "::warning::couldn't unpack $prev: no patch from it"; rm -rf "prev-$prev" "prev-$prev.zip"; continue; fi
+            p="Tidewall-${GITHUB_REF_NAME}-patch-from-$prev.zip"
+            if python3 tools/make-patch.py "prev-$prev/Tidewall.app" check/Tidewall.app "$p"; then echo "$prev" >> patch-from.txt
+            else echo "::warning::the patch from $prev didn't check out: no patch from it"; rm -f "$p"; fi
+            rm -rf "prev-$prev" "prev-$prev.zip"
+          done
+          echo "patches from: $(tr '\n' ' ' < patch-from.txt)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
         with:
           name: release
@@ -113,14 +124,15 @@ jobs:
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$z"
           # the release app's code-signature hash, read here from the zip itself (it pins every file in the bundle)
           mkdir c && ditto -x -k "$z" c
-          cd_hash=$(codesign -dv --verbose=4 c/Tidewall.app 2>&1 | sed -n 's/^CDHash=//p')
+          cd_hash=$(codesign -dv --verbose=4 --arch arm64 c/Tidewall.app 2>&1 | sed -n 's/^CDHash=//p')   # (the slice every copy compares)
           [ -n "$cd_hash" ] || { echo "::error::no code-signature hash"; exit 1; }
           set -- "$z" "$v" "$url" notes.md "$cd_hash"
-          if [ -f patch-from.txt ]; then prev=$(cat patch-from.txt); pz="Tidewall-${GITHUB_REF_NAME}-patch-from-$prev.zip"
-            set -- "$@" "$pz" "$prev" "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$pz"; fi
+          zips=()
+          if [ -f patch-from.txt ]; then while read -r prev; do [ -n "$prev" ] || continue; pz="Tidewall-${GITHUB_REF_NAME}-patch-from-$prev.zip"
+            set -- "$@" "$pz" "$prev" "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/$pz"; zips+=("$pz"); done < patch-from.txt; fi
           swift tools/update-sign.swift sign "$@" > update.json
           pub=$(sed -n 's/.*static let publicKeys = \["\([^"]*\)".*/\1/p' main.swift)
-          swift tools/update-sign.swift verify "$z" update.json "$pub" ${pz:+"$pz"}   # the app will accept it
+          swift tools/update-sign.swift verify "$z" update.json "$pub" ${zips[@]+"${zips[@]}"}   # the app will accept it
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

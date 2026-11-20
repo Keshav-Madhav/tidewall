@@ -328,6 +328,7 @@ function loop0(now) {
   // 2) advance the eased state and ask for the next frame right away, so it lands before the next refresh
   const moving = stepWins(dt), morphing = (now - morphStart) < MORPH_MS;
   animating = moving || morphing;
+  if (moving) window.__twSettle && window.__twSettle(150);   // windows easing play at the full rate until they've settled
   // window motion: every refresh; a slow town morph on its own: every other refresh (looks identical, half the work)
   morphTick ^= 1;
   if (moving || needFrame || (morphing && morphTick)) { needFrame = false; requestFrame(); }
