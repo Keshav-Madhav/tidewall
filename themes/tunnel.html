@@ -139,6 +139,8 @@ if (!gl.getExtension('EXT_color_buffer_float')) post('JSERR no float render targ
 // smoothing 32-bit float textures needs this extension: without it (some drivers; software renderers) a LINEAR float
 // texture is incomplete and samples as zero, a black wall. Half floats are always filterable in WebGL2.
 const FLOAT_LINEAR = !!gl.getExtension('OES_texture_float_linear');
+// No GPU (a VM, a remote session, a blocklisted driver): WebGL runs on the CPU, so the air gets a grid a quarter the size.
+const SOFT_GL = (() => { const x = gl.getExtension('WEBGL_debug_renderer_info'); return /SwiftShader|Basic Render|llvmpipe|softpipe|Software/i.test(x ? gl.getParameter(x.UNMASKED_RENDERER_WEBGL) : ''); })();
 function sh(t, s, name) { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x);
   if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { const e = gl.getShaderInfoLog(x); post('JSERR shader ' + name + ': ' + e); throw new Error(e); } return x; }
 function prog(vs, fs, name) {
@@ -264,7 +266,7 @@ void main() { float a = vA * clamp(uW * .5 + .5 - abs(vD), 0., 1.); o = vec4(a);
 // ---- the picture: the dark test section, the smoke lit by a light sheet, the model in silhouette
 const COMP = prog(FSQ, `#version 300 es
 precision highp float; in vec2 vUV; out vec4 o;
-uniform sampler2D uSmoke, uModel; uniform vec2 uRes, uMTex; uniform vec4 uMBox; uniform float uReal, uFlip; uniform vec3 uBallPx; 
+uniform sampler2D uSmoke, uModel; uniform vec2 uRes, uMTex; uniform vec4 uMBox; uniform float uReal, uFlip, uShow; uniform vec3 uBallPx; 
 float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 void main() {
   vec2 uv = vUV, px = vec2(uv.x, 1. - uv.y) * uRes, q = (px - uRes * vec2(.42, .5)) / uRes.y;
@@ -303,7 +305,7 @@ void main() {
       col = mix(col, steel, a);
     }
   }
-  o = vec4(col, 1.);
+  o = vec4(mix(vec3(.024, .027, .032), col, uShow), 1.);            // fades in from the blank the warm-up shows
 }`, 'comp');
 
 /* ---------- targets ---------- */
@@ -367,7 +369,7 @@ async function build() {
   W = innerWidth; H = innerHeight; K = devicePixelRatio; freeAll(); FLIP = flipSide(); SPANS = MODEL.none ? iconSpans() : [];
   cv.width = Math.round(W * K); cv.height = Math.round(H * K);
   // the grid: about 460 cells across — fine enough for a real wake, cheap enough to run several steps every frame
-  CELL = Math.max(1.8, W / 640); NXV = Math.ceil(W / CELL); NX = Math.ceil(NXV * 1.3); NY = Math.ceil(H / CELL);   // the air runs on past the screen's right edge
+  CELL = Math.max(1.8, W / 640) * (SOFT_GL ? 2 : 1); NXV = Math.ceil(W / CELL); NX = Math.ceil(NXV * 1.3); NY = Math.ceil(H / CELL);   // the air runs on past the screen's right edge
   LINES = Math.max(30, Math.round(H / 11)); P_H = LINES;    // a line every 11 points: fine stripes any closer together shimmer and tire the eyes
   // the model, centred a third of the way in
   const mcx = W * .3, mcy = H * .5;
@@ -405,7 +407,7 @@ async function build() {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   smokeF = fbo([smokeT]);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  simT = 0; warm = 0; ready = true;
+  simT = 0; warm = 0; warmUntil = 0; shown = 0; ready = true;
   document.getElementById('cap').textContent = `Wind tunnel  ·  ${MODEL.name}  ·  Re ≈ ${(Math.round((MODEL.none ? RE_ICONS : RE) / 100) * 100).toLocaleString('en-US')}`;
 }
 // The cursor's ball (grid units). The air can only be pushed so fast (well under the lattice's speed of sound), so the
@@ -464,7 +466,7 @@ function render() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height); gl.useProgram(COMP);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, smokeT); gl.uniform1i(COMP.u.uSmoke, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, maskDisp); gl.uniform1i(COMP.u.uModel, 1);
-  gl.uniform2f(COMP.u.uRes, W, H); gl.uniform2f(COMP.u.uMTex, 1 / MBOX[4], 1 / MBOX[5]); gl.uniform4f(COMP.u.uMBox, MBOX[0], MBOX[1], MBOX[2], MBOX[3]); gl.uniform1f(COMP.u.uReal, MODEL.glb ? 1 : 0); gl.uniform1f(COMP.u.uFlip, FLIP ? 1 : 0);
+  gl.uniform2f(COMP.u.uRes, W, H); gl.uniform2f(COMP.u.uMTex, 1 / MBOX[4], 1 / MBOX[5]); gl.uniform4f(COMP.u.uMBox, MBOX[0], MBOX[1], MBOX[2], MBOX[3]); gl.uniform1f(COMP.u.uReal, MODEL.glb ? 1 : 0); gl.uniform1f(COMP.u.uFlip, FLIP ? 1 : 0); gl.uniform1f(COMP.u.uShow, shown * shown * (3 - 2 * shown));
   gl.uniform3f(COMP.u.uBallPx, FLIP ? W - ball.x * CELL : ball.x * CELL, ball.y * CELL, ball.r * CELL);
   gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
@@ -472,8 +474,10 @@ function render() {
 /* ======================= loop ======================= */
 // The air advances a fixed number of lattice steps per second of real time; the smoke rides along with it. A newly
 // built tunnel runs a little over half a minute of flow first, unseen, so you never watch it start from still air.
-const WARM_SECS = 36;
-let running = false, lastT = 0, stepAcc = 0;
+// A slow GPU gets 15 seconds for it and starts from however far it got.
+const WARM_SECS = 36, WARM_WALL_MS = 15000, SHOW_SECS = 1.2;
+let running = false, lastT = 0, stepAcc = 0, warmUntil = 0, shown = 0;
+const warmed = () => warm >= WARM_SECS;
 function advance(dt) {
   stepAcc += dt * STEPS_PER_SEC; const n = Math.min(14, Math.floor(stepAcc)); stepAcc -= n; if (stepAcc > 4) stepAcc = 0;
   if (!n) return;
@@ -489,10 +493,13 @@ function loop0(now) {
   const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 60; lastT = now;
   fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
   const t0 = performance.now();
-  if (warm < WARM_SECS) { for (let i = 0; i < 40 && warm < WARM_SECS; i++) { advance(1 / 30); warm += 1 / 30; } }   // spin the tunnel up, hidden
-  else advance(dt);
+  if (!warmUntil) warmUntil = t0 + WARM_WALL_MS;
+  if (!warmed()) {                                                     // spin the tunnel up, hidden
+    for (let i = 0; i < 40 && warm < WARM_SECS; i++) { advance(1 / 30); warm += 1 / 30; }
+    if (t0 > warmUntil) warm = WARM_SECS;
+  } else advance(dt);
   fieldMs = fieldMs * .9 + (performance.now() - t0) * .1;
-  if (warm >= WARM_SECS) render(); else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height); gl.clearColor(.024, .027, .032, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.clearColor(0, 0, 0, 0); }
+  if (warmed()) { shown = Math.min(1, shown + dt / SHOW_SECS); render(); } else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height); gl.clearColor(.024, .027, .032, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.clearColor(0, 0, 0, 0); }
   requestAnimationFrame(loop);
 }
 
@@ -526,7 +533,7 @@ function gpuTime() {                                                   // a one-
   t = performance.now(); for (let i = 0; i < 20; i++) { ptStep(simT, simT, 0); render(); } sync(); const rd = (performance.now() - t) / 20;
   gpuNote = `step=${st.toFixed(3)}ms render=${rd.toFixed(2)}ms perSec(${STEPS_PER_SEC} steps+60 frames)=${(st * STEPS_PER_SEC + rd * 60).toFixed(0)}ms`;
 }
-window.__dbg = () => { if (!gpuNote && warm >= WARM_SECS) gpuTime(); return `run=${running} fps=${fpsEMA | 0} ms=${fieldMs.toFixed(2)} grid=${NX}x${NY} tau=${tau0.toFixed(4)} L=${modelL} ${gpuNote}`; };
+window.__dbg = () => { if (!gpuNote && warmed()) gpuTime(); return `run=${running} fps=${fpsEMA | 0} ms=${fieldMs.toFixed(2)} grid=${NX}x${NY}${SOFT_GL ? ' soft' : ''} tau=${tau0.toFixed(4)} L=${modelL} ${gpuNote}`; };
 const host = window.chrome && window.chrome.webview;
 if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
 </script>
