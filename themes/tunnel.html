@@ -136,7 +136,9 @@ async function renderModel(dw, dh, mcx, mcy, scH) {
 /* ======================= GL ======================= */
 const gl = cv.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: false });
 if (!gl.getExtension('EXT_color_buffer_float')) post('JSERR no float render targets');
-gl.getExtension('OES_texture_float_linear');
+// smoothing 32-bit float textures needs this extension: without it (some drivers; software renderers) a LINEAR float
+// texture is incomplete and samples as zero, a black wall. Half floats are always filterable in WebGL2.
+const FLOAT_LINEAR = !!gl.getExtension('OES_texture_float_linear');
 function sh(t, s, name) { const x = gl.createShader(t); gl.shaderSource(x, s); gl.compileShader(x);
   if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) { const e = gl.getShaderInfoLog(x); post('JSERR shader ' + name + ': ' + e); throw new Error(e); } return x; }
 function prog(vs, fs, name) {
@@ -391,7 +393,7 @@ async function build() {
     disp.width = disp.height = 1; crop.width = crop.height = 1; }
   // the air's viscosity is set by the Reynolds number we want around a model this size
   tau0 = Math.max(.5004, 3 * U0 * modelL / (MODEL.none ? RE_ICONS : RE) + .5);
-  const mk = () => { const t = [tex(NX, NY, gl.RGBA32F, gl.NEAREST), tex(NX, NY, gl.RGBA32F, gl.NEAREST), tex(NX, NY, gl.RGBA32F, gl.LINEAR)]; return { t, f: fbo(t) }; };
+  const mk = () => { const t = [tex(NX, NY, gl.RGBA32F, gl.NEAREST), tex(NX, NY, gl.RGBA32F, gl.NEAREST), tex(NX, NY, FLOAT_LINEAR ? gl.RGBA32F : gl.RGBA16F, gl.LINEAR)]; return { t, f: fbo(t) }; };
   lb = [mk(), mk()]; lbCur = 0;
   gl.bindFramebuffer(gl.FRAMEBUFFER, lb[0].f); gl.viewport(0, 0, NX, NY); gl.useProgram(LB_INIT); gl.uniform2f(LB_INIT.u.uIn, U0, 0); gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
   const mp = () => { const t = [tex(P_W, P_H, gl.RGBA32F, gl.NEAREST)]; return { t, f: fbo(t) }; };
