@@ -65,6 +65,7 @@ internal sealed class Wallpaper : Form
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScripts.Early(Config.Fps, maxHz: RefreshRate()));
         core.DOMContentLoaded += (_, _) => _ = core.ExecuteScriptAsync(PageScripts.Late);
         core.WebMessageReceived += (_, e) => Received(e.TryGetWebMessageAsString());
+        await WatchConsole(core);
         core.ProcessFailed += (_, e) => { Log.Write($"[{theme}] web process failed ({e.ProcessFailedKind}); reloading"); Ready = false; core.Reload(); };
 
         var variant = Config.Variant(theme) is { } v ? "&v=" + Uri.EscapeDataString(v) : "";
@@ -77,6 +78,21 @@ internal sealed class Wallpaper : Form
         var mode = new DEVMODE { dmSize = (short)System.Runtime.InteropServices.Marshal.SizeOf<DEVMODE>() };
         return EnumDisplaySettings(Screen.DeviceName, -1, ref mode) && mode.dmDisplayFrequency > 1 ? mode.dmDisplayFrequency : 60;
     }
+
+    /// The page's console errors and uncaught exceptions, in Tidewall's log (a wall that fails quietly is still caught).
+    async Task WatchConsole(CoreWebView2 core)
+    {
+        await core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}");
+        core.GetDevToolsProtocolEventReceiver("Runtime.exceptionThrown").DevToolsProtocolEventReceived += (_, e) =>
+            Log.Write($"[{theme}] JSERR exception {Clip(e.ParameterObjectAsJson)}");
+        core.GetDevToolsProtocolEventReceiver("Runtime.consoleAPICalled").DevToolsProtocolEventReceived += (_, e) =>
+        {
+            if (e.ParameterObjectAsJson.Contains("\"type\":\"error\"") || e.ParameterObjectAsJson.Contains("\"type\":\"warning\""))
+                Log.Write($"[{theme}] console {Clip(e.ParameterObjectAsJson)}");
+        };
+    }
+
+    static string Clip(string s) => s.Length > 600 ? s[..600] + "…" : s;
 
     void Received(string message)
     {

@@ -85,6 +85,7 @@ internal static class TestRun
                 "return JSON.stringify({ dpr: devicePixelRatio, w: innerWidth, h: innerHeight, " +
                 "fb: typeof FB !== 'undefined' && !!FB, icons: typeof icons !== 'undefined' ? icons.length : -1, " +
                 "paused: typeof paused !== 'undefined' ? paused : null, settling: !!(window.__twSettling && window.__twSettling()), " +
+                "stage: typeof ready !== 'undefined' ? ready : null, buildGen: typeof buildGen !== 'undefined' ? buildGen : null, " +
                 "gpu: (() => { try { const g = document.createElement('canvas').getContext('webgl2'), x = g.getExtension('WEBGL_debug_renderer_info'); " +
                 "return x ? g.getParameter(x.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER); } catch (e) { return 'none'; } })() })");
             Log.Write($"probe {tag} wall {i} {w.Theme} on {w.Screen.DeviceName} ready={w.Ready} paused={w.Paused} {answer}");

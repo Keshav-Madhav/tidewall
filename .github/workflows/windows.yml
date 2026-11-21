@@ -7,6 +7,11 @@ on:
     branches: [windows]
     paths: [windows/**, themes/**, .github/workflows/windows.yml]
   workflow_dispatch:
+    inputs:
+      walls:
+        description: Walls to run, comma-separated (empty = all)
+        required: false
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -36,7 +41,9 @@ jobs:
         shell: pwsh
         run: |
           $bad = 0
-          foreach ($t in 'inkmap','railway','garden','estate','gallery','celestial','snow','lava','wind','reef','tunnel','meadow','beach') {
+          $walls = 'inkmap','railway','garden','estate','gallery','celestial','snow','lava','wind','reef','tunnel','meadow','beach'
+          if ('${{ inputs.walls }}') { $walls = '${{ inputs.walls }}'.Split(',') }
+          foreach ($t in $walls) {
             New-Item -ItemType Directory -Force "test-out/$t" | Out-Null
             # (no GPU here: WebGL runs on the CPU, and Wind Tunnel's model and fluid need a minute to make a first picture)
             $settle = if ($t -eq 'tunnel') { '60' } else { '9' }
@@ -45,7 +52,7 @@ jobs:
             $log = "test-out/$t/tidewall.log"
             $done = Select-String -Path $log -Pattern 'TEST DONE' -Quiet
             $crash = Select-String -Path $log -Pattern 'CRASH|JSERR' | Where-Object { $_.Line -notmatch 'JSERR (wind fetch|wx) ' }
-            Write-Host "== $t done=$done"; Select-String -Path $log -Pattern 'ready on|probe a wall|JSERR|CRASH' | ForEach-Object { $_.Line }
+            Write-Host "== $t done=$done"; Select-String -Path $log -Pattern 'ready on|probe . wall|JSERR|CRASH|console|NOTE' | ForEach-Object { $_.Line }
             if (-not $done -or $crash) { $bad++ }
           }
           if ($bad) { Write-Host "$bad wall(s) failed"; exit 1 }
