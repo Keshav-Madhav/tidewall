@@ -343,7 +343,7 @@
       <div class="rowx"><div class="tx"><b>Windows</b><span>The scene reshapes itself around your app windows. Off: it carries on behind them as if they weren't there.</span></div><div class="sw" data-k="reactWindows" role="switch" tabindex="0"></div></div>
       <div class="rowx mac-only"><div class="tx"><b>Stage Manager</b><span>The strip of recent apps at the side of the screen.</span></div><div class="sw" data-k="reactStage" role="switch" tabindex="0"></div></div>
       <div class="rowx mac-only"><div class="tx"><b>Desktop widgets</b><span>Clocks, weather and the other widgets on your desktop.</span></div><div class="sw" data-k="reactWidgets" role="switch" tabindex="0"></div></div>
-      <div class="rowx mac-only"><div class="tx"><b>Desktop icons</b><span id="iconsNote">Each wall keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.</span></div><div class="sw" data-k="deskIcons" role="switch" tabindex="0"></div></div>
+      <div class="rowx"><div class="tx"><b>Desktop icons</b><span id="iconsNote">Each wall keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.</span></div><div class="sw" data-k="deskIcons" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>The pointer</b><span>Fish follow it, the snow melts round it, the boat sails to it. Off: the scene ignores it.</span></div><div class="sw" data-k="reactCursor" role="switch" tabindex="0"></div></div>
     </div>
     <div class="group-t" id="dispSetT">Displays</div>
@@ -677,7 +677,8 @@ function drawSettings() {
   $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.v === S.settings[seg.dataset.k])));
   // desktop icons: say so when macOS hasn't allowed it, and offer the way there
   const denied = S.settings.deskIcons && S.settings.deskIconsState === 'denied';
-  $('#iconsNote').innerHTML = denied ? 'macOS hasn’t let Tidewall see Finder yet. <a href="#" id="iconsFix">Open Privacy &amp; Security ▸ Automation</a> and allow <b>Finder</b> under Tidewall.'
+  if (WIN()) $('#iconsNote').textContent = 'Each wall keeps your desktop icons clear and readable.';
+  else $('#iconsNote').innerHTML = denied ? 'macOS hasn’t let Tidewall see Finder yet. <a href="#" id="iconsFix">Open Privacy &amp; Security ▸ Automation</a> and allow <b>Finder</b> under Tidewall.'
     : 'Each wall keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.';
   const fix = $('#iconsFix'); if (fix) fix.addEventListener('click', e => { e.preventDefault(); send({ t: 'openAutomation' }); });
   $('#batNote').textContent = WIN() ? 'What the wallpaper does when your PC isn’t plugged in. Calmer draws at half the rate.' + (S.settings.onBattery ? ' Your PC is on battery now.' : '')

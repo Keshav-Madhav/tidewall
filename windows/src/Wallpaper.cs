@@ -105,7 +105,7 @@ internal sealed class Wallpaper : Form
         {
             case "ready":
                 Ready = true;
-                lastWindows = lastIcons = lastDesk = "";
+                lastWindows = lastIcons = lastDesk = lastDeskIcons = "";
                 SendDesk();
                 Send($"{{\"t\":\"me\",\"seed\":{Config.Seed}}}");
                 if (Paused) Send("{\"t\":\"pause\",\"v\":true}");
@@ -165,6 +165,19 @@ internal sealed class Wallpaper : Form
         var icons = $"{{\"t\":\"icons\",\"vis\":true,\"r\":[{string.Join(",", mine.Select(w => Box(Rectangle.Inflate(w.Bounds, m, m))))}]}}";
         if (icons != lastIcons) { lastIcons = icons; Send(icons, live); }
     }
+
+    /// The desktop icons in this wall's world (screen pixels in), as the page wants them: its own device pixels.
+    public void SendDeskIcons(DeskIcons di, IReadOnlyList<Screen>? world = null)
+    {
+        var frames = (world ?? [Screen]).Select(s => s.Bounds).ToList(); var f = Frame;
+        string Enc(IEnumerable<Rectangle> rs) => string.Join(",", rs.Where(r => frames.Any(w => w.IntersectsWith(r)))
+            .Select(r => $"[{r.Left - f.Left},{r.Top - f.Top},{r.Right - f.Left},{r.Bottom - f.Top}]"));
+        var msg = $"{{\"t\":\"dicons\",\"r\":[{Enc(di.Icons)}],\"c\":[{Enc(di.Clusters)}],\"i\":[{Enc(di.Images)}]}}";
+        if (msg == lastDeskIcons) return;
+        lastDeskIcons = msg;
+        Send(msg);
+    }
+    string lastDeskIcons = "";
 
     public void SetPaused(bool on)
     {

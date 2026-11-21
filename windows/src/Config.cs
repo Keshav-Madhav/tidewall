@@ -135,6 +135,8 @@ internal static class Config
     }
     public static bool IsTheme(string? id) => Themes.Any(t => t.Id == id);
 
+    /// Each wall keeps your desktop icons clear (on by default: unlike Finder's, Explorer's need no permission).
+    public static bool DeskIcons { get => Get("deskIcons", true); set => Set("deskIcons", value); }
     public static bool SpanWorlds { get => Get("spanWorlds", true); set => Set("spanWorlds", value); }
     public static bool ReactWindows { get => Get("reactWindows", true); set => Set("reactWindows", value); }
     public static bool ReactCursor { get => Get("reactCursor", true); set => Set("reactCursor", value); }

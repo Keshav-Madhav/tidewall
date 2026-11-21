@@ -90,7 +90,7 @@ internal sealed class SettingsWindow : Form
             {
                 ["spanWorlds"] = Config.SpanWorlds, ["login"] = LoginItem.Enabled, ["loginBlocked"] = false,
                 ["restWhenIdle"] = Config.IdleMinutes > 0, ["paused"] = Config.Paused, ["fps"] = Config.Fps, ["margin"] = Config.Margin,
-                ["autoUpdate"] = false, ["deskIcons"] = false, ["deskIconsState"] = "",
+                ["autoUpdate"] = false, ["deskIcons"] = Config.DeskIcons, ["deskIconsState"] = "ok",
                 ["reactWindows"] = Config.ReactWindows, ["reactStage"] = true, ["reactWidgets"] = true, ["reactCursor"] = Config.ReactCursor,
                 ["idleMinutes"] = Config.IdleMinutes > 0 ? Config.IdleMinutes : 0, ["battery"] = Config.Battery,
                 ["onBattery"] = power.PowerLineStatus == PowerLineStatus.Offline, ["lowPower"] = false,
@@ -137,7 +137,9 @@ internal sealed class SettingsWindow : Form
                 ["h"] = w.Bounds.Height / k, ["name"] = w.Owner, ["sm"] = false, ["widget"] = false });
         }
         return new JsonObject { ["w"] = f.Width / k, ["h"] = f.Height / k, ["windows"] = windows, ["display"] = IdOf(s), ["notch"] = false,
-            ["icons"] = new JsonObject { ["r"] = new JsonArray(), ["i"] = new JsonArray(), ["c"] = new JsonArray() } };
+            ["icons"] = new JsonObject { ["r"] = Local(app.DeskIcons.Icons), ["i"] = Local(app.DeskIcons.Images), ["c"] = Local(app.DeskIcons.Clusters) } };
+        JsonArray Local(IEnumerable<Rectangle> rs) => new(rs.Where(r => r.IntersectsWith(f))
+            .Select(r => (JsonNode)new JsonArray((r.X - f.X) / k, (r.Y - f.Y) / k, r.Width / k, r.Height / k)).ToArray());
     }
 
     /// What the wallpaper costs: this process and the browser processes behind every wall (this window's own counted apart).
@@ -260,6 +262,7 @@ internal sealed class SettingsWindow : Form
                 app.Dispatch(false);
                 break;
             case "battery": Config.Battery = (int)Num(v, 0); break;
+            case "deskIcons": Config.DeskIcons = On(v, true); app.DeskIcons.Read(); break;
         }
     }
 

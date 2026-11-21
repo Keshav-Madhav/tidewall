@@ -8,6 +8,7 @@ internal sealed class TidewallApp : ApplicationContext
 {
     readonly Control loop = new();
     readonly WindowTracker tracker;
+    readonly DeskIcons deskIcons;
     readonly NotifyIcon tray;
     readonly System.Windows.Forms.Timer clock = new() { Interval = 1000 };
     readonly System.Windows.Forms.Timer pointer = new() { Interval = 16 };
@@ -19,6 +20,7 @@ internal sealed class TidewallApp : ApplicationContext
 
     public IReadOnlyList<Wallpaper> Walls => walls;
     public WindowTracker Tracker => tracker;
+    public DeskIcons DeskIcons => deskIcons;
     public Control Loop => loop;
 
     public TidewallApp()
@@ -27,6 +29,8 @@ internal sealed class TidewallApp : ApplicationContext
         _ = loop.Handle;
         tracker = new WindowTracker(loop);
         tracker.Changed += (_, live) => Dispatch(live);
+        deskIcons = new DeskIcons();
+        deskIcons.Changed += () => { foreach (var w in walls) if (w.Ready) w.SendDeskIcons(deskIcons, WorldFor(w)); };
         tray = new NotifyIcon { Icon = AppIcon(), Text = "Tidewall", Visible = !Args.Has("--test") };
         tray.DoubleClick += (_, _) => ShowSettings();
         RebuildMenu();
@@ -92,6 +96,7 @@ internal sealed class TidewallApp : ApplicationContext
         {
             if (!w.Ready) continue;
             w.SendDesk(WorldFor(w));
+            w.SendDeskIcons(deskIcons, WorldFor(w));
             // a full-screen app over this display: nothing of the wall shows
             bool covered = !live && windows.Any(t => t.Handle == foreground && t.Bounds.Contains(w.Frame));
             w.SetPaused(Config.Paused || locked || idle || covered);
@@ -99,7 +104,7 @@ internal sealed class TidewallApp : ApplicationContext
         }
         // nothing to follow the pointer for: no ticks at all (it ran 60 times a second all day, paused or not)
         pointer.Enabled = walls.Any(w => w.Ready && !w.Paused && w.WantsCursor) && !locked && !idle;
-        tracker.Resting = Config.Paused || locked || idle;
+        tracker.Resting = deskIcons.Resting = Config.Paused || locked || idle;
     }
 
     void CheckIdle()
@@ -183,6 +188,7 @@ internal sealed class TidewallApp : ApplicationContext
         settings?.Close();
         foreach (var w in walls) w.Close();
         tracker.Dispose();
+        deskIcons.Dispose();
         base.ExitThreadCore();
     }
 }
