@@ -84,6 +84,7 @@ if [ $quick = 0 ]; then
   echo "== smoothness (every wall through a window move and its settle, against tools/smooth-baseline.json)"
   tools/smooth.sh "$out/smooth"; sm=$?
   if [ $sm -eq 2 ] || [ $sm -eq 3 ]; then bad=$((bad + 1)); echo "✗ smoothness wasn't measured plugged in: plug in, Low Power Mode off, and run again"
+  elif [ $sm -eq 4 ]; then bad=$((bad + 1)); echo "✗ smoothness wasn't measured: the Mac was too busy (other apps); quit them and run again"
   elif [ $sm -ne 0 ]; then bad=$((bad + 1)); fi
 
   echo "== stress (the Settings window, 95 s)"
