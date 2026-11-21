@@ -1,0 +1,43 @@
+name: Windows
+# Builds Tidewall for Windows and runs it hands-off on a real Windows desktop (two windows, a glide, pictures of the
+# desktop and of each wall), on both Windows Server 2022 and 2025 (the desktop layer changed with 24H2).
+on:
+  push:
+    branches: [windows]
+    paths: [windows/**, themes/**, .github/workflows/windows.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-and-run:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION).Trim()
+          dotnet publish windows/Tidewall.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:TidewallVersion=$v -o out/Tidewall
+          Copy-Item windows/Tidewall.ico out/Tidewall/
+          Copy-Item -Recurse themes out/Tidewall/themes
+      - name: Run hands-off
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force test-out | Out-Null
+          $p = Start-Process -FilePath out/Tidewall/Tidewall.exe -ArgumentList '--test','test-out','--log','test-out/tidewall.log' -PassThru
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Host 'did not finish in 120 s' }
+          Get-Content test-out/tidewall.log
+          if (-not (Select-String -Path test-out/tidewall.log -Pattern 'TEST DONE' -Quiet)) { exit 1 }
+          if (Select-String -Path test-out/tidewall.log -Pattern 'CRASH' -Quiet) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-${{ matrix.os }}
+          path: test-out

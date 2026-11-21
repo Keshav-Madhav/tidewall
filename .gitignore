@@ -6,3 +6,5 @@
 /tools/minprobe
 .DS_Store
 *.log
+/windows/bin/
+/windows/obj/
