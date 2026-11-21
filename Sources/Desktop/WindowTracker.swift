@@ -133,8 +133,10 @@ final class Tracker {
     if fast { lastFastT = t }
   }
 
+  /// Polling while windows move: every second in a test run, every half minute otherwise (in a problem report's log
+  /// tail, a line a second of dragging buried everything else).
   private func logStats(at t: Double) {
-    guard t - stats.since >= 1 else { return }
+    guard t - stats.since >= (benchMode ? 1 : 30) else { return }
     let rate = Double(polls - stats.polls) / (t - stats.since)
     log(String(format: "HOST polls/s=%.0f updates=%d maxGap=%dms", rate, stats.updates, Int(stats.maxGap * 1000)))
     stats = PollStats(since: t, polls: polls)

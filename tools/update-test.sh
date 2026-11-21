@@ -81,17 +81,20 @@ check() {   # <case> <condition…>: every condition must hold
 
 fresh; launch full
 waitfor "[update] updated from 90.0.0 to 90.0.1" 90
-check full 'logged "[update] 90.0.1 is ready to install"' '[ "$(version)" = 90.0.1 ]' '[ "$(outcome 20)" = "ok 90.0.1" ]' \
+waitfor "[update] 90.0.1 installed" 20   # (the new copy reads the outcome a few seconds after it comes up)
+check full 'logged "[update] 90.0.1 is ready to install"' '[ "$(version)" = 90.0.1 ]' 'logged "[update] 90.0.1 installed"' \
   '[ ! -e "$out/inst/.tidewall-update-$(id -u)/previous.app" ]'
 
 fresh; launch patch
 waitfor "[update] updated from 90.0.0 to 90.0.1" 90
-check patch 'logged "is ready to install (patched)"' '[ "$(version)" = 90.0.1 ]' '[ "$(outcome 20)" = "ok 90.0.1" ]'
+waitfor "[update] 90.0.1 installed" 20
+check patch 'logged "is ready to install (patched)"' '[ "$(version)" = 90.0.1 ]' 'logged "[update] 90.0.1 installed"'
 
 before=$(ls -d /private/var/tmp/tidewall-update.* 2>/dev/null | wc -l)
 fresh; launch full TIDEWALL_UPDATE_ADMIN_DRYRUN=1
 waitfor "[update] updated from 90.0.0 to 90.0.1" 90
-check admin 'logged "survives AppleScript"' '[ "$(version)" = 90.0.1 ]' '[ "$(outcome 20)" = "ok 90.0.1" ]' \
+waitfor "[update] 90.0.1 installed" 20
+check admin 'logged "survives AppleScript"' '[ "$(version)" = 90.0.1 ]' 'logged "[update] 90.0.1 installed"' \
   '[ "$(ls -d /private/var/tmp/tidewall-update.* 2>/dev/null | wc -l)" -eq "$before" ]'
 
 fresh; launch tampered

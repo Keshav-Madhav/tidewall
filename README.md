@@ -7,7 +7,7 @@ Move a window and the world grows, parts and settles around it.</p>
 
 https://github.com/user-attachments/assets/c33c186e-0f5f-4735-90ab-21153e9e83ce
 
-<p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/latest"><b>Download Tidewall</b></a> · free for macOS 14+</p>
+<p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/latest"><b>Download Tidewall</b></a> · free for macOS 14+ · <a href="https://tidewall.keshav-madhav.com/">Website</a></p>
 
 <p align="center"><img src="docs/app.png" width="860" alt="The Tidewall window: a live preview of Model Railway on your own desktop, with the wall gallery below"></p>
 

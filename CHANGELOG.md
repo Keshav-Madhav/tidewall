@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.8]
 
 ### Ink Map, first
 - New installs open on Ink Map, now first in the menu and in Settings. If you never picked a wall, you keep the one
@@ -13,6 +13,12 @@
 ### Fixed
 - Started with no windows open, a wall that waits to hear where your windows are (Ink Map among them) drew nothing
   until the first window appeared.
+
+### Small things
+- Tidewall has a website, [tidewall.keshav-madhav.com](https://tidewall.keshav-madhav.com/), linked from Settings › About.
+- After an update the log says it installed on the same launch, not the next one.
+- The log no longer gets a line every second while you drag a window (they crowded out what a problem report needs).
+- A leftover from installing updates with an administrator's password is cleared away.
 
 ## [1.2.7]
 

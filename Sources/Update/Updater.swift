@@ -90,6 +90,10 @@ final class Updater {
     if Bundle.main.object(forInfoDictionaryKey: "TidewallTestNeverAlive") as? Bool == true { return }   // update-test.sh's broken release
     #endif
     try? Cfg.version.write(to: alive, atomically: true, encoding: .utf8)
+    // the helper records the outcome only once it has seen this: read it this launch, not the next
+    if args.contains("--updated-from") {
+      DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.readLastInstall() }   // (it polls 5× a second)
+    }
   }
 
   func start() {
@@ -130,6 +134,7 @@ final class Updater {
     try? fm.removeItem(at: dl)
     try? fm.removeItem(at: alive)
     try? fm.removeItem(at: pidFile)
+    try? fm.removeItem(at: caches.appendingPathComponent("update-install.sh"))   // (1.2.7 and earlier wrote one)
   }
 
   private func recordFailure(_ v: String) {
