@@ -17,6 +17,9 @@ internal sealed class WindowTracker : IDisposable
     readonly System.Windows.Forms.Timer slow = new() { Interval = 500 };
     readonly HashSet<IntPtr> ignore = [];
     readonly Dictionary<uint, string> owners = [];
+    readonly Dictionary<IntPtr, string> classes = [];   // a window's class never changes: asked once
+    readonly Stopwatch sinceLook = Stopwatch.StartNew();
+    readonly System.Windows.Forms.Timer trailing = new() { Interval = 8 };
     readonly int me = Environment.ProcessId;
     IReadOnlyList<TrackedWindow> last = [];
     bool pending, moving;
@@ -39,6 +42,18 @@ internal sealed class WindowTracker : IDisposable
         Hook(Native.EVENT_OBJECT_CLOAKED, Native.EVENT_OBJECT_UNCLOAKED);
         slow.Tick += (_, _) => Look();
         slow.Start();
+        trailing.Tick += (_, _) => { trailing.Stop(); pending = false; Look(); };
+    }
+
+    /// The fastest a look is worth while a window moves: one per frame of the fastest display (a gaming mouse reports
+    /// up to 1000 times a second; the pages can't draw faster than the screen).
+    public int MinLookMs { get; set; } = 8;
+
+    /// Every wall resting (paused, locked, nobody at the PC): no safety-net looks; the events still come.
+    public bool Resting
+    {
+        get => !slow.Enabled;
+        set { if (value == !slow.Enabled) return; slow.Enabled = !value; if (!value) Look(); }
     }
 
     void Hook(uint min, uint max) =>
@@ -49,13 +64,19 @@ internal sealed class WindowTracker : IDisposable
         if (evt == Native.EVENT_SYSTEM_MOVESIZESTART) moving = true;
         else if (evt == Native.EVENT_SYSTEM_MOVESIZEEND) moving = false;
         else if (idObject != Native.OBJID_WINDOW || hwnd == IntPtr.Zero) return;
+        if (evt == Native.EVENT_OBJECT_DESTROY) classes.Remove(hwnd);
+        // a child window (a browser's page, a video, an Office pane) moving can't move a top-level window
+        else if ((evt == Native.EVENT_OBJECT_LOCATIONCHANGE || evt == Native.EVENT_OBJECT_SHOW) && Native.GetAncestor(hwnd, Native.GA_ROOT) != hwnd) return;
         if (pending) return;
         pending = true;
-        loop.BeginInvoke(() => { pending = false; Look(); });
+        var wait = MinLookMs - (int)sinceLook.ElapsedMilliseconds;
+        if (wait > 1) { trailing.Interval = wait; trailing.Start(); }
+        else loop.BeginInvoke(() => { pending = false; Look(); });
     }
 
     public void Look()
     {
+        sinceLook.Restart();
         var now = Read();
         bool live = Live;
         if (now.SequenceEqual(last) && !(liveBefore && !live)) { liveBefore = live; return; }
@@ -82,14 +103,16 @@ internal sealed class WindowTracker : IDisposable
     bool Counts(IntPtr h, out Rectangle bounds)
     {
         bounds = Rectangle.Empty;
-        if (ignore.Contains(h) || !Native.IsWindowVisible(h) || Native.IsIconic(h) || Native.IsCloaked(h)) return false;
+        // the cheap checks first: the DWM ones (cloaked, the frame) only for windows that could count
+        if (ignore.Contains(h) || !Native.IsWindowVisible(h) || Native.IsIconic(h)) return false;
         Native.GetWindowThreadProcessId(h, out uint pid);
         if (pid == me && !OwnWindows.Contains(h)) return false;
         if ((Native.ExStyle(h) & Native.WS_EX_TOOLWINDOW) != 0) return false;
-        var cls = Native.ClassName(h);
+        if (!classes.TryGetValue(h, out var cls)) classes[h] = cls = Native.ClassName(h);
         if (cls is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "NotifyIconOverflowWindow"
             or "Windows.UI.Core.CoreWindow" or "XamlExplorerHostIslandWindow" or "TopLevelWindowForOverflowXamlIsland") return false;
         if (Native.GetWindowTextLength(h) == 0 && cls != "ApplicationFrameWindow") return false;   // untitled helpers and overlays
+        if (Native.IsCloaked(h)) return false;
         bounds = Native.VisibleBounds(h);
         return bounds.Width >= 40 && bounds.Height >= 40;
     }
@@ -106,6 +129,7 @@ internal sealed class WindowTracker : IDisposable
     public void Dispose()
     {
         slow.Dispose();
+        trailing.Dispose();
         foreach (var h in hooks) Native.UnhookWinEvent(h);
     }
 }

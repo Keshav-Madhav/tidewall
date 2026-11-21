@@ -21,6 +21,7 @@ internal static partial class Native
         EVENT_OBJECT_LOCATIONCHANGE = 0x800B, EVENT_OBJECT_CLOAKED = 0x8017, EVENT_OBJECT_UNCLOAKED = 0x8018;
     public const uint WINEVENT_OUTOFCONTEXT = 0x0, WINEVENT_SKIPOWNPROCESS = 0x2;
     public const int OBJID_WINDOW = 0;
+    public const uint GA_ROOT = 2;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT

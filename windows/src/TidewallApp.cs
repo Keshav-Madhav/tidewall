@@ -41,7 +41,6 @@ internal sealed class TidewallApp : ApplicationContext
         clock.Tick += (_, _) => CheckIdle();
         clock.Start();
         pointer.Tick += (_, _) => FollowPointer();
-        pointer.Start();
         Log.Write($"Tidewall {Config.Version} on Windows {Environment.OSVersion.Version}; themes {Config.ThemesRoot}");
     }
 
@@ -66,6 +65,7 @@ internal sealed class TidewallApp : ApplicationContext
             walls.Add(wall);
             _ = StartWall(wall);
         }
+        tracker.MinLookMs = Math.Max(4, 1000 / Math.Max(1, walls.Max(w => w.RefreshRate())));
     }
 
     async Task StartWall(Wallpaper wall)
@@ -95,6 +95,9 @@ internal sealed class TidewallApp : ApplicationContext
             w.SetPaused(Config.Paused || locked || idle || covered);
             if (!w.Paused || live) w.SendWindows(windows, live);
         }
+        // nothing to follow the pointer for: no ticks at all (it ran 60 times a second all day, paused or not)
+        pointer.Enabled = walls.Any(w => w.Ready && !w.Paused && w.WantsCursor) && !locked && !idle;
+        tracker.Resting = Config.Paused || locked || idle;
     }
 
     void CheckIdle()

@@ -72,7 +72,7 @@ internal sealed class Wallpaper : Form
         core.Navigate($"https://{Host}/{Config.Page(theme)}.html?wallpaper=1{variant}");
     }
 
-    int RefreshRate()
+    public int RefreshRate()
     {
         // the display's refresh rate, for the page's frame pacer (it draws at most this fast while things move)
         var mode = new DEVMODE { dmSize = (short)System.Runtime.InteropServices.Marshal.SizeOf<DEVMODE>() };
@@ -173,9 +173,18 @@ internal sealed class Wallpaper : Form
     public void SendCursor(Point screen, bool overWindow)
     {
         if (!WantsCursor || Paused) return;
+        // over a window or the taskbar you're working, not watching: 10 messages a second, not 60 (as on the Mac)
+        overWindow |= !Screen.WorkingArea.Contains(screen);
+        long now = Environment.TickCount64;
+        if (overWindow && wasOverWindow && now - lastOverSend < 100) return;
+        wasOverWindow = overWindow;
+        if (overWindow) lastOverSend = now;
         var f = Frame;
         Send($"{{\"t\":\"cursor\",\"x\":{screen.X - f.Left},\"y\":{screen.Y - f.Top}{(overWindow ? ",\"w\":1" : "")}}}");
     }
+
+    bool wasOverWindow;
+    long lastOverSend;
 
     public void CursorOff() => Send("{\"t\":\"cursorOff\"}");
 
