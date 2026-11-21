@@ -18,6 +18,7 @@ internal static class TestRun
     {
         try
         {
+            if (Args.Has("--clear-desk")) ClearDesk(app);
             await Task.Delay(1500);
             var work = Screen.PrimaryScreen!.WorkingArea;
             var a = Open(app, "Tidewall test · Notes", Rect(work, 0.18, 0.18, 0.40, 0.42), Color.FromArgb(250, 250, 252));
@@ -25,6 +26,8 @@ internal static class TestRun
             await Task.Delay(TimeSpan.FromSeconds(double.Parse(Args.Value("--settle") ?? "9")));
             await Probe(app, "a");
             await Shoot(app, "a");
+            foreach (var w in app.Walls) await w.AskAsync(FrameProbe);
+            Log.Write($"bench: hop starts {DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
 
             // the first window glides 30% of the screen right and 12% down in 0.6 s, as a drag would
             var from = a.Location;
@@ -37,6 +40,7 @@ internal static class TestRun
             }
             Log.Write("test: glide done");
             await Task.Delay(4000);
+            for (int i = 0; i < app.Walls.Count; i++) Log.Write($"eval [{i}] " + System.Text.Json.JsonSerializer.Deserialize<string>(await app.Walls[i].AskAsync(FrameProbe)));
             await Probe(app, "b");
             await Shoot(app, "b");
             Log.Write("TEST DONE");
@@ -45,12 +49,26 @@ internal static class TestRun
         Application.Exit();
     }
 
+    /// Every frame the page's loop is given, and apart the ones while it said it was settling (tools/smooth-check.py's
+    /// probe): the first call hooks requestAnimationFrame, later ones return what it saw.
+    const string FrameProbe = "if (!window.__ft) { window.__ft = []; window.__fs = []; let last = 0; const r0 = window.requestAnimationFrame; " +
+        "window.requestAnimationFrame = cb => r0(t => { const n = Date.now(); if (n - last > 4) { window.__ft.push(n); " +
+        "if (window.__twSettling && window.__twSettling()) window.__fs.push(n); } last = n; cb(t); }); return 'hooked'; } " +
+        "return JSON.stringify({ f: window.__ft, s: window.__fs });";
+
+    /// CI: the runner's own windows out of the way, so the pictures show the test windows on the wall.
+    static void ClearDesk(TidewallApp app)
+    {
+        foreach (var t in app.Tracker.Windows) Native.ShowWindow(t.Handle, Native.SW_MINIMIZE);
+        app.Tracker.Look();
+    }
+
     static Rectangle Rect(Rectangle r, double x, double y, double w, double h) =>
         new((int)(r.X + r.Width * x), (int)(r.Y + r.Height * y), (int)(r.Width * w), (int)(r.Height * h));
 
     static Form Open(TidewallApp app, string title, Rectangle bounds, Color fill)
     {
-        var f = new Form { Text = title, StartPosition = FormStartPosition.Manual, Bounds = bounds, BackColor = fill, ShowInTaskbar = true };
+        var f = new Form { Text = title, StartPosition = FormStartPosition.Manual, Bounds = bounds, BackColor = fill, ShowInTaskbar = true, TopMost = true };
         f.Show();
         app.Tracker.OwnWindows.Add(f.Handle);
         app.Tracker.Look();
