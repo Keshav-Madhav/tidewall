@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="web\bridge.js" LogicalName="bridge.js" />
+    <EmbeddedResource Include="web\frame.js" LogicalName="frame.js" />
   </ItemGroup>
 
 </Project>

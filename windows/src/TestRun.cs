@@ -47,10 +47,30 @@ internal static class TestRun
             for (int i = 0; i < app.Walls.Count; i++) { var json = await app.Walls[i].AskAsync(FrameProbe); Log.Write($"eval [{i}] " + (string.IsNullOrEmpty(json) ? "(no answer)" : System.Text.Json.JsonSerializer.Deserialize<string>(json))); }
             await Probe(app, "b");
             await Shoot(app, "b");
+            if (Args.Has("--settings-shot")) await ShootSettings(app);
             Log.Write("TEST DONE");
         }
         catch (Exception e) { Log.Write($"CRASH test: {e}"); }
         Application.Exit();
+    }
+
+    /// The Settings window on this machine: each of its pages photographed (and the desktop with it open).
+    static async Task ShootSettings(TidewallApp app)
+    {
+        app.ShowSettings();
+        await Task.Delay(9000);                                      // the page, its preview of the wall, the first usage figures
+        foreach (var page in new[] { "themes", "displays", "settings", "about" })
+        {
+            app.Settings!.ShowPage(page);
+            await Task.Delay(page == "themes" ? 3000 : 1200);
+            await app.Settings.SnapshotAsync(Path.Combine(dir, $"settings-{page}.png"));
+        }
+        using (var bmp = new Bitmap(SystemInformation.VirtualScreen.Width, SystemInformation.VirtualScreen.Height))
+        {
+            using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(SystemInformation.VirtualScreen.Location, Point.Empty, bmp.Size);
+            bmp.Save(Path.Combine(dir, "desk-settings.png"), ImageFormat.Png);
+        }
+        Log.Write("test: settings shot");
     }
 
     /// Every frame the page's loop is given, and apart the ones while it said it was settling (tools/smooth-check.py's

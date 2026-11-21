@@ -33,6 +33,7 @@ jobs:
           dotnet publish windows/Tidewall.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:TidewallVersion=$v -o out/Tidewall
           Copy-Item windows/Tidewall.ico out/Tidewall/
           Copy-Item -Recurse themes out/Tidewall/themes
+          Copy-Item CHANGELOG.md out/Tidewall/
       - name: A bigger screen
         shell: pwsh
         continue-on-error: true
@@ -47,7 +48,9 @@ jobs:
             New-Item -ItemType Directory -Force "test-out/$t" | Out-Null
             # (no GPU here: WebGL runs on the CPU, and Wind Tunnel's model and fluid need a minute to make a first picture)
             $settle = if ($t -eq 'tunnel') { '60' } else { '9' }
-            $p = Start-Process -FilePath out/Tidewall/Tidewall.exe -ArgumentList '--test',"test-out/$t",'--log',"test-out/$t/tidewall.log",'--theme',$t,'--clear-desk','--settle',$settle -PassThru
+            $args_ = @('--test',"test-out/$t",'--log',"test-out/$t/tidewall.log",'--theme',$t,'--clear-desk','--settle',$settle)
+            if ($t -eq 'inkmap') { $args_ += '--settings-shot' }   # the Settings window, once
+            $p = Start-Process -FilePath out/Tidewall/Tidewall.exe -ArgumentList $args_ -PassThru
             if (-not $p.WaitForExit(180000)) { $p.Kill(); Write-Host "$t did not finish in 180 s"; $bad++ }
             $log = "test-out/$t/tidewall.log"
             $done = Select-String -Path $log -Pattern 'TEST DONE' -Quiet

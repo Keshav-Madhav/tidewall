@@ -8,8 +8,13 @@ namespace Tidewall;
 /// The page hears where the windows are (in its device pixels) and says when it's ready.
 internal sealed class Wallpaper : Form
 {
-    const string Host = "tidewall.local";
+    public const string Host = "tidewall.local";
     static CoreWebView2Environment? environment;
+    public static CoreWebView2Environment? SharedEnvironment => environment;
+
+    /// One browser for every wall and the Settings window (its data in %LOCALAPPDATA%\\Tidewall\\WebView2).
+    public static async Task<CoreWebView2Environment> EnvironmentAsync() => environment ??= await CoreWebView2Environment.CreateAsync(null,
+        Path.Combine(Config.DataDir, "WebView2"), new CoreWebView2EnvironmentOptions("--autoplay-policy=no-user-gesture-required --disable-features=msSmartScreenProtection"));
 
     readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(239, 228, 204) };
     readonly string theme;
@@ -50,9 +55,7 @@ internal sealed class Wallpaper : Form
         Show();
         DesktopLayer.Attach(Handle, layer, Screen.Bounds);
 
-        environment ??= await CoreWebView2Environment.CreateAsync(null, Path.Combine(Config.DataDir, "WebView2"),
-            new CoreWebView2EnvironmentOptions("--autoplay-policy=no-user-gesture-required --disable-features=msSmartScreenProtection"));
-        await web.EnsureCoreWebView2Async(environment);
+        await web.EnsureCoreWebView2Async(await EnvironmentAsync());
         var core = web.CoreWebView2;
         core.Settings.AreDefaultContextMenusEnabled = false;
         core.Settings.AreDevToolsEnabled = Args.Has("--devtools");

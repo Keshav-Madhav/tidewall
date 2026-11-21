@@ -7,6 +7,8 @@ namespace Tidewall;
 internal static class PageScripts
 {
     public static string Bridge { get; } = Resource("bridge.js");
+    /// The Settings window's frames: the preview's host is the page around it.
+    public static string Frame { get; } = Resource("frame.js");
     static readonly string early = Load("early"), late = Load("late");
 
     public static string Late => late;

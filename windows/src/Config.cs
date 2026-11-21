@@ -20,11 +20,12 @@ internal static class Log
 {
     static readonly object gate = new();
     static string? path;
+    public static string Path => path ?? "";
 
     public static void Init()
     {
-        path = Args.Value("--log") ?? Path.Combine(Config.DataDir, "Tidewall.log");
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        path = Args.Value("--log") ?? System.IO.Path.Combine(Config.DataDir, "Tidewall.log");
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
         try { if (File.Exists(path) && new FileInfo(path).Length > 5_000_000) File.Delete(path); } catch (IOException) { }
     }
 
@@ -114,7 +115,34 @@ internal static class Config
     }
     public static bool Paused { get => Get("paused", false); set => Set("paused", value); }
     /// Rest after this long with no keyboard or mouse (0: never). Test runs never rest: a CI machine has no input at all.
-    public static double IdleMinutes { get => Args.Has("--test") ? 0 : Get("idleMinutes", 3.0); set => Set("idleMinutes", value); }
+    public static double IdleMinutes { get => Args.Has("--test") ? 0 : Get("idleMinutes", 3.0); set { Set("idleMinutes", value); if (value > 0) IdleLast = value; } }
     public static int Battery { get => Get("battery", 0); set => Set("battery", value); }
     public static string? Variant(string theme) => data["variant." + theme]?.GetValue<string>();
+    public static void SetVariant(string theme, string id) => Set("variant." + theme, id);
+
+    /// A display's own wall, if it has one (else it shows the main wall). Keyed by the display's device name.
+    public static string? OwnTheme(string device) => ThemeOverride == null ? data["theme.display." + device]?.GetValue<string>() : null;
+    public static string ThemeFor(Screen s) => OwnTheme(s.DeviceName) ?? Theme;
+    public static void SetOwnTheme(string device, string? theme)
+    {
+        if (theme == null) data.Remove("theme.display." + device); else data["theme.display." + device] = theme;
+        Save();
+    }
+    public static void ClearDisplayThemes()
+    {
+        foreach (var k in data.Select(kv => kv.Key).Where(k => k.StartsWith("theme.display.")).ToList()) data.Remove(k);
+        Save();
+    }
+    public static bool IsTheme(string? id) => Themes.Any(t => t.Id == id);
+
+    public static bool SpanWorlds { get => Get("spanWorlds", true); set => Set("spanWorlds", value); }
+    public static bool ReactWindows { get => Get("reactWindows", true); set => Set("reactWindows", value); }
+    public static bool ReactCursor { get => Get("reactCursor", true); set => Set("reactCursor", value); }
+    /// The idle time last chosen, so turning "rest when idle" back on restores it.
+    public static double IdleLast { get => Get("idleLast", 3.0); set => Set("idleLast", value); }
+    public static string? NotesSeen { get => data["notesSeen"]?.GetValue<string>(); set => Set("notesSeen", value); }
+    public static string Changelog
+    {
+        get { try { return File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "CHANGELOG.md")); } catch (IOException) { return ""; } }
+    }
 }

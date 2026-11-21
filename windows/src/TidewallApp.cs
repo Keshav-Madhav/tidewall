@@ -28,8 +28,10 @@ internal sealed class TidewallApp : ApplicationContext
         tracker = new WindowTracker(loop);
         tracker.Changed += (_, live) => Dispatch(live);
         tray = new NotifyIcon { Icon = AppIcon(), Text = "Tidewall", Visible = !Args.Has("--test") };
+        tray.DoubleClick += (_, _) => ShowSettings();
         RebuildMenu();
         BuildWalls();
+        if (Args.Has("--settings")) loop.BeginInvoke(() => ShowSettings(Args.Value("--settings")));
 
         SystemEvents.DisplaySettingsChanged += (_, _) => loop.BeginInvoke(BuildWalls);
         SystemEvents.SessionSwitch += (_, e) =>
@@ -44,7 +46,7 @@ internal sealed class TidewallApp : ApplicationContext
         Log.Write($"Tidewall {Config.Version} on Windows {Environment.OSVersion.Version}; themes {Config.ThemesRoot}");
     }
 
-    static Icon AppIcon()
+    public static Icon AppIcon()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Tidewall.ico");
         return File.Exists(path) ? new Icon(path) : SystemIcons.Application;
@@ -60,7 +62,7 @@ internal sealed class TidewallApp : ApplicationContext
         Log.Write($"desktop layer: {(layer.InsideProgman ? "inside Progman (24H2)" : "WorkerW")} {layer.Parent}");
         foreach (var screen in Screen.AllScreens)
         {
-            var wall = new Wallpaper(screen, Config.Theme);
+            var wall = new Wallpaper(screen, Config.ThemeFor(screen));
             wall.BecameReady += _ => Dispatch(false);
             walls.Add(wall);
             _ = StartWall(wall);
@@ -77,7 +79,7 @@ internal sealed class TidewallApp : ApplicationContext
     /// One world across the displays that show a spanning wall with the same scale (mixed scales: each its own).
     IReadOnlyList<Screen>? WorldFor(Wallpaper w)
     {
-        if (!Config.SpanThemes.Contains(w.Theme)) return null;
+        if (!Config.SpanWorlds || !Config.SpanThemes.Contains(w.Theme)) return null;
         var same = walls.Where(o => o.Theme == w.Theme && o.DeviceDpi == w.DeviceDpi).Select(o => o.Screen).ToList();
         return same.Count > 1 ? same : null;
     }
@@ -93,7 +95,7 @@ internal sealed class TidewallApp : ApplicationContext
             // a full-screen app over this display: nothing of the wall shows
             bool covered = !live && windows.Any(t => t.Handle == foreground && t.Bounds.Contains(w.Frame));
             w.SetPaused(Config.Paused || locked || idle || covered);
-            if (!w.Paused || live) w.SendWindows(windows, live);
+            if (!w.Paused || live) w.SendWindows(Config.ReactWindows ? windows : Array.Empty<TrackedWindow>(), live);   // windows off: it carries on as if they weren't there
         }
         // nothing to follow the pointer for: no ticks at all (it ran 60 times a second all day, paused or not)
         pointer.Enabled = walls.Any(w => w.Ready && !w.Paused && w.WantsCursor) && !locked && !idle;
@@ -111,7 +113,7 @@ internal sealed class TidewallApp : ApplicationContext
 
     void FollowPointer()
     {
-        if (!Native.GetCursorPos(out var p)) return;
+        if (!Config.ReactCursor || !Native.GetCursorPos(out var p)) return;
         var pt = new Point(p.X, p.Y);
         if (pt == lastPointer) return;
         lastPointer = pt;
@@ -121,25 +123,54 @@ internal sealed class TidewallApp : ApplicationContext
         wall?.SendCursor(pt, tracker.Windows.Any(t => t.Bounds.Contains(pt)));
     }
 
+    // MARK: the Settings window
+
+    SettingsWindow? settings;
+
+    public void ShowSettings(string? page = null)
+    {
+        if (settings == null || settings.IsDisposed)
+        {
+            settings = new SettingsWindow(this, page);
+            settings.FormClosed += (_, _) => settings = null;   // closed: it and its preview let go of everything
+            settings.Show();
+        }
+        else
+        {
+            if (page != null) settings.ShowPage(page);
+            if (settings.WindowState == FormWindowState.Minimized) settings.WindowState = FormWindowState.Normal;
+            settings.Activate();
+        }
+    }
+
+    public SettingsWindow? Settings => settings;
+
+    /// After a change of walls, displays or frame rate: every wall again, and the menu and window told.
+    public void RebuildWalls() { BuildWalls(); RefreshMenu(); }
+
+    public void RefreshMenu() { RebuildMenu(); settings?.PushState(); }
+
     // MARK: tray menu
 
     void RebuildMenu()
     {
         var menu = new ContextMenuStrip();
+        menu.Items.Add("Settings…", null, (_, _) => ShowSettings());
+        menu.Items.Add(new ToolStripSeparator());
         var themes = new ToolStripMenuItem("Wall");
         foreach (var (id, label) in Config.Themes)
         {
             var item = new ToolStripMenuItem(label) { Checked = Config.Theme == id };
-            item.Click += (_, _) => { Config.Theme = id; BuildWalls(); RebuildMenu(); };
+            item.Click += (_, _) => { Config.ClearDisplayThemes(); Config.Theme = id; RebuildWalls(); };
             themes.DropDownItems.Add(item);
         }
         menu.Items.Add(themes);
         menu.Items.Add(new ToolStripSeparator());
         var pause = new ToolStripMenuItem("Pause") { Checked = Config.Paused };
-        pause.Click += (_, _) => { Config.Paused = !Config.Paused; Dispatch(false); RebuildMenu(); };
+        pause.Click += (_, _) => { Config.Paused = !Config.Paused; Dispatch(false); RefreshMenu(); };
         menu.Items.Add(pause);
         var login = new ToolStripMenuItem("Start with Windows") { Checked = LoginItem.Enabled };
-        login.Click += (_, _) => { LoginItem.Enabled = !LoginItem.Enabled; RebuildMenu(); };
+        login.Click += (_, _) => { LoginItem.Enabled = !LoginItem.Enabled; RefreshMenu(); };
         menu.Items.Add(login);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quit Tidewall", null, (_, _) => ExitThread());
@@ -149,6 +180,7 @@ internal sealed class TidewallApp : ApplicationContext
     protected override void ExitThreadCore()
     {
         tray.Visible = false;
+        settings?.Close();
         foreach (var w in walls) w.Close();
         tracker.Dispose();
         base.ExitThreadCore();
