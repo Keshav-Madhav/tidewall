@@ -38,8 +38,10 @@ jobs:
           $bad = 0
           foreach ($t in 'inkmap','railway','garden','estate','gallery','celestial','snow','lava','wind','reef','tunnel','meadow','beach') {
             New-Item -ItemType Directory -Force "test-out/$t" | Out-Null
-            $p = Start-Process -FilePath out/Tidewall/Tidewall.exe -ArgumentList '--test',"test-out/$t",'--log',"test-out/$t/tidewall.log",'--theme',$t,'--clear-desk' -PassThru
-            if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Host "$t did not finish in 120 s"; $bad++ }
+            # (no GPU here: WebGL runs on the CPU, and Wind Tunnel's model and fluid need a minute to make a first picture)
+            $settle = if ($t -eq 'tunnel') { '60' } else { '9' }
+            $p = Start-Process -FilePath out/Tidewall/Tidewall.exe -ArgumentList '--test',"test-out/$t",'--log',"test-out/$t/tidewall.log",'--theme',$t,'--clear-desk','--settle',$settle -PassThru
+            if (-not $p.WaitForExit(180000)) { $p.Kill(); Write-Host "$t did not finish in 180 s"; $bad++ }
             $log = "test-out/$t/tidewall.log"
             $done = Select-String -Path $log -Pattern 'TEST DONE' -Quiet
             $crash = Select-String -Path $log -Pattern 'CRASH|JSERR' | Where-Object { $_.Line -notmatch 'JSERR (wind fetch|wx) ' }
