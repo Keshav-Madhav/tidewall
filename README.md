@@ -5,7 +5,7 @@
 <p align="center">A live wallpaper for macOS that flows around your windows.<br>
 Move a window and the world grows, parts and settles around it.</p>
 
-https://github.com/user-attachments/assets/65214d13-136b-42cd-add1-bde06a6ab17a
+https://github.com/user-attachments/assets/c33c186e-0f5f-4735-90ab-21153e9e83ce
 
 <p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/latest"><b>Download Tidewall</b></a> · free for macOS 14+</p>
 
