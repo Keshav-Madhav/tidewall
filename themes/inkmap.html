@@ -122,12 +122,16 @@ precision highp float;
 uniform sampler2D uA, uB; uniform float uMix, uScale, uH, uStep; uniform vec2 uGrid, uCompass, uOff;
 uniform vec4 uTowns[16]; uniform int uNT;          // x, y, fade, seed
 out vec4 o;
+// squared distance from q to the nearest town that's showing
+float townD2(vec2 q) { float m = 1e9; for (int i = 0; i < 16; i++) { if (i >= uNT) break; vec4 T = uTowns[i]; if (T.z > 0.05) { vec2 d = q - T.xy; m = min(m, dot(d, d)); } } return m; }
 float h12(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 vec2 h22(vec2 p) { return vec2(h12(p), h12(p + 19.19)); }
 float vn(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
   return mix(mix(h12(i), h12(i + vec2(1, 0)), u.x), mix(h12(i + vec2(0, 1)), h12(i + vec2(1, 1)), u.x), u.y); }
 float fbm(vec2 p) { float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++) { v += a * vn(p); p = p * 2.03 + 7.1; a *= 0.5; } return v; }
 float S(vec2 p) { vec2 uv = (p / uStep + 0.5) / uGrid; return mix(texture(uA, uv).r, texture(uB, uv).r, uMix); }
+// how mountainous the land is around q (over 0.74: a range)
+float mzAt(vec2 q) { return fbm(q * 0.0042 + 23.0) + (1.0 - abs(vn(q * 0.011 + 5.0) * 2.0 - 1.0)) * 0.18; }
 float seg(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0)); }
 float aa;                                     // ~1 output pixel in CSS px
 float line(float d, float w) { return 1.0 - smoothstep(w - aa * 0.5, w + aa * 0.5, d); }
@@ -243,11 +247,9 @@ void main() {
     if (h12(wc + 2.0) < 0.42 && S(wo) > 42.0) ink = max(ink, wave(p - wo) * 0.8);
   }
   // towns (placed by the page so they can fade): a church and its houses
-  float nearTown = 1e9;
   for (int i = 0; i < 16; i++) {
     if (i >= uNT) break;
     vec4 T = uTowns[i]; vec2 d = p - T.xy; float dd = dot(d, d);
-    if (T.z > 0.05) nearTown = min(nearTown, dd);
     if (dd > 1900.0 || T.z <= 0.0) continue;
     for (int j = 0; j < 7; j++) {
       float fj = float(j);
@@ -255,28 +257,36 @@ void main() {
       ink = max(ink, (j == 0 ? church(p - T.xy - off) : house((p - T.xy - off) * 1.25)) * T.z);
     }
   }
-  if (s < -8.0 && nearTown > 1500.0) {
+  // land glyphs: each decides from its own centre whether it's there (decided per pixel, a field or a tree was cut in two
+  // wherever the forest, the mountains or a town's reach changed across it), and fades in with the depth of the land
+  // under it, so a coast that grows brings its marks in smoothly rather than popping them
+  if (s < -2.0) {
     // mountain ranges: peaks packed along ridgelines, foothills on their flanks
     vec2 mc = floor(p / vec2(22.0, 17.0));
     vec2 mo = (mc + 0.5) * vec2(22.0, 17.0) + (h22(mc) - 0.5) * vec2(9.0, 6.0);
     float sm = S(mo), ridge = 1.0 - abs(vn(mo * 0.011 + 5.0) * 2.0 - 1.0);
     float mz = fbm(mo * 0.0042 + 23.0) + ridge * 0.18;
-    bool range = mz > 0.74;
-    if (sm < -22.0 && range && h12(mc * 1.7) < 0.88) ink = max(ink, peak(p - mo, 0.75 + 0.65 * ridge));
-    else if (sm < -16.0 && mz > 0.66 && h12(mc * 2.3) < 0.45) ink = max(ink, hill(p - mo));
-    if (!range) {
-      // forests: dense stands of pines and round trees
-      vec2 tc = floor(p / vec2(13.0, 11.0));
-      vec2 to = (tc + 0.5) * vec2(13.0, 11.0) + (h22(tc + 9.0) - 0.5) * vec2(7.0, 5.0);
+    if (sm < -16.0 && townD2(mo) > 1500.0) {
+      if (sm < -22.0 && mz > 0.74 && h12(mc * 1.7) < 0.88) ink = max(ink, peak(p - mo, 0.75 + 0.65 * ridge) * smoothstep(-22.0, -23.5, sm));
+      else if (mz > 0.66 && mz <= 0.74 && h12(mc * 2.3) < 0.45) ink = max(ink, hill(p - mo) * smoothstep(-16.0, -17.5, sm));
+    }
+    // forests: dense stands of pines and round trees, off the ranges
+    vec2 tc = floor(p / vec2(13.0, 11.0));
+    vec2 to = (tc + 0.5) * vec2(13.0, 11.0) + (h22(tc + 9.0) - 0.5) * vec2(7.0, 5.0);
+    float st = S(to);
+    if (st < -13.0) {
       float forest = fbm(to * 0.0055 + 11.0);
-      if (S(to) < -13.0 && forest > 0.56 && h12(tc * 1.9) < smoothstep(0.56, 0.7, forest) * 0.92)
-        ink = max(ink, h12(tc + 4.0) < fbm(to * 0.01 + 40.0) ? pine(p - to) : roundTree(p - to));
-      else if (nearTown < 26000.0 && forest < 0.5 && mz < 0.62) {
-        // farmland: a patchwork of fields around each town
-        vec2 fc = floor(p / vec2(30.0, 24.0));
-        vec2 fo = (fc + 0.5) * vec2(30.0, 24.0) + (h22(fc + 2.0) - 0.5) * vec2(8.0, 6.0);
-        if (S(fo) < -16.0 && h12(fc * 3.1) < 0.62) ink = max(ink, field(p - fo, h12(fc + 8.0) * 0.5 - 0.25) * 0.72);
-      }
+      if (forest > 0.56 && h12(tc * 1.9) < smoothstep(0.56, 0.7, forest) * 0.92 && mzAt(to) <= 0.74 && townD2(to) > 1500.0)
+        ink = max(ink, (h12(tc + 4.0) < fbm(to * 0.01 + 40.0) ? pine(p - to) : roundTree(p - to)) * smoothstep(-13.0, -14.5, st));
+    }
+    // farmland: a patchwork of fields around each town, where there's no forest or range
+    vec2 fc = floor(p / vec2(30.0, 24.0));
+    vec2 fo = (fc + 0.5) * vec2(30.0, 24.0) + (h22(fc + 2.0) - 0.5) * vec2(8.0, 6.0);
+    float sf = S(fo);
+    if (sf < -16.0 && h12(fc * 3.1) < 0.62) {
+      float tf = townD2(fo);
+      if (tf < 26000.0 && tf > 1500.0 && fbm(fo * 0.0055 + 11.0) < 0.5 && mzAt(fo) < 0.62)
+        ink = max(ink, field(p - fo, h12(fc + 8.0) * 0.5 - 0.25) * 0.72 * smoothstep(-16.0, -17.5, sf));
     }
   }
   // lighthouses on headlands
@@ -418,9 +428,15 @@ function drawCompass() {
 function placeCompass() {
   if (!FB) return;
   let best = -Infinity, bx = null, by = null;                // (a big world's top-left preference can make every score negative)
+  // the whole rose in open water: its centre and a ring of points just past its letters (a centre in the sea left the
+  // rim over a coast, or over a forest when there was little sea anywhere)
+  const ring = [...Array(12)].map((_, i) => [Math.cos(i * Math.PI / 6) * 96, Math.sin(i * Math.PI / 6) * 96]);
   for (let y = 110; y < H - 110; y += 40) for (let x = 110; x < W - 110; x += 40) {
     if (!onOne(x - 100, y - 100, x + 100, y + 100)) continue;
-    const s = sampleS(FB, x, y) - 0.15 * Math.hypot(x - W * 0.08, y - H * 0.12);   // prefer the top-left
+    let sea = sampleS(FB, x, y);
+    for (const [dx, dy] of ring) sea = Math.min(sea, sampleS(FB, x + dx, y + dy));
+    if (sea < 14) continue;                                   // land (or its shallows) under some part of it
+    const s = sea - 0.15 * Math.hypot(x - W * 0.08, y - H * 0.12);   // prefer the top-left
     if (s > best) { best = s; bx = x; by = y; }
   }
   if (bx === null) { compass.style.opacity = 0; return; }   // no clear sea big enough on any display: no compass

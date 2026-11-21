@@ -8,6 +8,8 @@ and `CONTRIBUTING.md` for the theme contract (messages, required globals) before
 ```
 Sources/                the native host (AppKit + WebKit, no dependencies), one folder per concern (below)
 themes/*.html           one page per theme (HTML + canvas 2D / WebGL2), served over the tidewall:// scheme
+site/                   the website (Ink Map running live behind it); tools/build-site.sh → build/site, published
+                        to GitHub Pages by .github/workflows/site.yml
 themes/host/*.js        injected into every page: frame pacing, GPU-context recovery (early.js), the morph hook (late.js)
 themes/<theme>/         that theme's assets (textures, models, data)
 themes/ui/index.html    the app window (themes gallery + live preview, displays, settings, about)

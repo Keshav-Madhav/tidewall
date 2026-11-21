@@ -250,9 +250,12 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   private func sendRoomAround(_ local: [CGRect], scale k: CGFloat, live: Bool) {
     let m = Cfg.margin
     let icons = local.map { boxJSON($0.insetBy(dx: -m, dy: -m), scale: k) }.joined(separator: ",")
-    if icons != lastSent.icons {
-      lastSent.icons = icons
-      send("{\"t\":\"icons\",\"vis\":true,\"r\":[\(icons)]}", live: live)
+    // compared whole: with no windows the list is empty, and an empty list compared bare matched "never sent", so a
+    // page opened on an empty desk never heard it and drew nothing until the first window appeared
+    let message = "{\"t\":\"icons\",\"vis\":true,\"r\":[\(icons)]}"
+    if message != lastSent.icons {
+      lastSent.icons = message
+      send(message, live: live)
     }
   }
 

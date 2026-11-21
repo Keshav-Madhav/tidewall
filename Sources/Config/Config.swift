@@ -20,6 +20,15 @@ enum Cfg {
     }
   }
 
+  /// The wall a new install opens on.
+  static let defaultTheme = "inkmap"
+
+  /// Marauders was the default until 1.2.8: an install that never picked a wall keeps the one it has been showing.
+  static func keepFormerDefaultTheme() {
+    guard d.string(forKey: "theme") == nil, d.bool(forKey: "welcomed") else { return }
+    d.set("estate", forKey: "theme")
+  }
+
   /// Driftland's frame rate came across in the move and, since 1.2.6, caps even transitions: back to Auto, once, unless
   /// it has been changed since.
   static func resetInheritedFrameRate() {
@@ -33,6 +42,7 @@ enum Cfg {
   // MARK: themes and displays
 
   static let themes: [(String, String)] = [
+    ("inkmap", "Ink Map · very low"),
     ("estate", "Marauders · very low"),
     ("gallery", "Gallery · none"),
     ("wind", "Wind Map · medium"),
@@ -41,7 +51,6 @@ enum Cfg {
     ("reef", "Koi Reef · medium"),
     ("snow", "Snowfall · low"),
     ("celestial", "Celestial Atlas · none"),
-    ("inkmap", "Ink Map · very low"),
     ("garden", "Garden Plan · very low"),
     ("railway", "Model Railway · very low"),
     ("meadow", "Meadow · high"),
@@ -56,7 +65,7 @@ enum Cfg {
   static var themeOverride: String?
 
   static var theme: String {
-    get { themeOverride ?? d.string(forKey: "theme") ?? "estate" }
+    get { themeOverride ?? d.string(forKey: "theme") ?? defaultTheme }
     set {
       themeOverride = nil
       d.set(newValue, forKey: "theme")

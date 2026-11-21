@@ -378,11 +378,11 @@
 'use strict';
 /* ======================= catalog ======================= */
 const THEMES = [
+  { id: 'inkmap', name: 'Ink Map', page: 'inkmap', cost: 1, f: ['low', 'play', 'span'], desc: 'A pen-and-ink archipelago. Your windows are islands, and a little boat sails to your cursor.', tags: ['A boat follows you'] },
   { id: 'railway', name: 'Model Railway', page: 'railway', cost: 1, f: ['low', 'play', 'span'], desc: 'A toy railway diorama. Your windows become towns; trains run between them, cars wait at the level crossings.', tags: ['Cursor stops trains'] },
   { id: 'garden', name: 'Garden Plan', page: 'garden', cost: 1, f: ['low', 'play', 'span'], desc: 'A landscape architect’s planting plan. Windows become flowerbeds; gardeners tend the paths around them.', tags: ['Gardeners come to your cursor'] },
   { id: 'estate', name: 'Marauders', page: 'estate', cost: 1, f: ['low', 'play', 'span'], desc: 'An enchanted ink plan of an old castle on stained parchment. Footprints wander, and follow your cursor.', tags: ['Footprints follow you'] },
   { id: 'gallery', name: 'Gallery', page: 'gallery', cost: 0, f: ['low', 'span'], desc: 'A museum wall. Every window hangs in a real frame with a brass label; public-domain masterpieces fill the wall.', tags: ['Paintings from The Met'] },
-  { id: 'inkmap', name: 'Ink Map', page: 'inkmap', cost: 1, f: ['low', 'play', 'span'], desc: 'A pen-and-ink archipelago. Your windows are islands, and a little boat sails to your cursor.', tags: ['A boat follows you'] },
   { id: 'celestial', name: 'Celestial Atlas', page: 'celestial', cost: 0, f: ['low', 'live', 'span'], desc: 'The real sky overhead right now, drawn as an antique star chart. Windows are black holes.', tags: ['Tonight’s real sky'] },
   { id: 'snow', name: 'Snowfall', page: 'snow', cost: 2, f: ['low', 'span'], desc: 'A painted moonlit valley. Snow drifts down and settles on the tops of your windows.', tags: ['Painted panorama'] },
   { id: 'lava', name: 'Lava Lamp', page: 'lava', cost: 2, f: ['low'], desc: 'Soft-body wax with real buoyancy, heat and coalescence, in nine colourways.', tags: ['Real physics'] },
@@ -402,7 +402,7 @@ const send = m => { try { webkit.messageHandlers.ui.postMessage(JSON.stringify(m
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-let S = { current: 'railway', displays: [], settings: {}, variants: {}, seed: 1, version: '1.0' }, VARS = {}, sel = null, selDisp = null, filter = 'all';
+let S = { current: 'inkmap', displays: [], settings: {}, variants: {}, seed: 1, version: '1.0' }, VARS = {}, sel = null, selDisp = null, filter = 'all';
 
 /* ======================= navigation ======================= */
 function go(p) { $$('nav a').forEach(a => a.classList.toggle('on', a.dataset.p === p)); $$('section').forEach(s => s.classList.toggle('on', s.id === p));

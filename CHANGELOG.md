@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Ink Map, first
+- New installs open on Ink Map, now first in the menu and in Settings. If you never picked a wall, you keep the one
+  you've had.
+- Ink Map's fields, trees and mountains are always drawn whole; near a forest's edge or a town they used to be cut in
+  two. They fade in as the land grows under them.
+- The compass rose sits wholly in open water, never half over a coast or off the edge of the screen, and stays away
+  when there's no sea big enough for it.
+
+### Fixed
+- Started with no windows open, a wall that waits to hear where your windows are (Ink Map among them) drew nothing
+  until the first window appeared.
+
 ## [1.2.7]
 
 ### Steadier, safer updates

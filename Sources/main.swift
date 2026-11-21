@@ -11,7 +11,10 @@ if let v = argValue("--variant") { Cfg.variantOverride = v }
 if let v = argValue("--theme") { Cfg.themeOverride = v }
 if let v = argValue("--margin").flatMap(Double.init) { Cfg.margin = v }
 Cfg.migrate()
-if !benchMode { Cfg.resetInheritedFrameRate() }
+if !benchMode {
+  Cfg.resetInheritedFrameRate()
+  Cfg.keepFormerDefaultTheme()
+}
 runPrintCommands()
 
 keepLogFile()
