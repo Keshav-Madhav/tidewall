@@ -1,0 +1,118 @@
+  /* layout: the real Ink Map fixed behind the page; every block is a frosted panel the map grows land under */
+  :root {
+    --ink: #15171f;
+    --ink-2: #4a4e5b;
+    --ink-3: #5f6372;
+    --paper: #efe4cc;
+    --accent: #2b3bff;
+    --glass: rgba(251, 249, 243, .88);
+    --line: rgba(21, 23, 31, .10);
+    --sans: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--paper); scroll-behavior: smooth; }
+  body { margin: 0; color: var(--ink); font: 400 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+
+  #sea { position: fixed; inset: 0; overflow: hidden; z-index: 0; background: var(--paper); }
+  .page { position: relative; z-index: 1; padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+
+  .pane {
+    position: relative; background: var(--glass); border: 1px solid var(--line); border-radius: 18px;
+    -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 22px 60px -24px rgba(45, 32, 10, .35);
+  }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+  h1, h2 { margin: 0; font-weight: 500; letter-spacing: -.035em; text-wrap: balance; }
+  p { margin: 0; text-wrap: pretty; }
+
+  /* nav: two quiet pills */
+  .top { position: fixed; z-index: 5; top: max(18px, env(safe-area-inset-top, 0px)); left: max(20px, env(safe-area-inset-left, 0px)); right: max(20px, env(safe-area-inset-right, 0px)); display: flex; justify-content: space-between; align-items: center; pointer-events: none; }
+  .top > * { pointer-events: auto; }
+  .mark { display: inline-flex; align-items: center; gap: 10px; padding: 7px 16px 7px 8px; border-radius: 999px; text-decoration: none; font-weight: 600; font-size: 15px; }
+  .mark img { width: 26px; height: 26px; border-radius: 7px; }
+  .get { display: inline-flex; align-items: center; padding: 9px 16px; border-radius: 999px; font-size: 14px; font-weight: 500; text-decoration: none; }
+
+  .btn { display: inline-flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 20px 0 16px; border-radius: 12px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 500; font-size: 15.5px; box-shadow: 0 10px 24px -12px rgba(43, 59, 255, .8); transition: transform .3s ease, box-shadow .3s ease; }
+  .btn:hover { transform: translateY(-1px); box-shadow: 0 14px 28px -12px rgba(43, 59, 255, .9); }
+  .btn svg { width: 16px; height: 16px; }
+  .fine { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+
+  /* hero: one panel; drag it */
+  .hero { position: relative; min-height: 860px; height: 100svh; max-height: 1100px; }
+  #head { position: absolute; left: clamp(20px, 9vw, 160px); top: 50%; transform: translateY(-50%); width: min(520px, calc(100% - 40px)); padding: 38px 40px 34px; cursor: grab; touch-action: none; }
+  #head h1 { font-size: clamp(40px, 4.6vw, 62px); line-height: 1; margin: 14px 0 18px; }
+  #head p { color: var(--ink-2); font-size: 18px; max-width: 26em; }
+  #head .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; margin-top: 30px; }
+  #head .film { font-size: 15px; color: var(--ink-2); text-decoration: none; border-bottom: 1px solid rgba(21, 23, 31, .25); }
+  #head .film:hover { color: var(--ink); border-color: var(--ink); }
+  .is-dragging { cursor: grabbing !important; }
+  .hint { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px; white-space: nowrap; transition: opacity .6s ease; }
+
+  /* sections: one panel each, with open sea between */
+  section { padding-top: 26vh; }
+  .block { padding: 34px 36px; }
+  .block h2 { font-size: clamp(30px, 3vw, 40px); line-height: 1.06; margin: 12px 0 12px; }
+  .block p { color: var(--ink-2); max-width: 34em; }
+  .left { margin-left: clamp(0px, 8vw, 140px); } .right { margin-left: auto; margin-right: clamp(0px, 8vw, 140px); }
+
+  #film { width: min(980px, 100%); margin-inline: auto; padding: 14px; }
+  #film .cap { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 6px 8px 14px; }
+  #film h2 { font-size: clamp(22px, 2.2vw, 28px); margin: 0; }
+  video { display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 10px; background: #e7dcc2; }
+
+  #walls { width: min(1180px, 100%); margin-inline: auto; padding-right: 0; overflow: hidden; }
+  .walls-head { display: flex; justify-content: space-between; align-items: end; gap: 24px; padding-right: 36px; }
+  .walls-head p { max-width: 38em; }
+  .arrows { display: flex; gap: 8px; flex: none; }
+  .arrow { width: 44px; height: 44px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, .6); color: var(--ink); display: grid; place-items: center; cursor: pointer; transition: background .2s ease; }
+  .arrow:hover { background: #fff; }
+  .arrow svg { width: 16px; height: 16px; }
+  .strip { margin-top: 26px; display: flex; gap: 18px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding-left: 0; padding: 2px 36px 8px 2px; scrollbar-width: none; }
+  .strip::-webkit-scrollbar { display: none; }
+  .strip figure { margin: 0; flex: 0 0 min(560px, 78vw); scroll-snap-align: start; }
+  .strip img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); background: #e7dcc2; }
+  .strip figcaption { padding: 12px 2px 0; }
+  .strip .name { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .strip .name b { font-weight: 500; font-size: 17px; }
+  .strip .name span { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+  .strip figcaption p { margin-top: 4px; font-size: 14.5px; color: var(--ink-2); max-width: 36em; }
+
+  #perf { width: min(640px, 100%); }
+  .stats { margin-top: 26px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+  .stats b { font-weight: 400; font-size: clamp(44px, 5vw, 60px); line-height: 1; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+  .stats .unit { margin-left: 4px; font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  .stats p { margin-top: 8px; font-size: 14px; color: var(--ink-2); }
+  .facts { margin-top: 26px; display: grid; border-top: 1px solid var(--line); }
+  .facts div { padding: 13px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 160px 1fr; gap: 16px; }
+  .facts b { font-weight: 500; }
+  .facts span { color: var(--ink-2); }
+  .measured { margin-top: 16px; }
+
+  footer { padding: 28vh 0 14vh; }
+  #end { width: min(600px, 100%); margin-inline: auto; padding: 40px 36px 32px; text-align: center; }
+  #end h2 { font-size: clamp(32px, 3.4vw, 44px); line-height: 1.05; margin: 12px 0 14px; }
+  #end p { color: var(--ink-2); }
+  #end .cta { display: flex; justify-content: center; flex-wrap: wrap; gap: 14px 22px; align-items: center; margin-top: 28px; }
+  #end .links { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line); display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
+  #end .links a { text-decoration: none; } #end .links a:hover { color: var(--accent); }
+
+  @media (max-width: 760px) {
+    .hero { height: auto; min-height: 0; padding: 100px 0 0; }
+    #head { position: relative; left: auto; top: auto; transform: none; width: auto; padding: 28px 24px 26px; cursor: auto; }
+    #head h1 { font-size: 40px; }
+    .hint { display: none; }
+    section { padding-top: 32vh; }
+    .block { padding: 26px 22px; }
+    .left, .right { margin: 0; }
+    #film { padding: 10px; }
+    .facts div { grid-template-columns: 1fr; gap: 2px; }
+    .walls-head { flex-direction: column; align-items: start; padding-right: 22px; }
+    .strip { padding-right: 22px; }
+    .stats { grid-template-columns: 1fr; gap: 14px; }
+    footer { padding: 32vh 0 10vh; }
+    #end { padding: 30px 22px 26px; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .btn, .btn:hover { transition: none; transform: none; } }

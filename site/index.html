@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tidewall</title>
+<meta name="description" content="A live wallpaper for macOS that flows around your windows. Free and open source.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" type="image/png" href="img/icon-64.png">
+<link rel="apple-touch-icon" href="img/icon-256.png">
+<meta property="og:title" content="Tidewall · a live wallpaper for macOS">
+<meta property="og:description" content="A live wallpaper for macOS that flows around your windows. Free and open source.">
+<meta property="og:image" content="https://keshav-madhav.github.io/tidewall/media/og.jpg">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+<div id="sea"></div>
+<script src="tw-embed.js"></script>
+<script>window.tide = TW.mount(document.getElementById("sea"), { wall: "inkmap", title: "The live Ink Map wall", seed: 11, margin: innerWidth < 760 ? 16 : 30, windows: () => [...document.querySelectorAll(".win")], followScroll: !matchMedia("(prefers-reduced-motion: reduce)").matches });</script>
+
+<nav class="top" aria-label="Site">
+  <a class="mark pane" href="#top"><img src="img/icon-64.png" alt="">Tidewall</a>
+  <a class="get pane" href="https://github.com/Keshav-Madhav/tidewall/releases/latest">Download</a>
+</nav>
+
+<div class="page" id="top">
+  <div class="hero">
+    <div class="pane win" id="head" tabindex="0" aria-label="Drag this panel, or move it with the arrow keys, and the map makes room for it">
+      <div class="eyebrow">A live wallpaper for macOS</div>
+      <h1>The world makes room for your windows.</h1>
+      <p>Move a window and the land grows, parts and settles around it. Free, open source, and calm when you're not moving anything.</p>
+      <div class="cta">
+        <a class="btn" href="https://github.com/Keshav-Madhav/tidewall/releases/latest">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 2v8.5M4.2 7 8 10.8 11.8 7M3 13.5h10"/></svg>
+          Download for macOS</a>
+        <a class="film" href="#film-sec">Watch the film</a>
+      </div>
+    </div>
+    <div class="hint pane fine" id="hint">This is the real Ink Map. Drag the panel, or scroll.</div>
+  </div>
+
+  <section id="film-sec" aria-labelledby="film-h">
+    <div class="pane win" id="film">
+      <div class="cap">
+        <h2 id="film-h">Tidewall on a real desktop</h2>
+        <span class="fine">46 s · Ink Map, Garden Plan and more</span>
+      </div>
+      <video id="video" src="media/tidewall.mp4" poster="media/poster.jpg" muted loop playsinline controls preload="metadata" aria-label="Tidewall's walls reshaping around windows on a Mac desktop"></video>
+    </div>
+  </section>
+
+  <section aria-labelledby="walls-h">
+    <div class="pane win block" id="walls">
+      <div class="walls-head">
+        <div>
+          <div class="eyebrow">Thirteen walls</div>
+          <h2 id="walls-h">Each one makes room in its own way.</h2>
+          <p>Real screenshots, two windows on each. Pick a wall in Settings, where every one previews live on your own desktop. Across several displays, a wall becomes one continuous world.</p>
+        </div>
+        <div class="arrows">
+          <button type="button" class="arrow" id="prev" aria-label="Previous wall"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg></button>
+          <button type="button" class="arrow" id="next" aria-label="Next wall"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg></button>
+        </div>
+      </div>
+      <div class="strip" id="strip" tabindex="0" aria-label="Screenshots of the thirteen walls; scroll sideways"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="perf-h">
+    <div class="pane win block right" id="perf">
+      <div class="eyebrow">Performance</div>
+      <h2 id="perf-h">Busy when you are. Still when you're not.</h2>
+      <div class="stats">
+        <div><b>120</b><span class="unit">fps</span><p>while a window moves, every frame your display shows</p></div>
+        <div><b>12</b><span class="unit">fps</span><p>when Ink Map rests; the boats keep sailing</p></div>
+        <div><b>0</b><span class="unit">fps</span><p>when it's covered, or you're away</p></div>
+      </div>
+      <div class="facts">
+        <div><b>Always sharp</b><span>Drawn at your display's full resolution, never below it.</span></div>
+        <div><b>Asks for nothing</b><span>No permissions, no telemetry. Only Wind Map goes online, for the weather.</span></div>
+        <div><b>Kind to batteries</b><span>On battery it carries on, goes calmer or pauses, as you choose.</span></div>
+      </div>
+      <p class="fine measured">Measured on Ink Map with Tidewall's own smoothness test, on a MacBook Pro with a 120 Hz display.</p>
+    </div>
+  </section>
+</div>
+
+<footer class="page">
+  <div class="pane win" id="end">
+    <div class="eyebrow">Tidewall 1.2.7 · free</div>
+    <h2>Give your windows somewhere to live.</h2>
+    <p>For macOS 14 or later. Updates itself, safely.</p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/Keshav-Madhav/tidewall/releases/latest">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 2v8.5M4.2 7 8 10.8 11.8 7M3 13.5h10"/></svg>
+        Download for macOS</a>
+    </div>
+    <div class="links fine">
+      <a href="https://github.com/Keshav-Madhav/tidewall">Source on GitHub</a>
+      <a href="https://github.com/Keshav-Madhav/tidewall/releases">All releases</a>
+      <span>GPL-3.0</span>
+    </div>
+  </div>
+</footer>
+
+<script src="main.js"></script>
+</body>
+</html>
