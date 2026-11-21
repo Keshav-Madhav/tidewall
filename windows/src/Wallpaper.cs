@@ -90,7 +90,7 @@ internal sealed class Wallpaper : Form
                 SendDesk();
                 Send($"{{\"t\":\"me\",\"seed\":{Config.Seed}}}");
                 if (Paused) Send("{\"t\":\"pause\",\"v\":true}");
-                Log.Write($"[{theme}] ready on {Screen.DeviceName} {Screen.Bounds} scale {Scale:0.##}");
+                Log.Write($"[{theme}] ready on {Screen.DeviceName} {Screen.Bounds} scale {PixelScale:0.##}");
                 BecameReady?.Invoke(this);
                 break;
             case "nocursor":
@@ -112,14 +112,14 @@ internal sealed class Wallpaper : Form
     }
 
     /// This display's scale (its device pixels per page pixel).
-    public double Scale => DeviceDpi / 96.0;
+    public double PixelScale => DeviceDpi / 96.0;
 
     /// Where this display sits among the others, in page pixels.
     public void SendDesk(IReadOnlyList<Screen>? world = null)
     {
         var frames = (world ?? [Screen]).Select(s => s.Bounds).ToList();
         var u = frames.Aggregate(frames[0], Rectangle.Union);
-        double k = Scale;
+        double k = PixelScale;
         int Px(double v) => (int)Math.Round(v / k);
         var fr = string.Join(",", frames.Select(f => $"[{Px(f.X - u.X)},{Px(f.Y - u.Y)},{Px(f.Width)},{Px(f.Height)}]"));
         var me = Screen.Bounds;
@@ -142,7 +142,7 @@ internal sealed class Wallpaper : Form
         var names = JsonSerializer.Serialize(mine.Select(w => w.Owner).ToArray());
         var wins = $"{{\"t\":\"windows\",\"live\":{(live ? "true" : "false")},\"r\":[{string.Join(",", mine.Select(w => Box(w.Bounds)))}],\"n\":{names},\"sm\":[{string.Join(",", mine.Select(_ => "0"))}]}}";
         if (wins != lastWindows) { lastWindows = wins; Send(wins, live); }
-        int m = (int)Math.Round(Config.Margin * Scale);   // the room the scene keeps around each window, in page pixels
+        int m = (int)Math.Round(Config.Margin * PixelScale);   // the room the scene keeps around each window, in page pixels
         var icons = $"{{\"t\":\"icons\",\"vis\":true,\"r\":[{string.Join(",", mine.Select(w => Box(Rectangle.Inflate(w.Bounds, m, m))))}]}}";
         if (icons != lastIcons) { lastIcons = icons; Send(icons, live); }
     }
@@ -154,7 +154,7 @@ internal sealed class Wallpaper : Form
         Send(on ? "{\"t\":\"pause\",\"v\":true}" : "{\"t\":\"pause\",\"v\":false}");
     }
 
-    public void Cursor(Point screen, bool overWindow)
+    public void SendCursor(Point screen, bool overWindow)
     {
         if (!WantsCursor || Paused) return;
         var f = Frame;

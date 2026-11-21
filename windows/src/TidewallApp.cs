@@ -115,7 +115,7 @@ internal sealed class TidewallApp : ApplicationContext
         var wall = walls.FirstOrDefault(w => w.Frame.Contains(pt));
         if (pointerWall != null && pointerWall != wall) pointerWall.CursorOff();
         pointerWall = wall;
-        wall?.Cursor(pt, tracker.Windows.Any(t => t.Bounds.Contains(pt)));
+        wall?.SendCursor(pt, tracker.Windows.Any(t => t.Bounds.Contains(pt)));
     }
 
     // MARK: tray menu
