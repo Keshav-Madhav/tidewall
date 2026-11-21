@@ -23,6 +23,10 @@ internal static class TestRun
             var work = Screen.PrimaryScreen!.WorkingArea;
             var a = Open(app, "Tidewall test · Notes", Rect(work, 0.18, 0.18, 0.40, 0.42), Color.FromArgb(250, 250, 252));
             var b = Open(app, "Tidewall test · Code", Rect(work, 0.62, 0.52, 0.28, 0.32), Color.FromArgb(36, 37, 41));
+            // a fresh machine starts WebView2 slowly the first time: the settle counts from when every wall is up
+            var started = DateTime.UtcNow;
+            while (app.Walls.Any(w => !w.Ready) && DateTime.UtcNow - started < TimeSpan.FromSeconds(90)) await Task.Delay(250);
+            Log.Write($"test: walls ready after {(DateTime.UtcNow - started).TotalSeconds:0.0} s ({app.Walls.Count(w => w.Ready)}/{app.Walls.Count})");
             await Task.Delay(TimeSpan.FromSeconds(double.Parse(Args.Value("--settle") ?? "9")));
             await Probe(app, "a");
             await Shoot(app, "a");
@@ -40,7 +44,7 @@ internal static class TestRun
             }
             Log.Write("test: glide done");
             await Task.Delay(4000);
-            for (int i = 0; i < app.Walls.Count; i++) Log.Write($"eval [{i}] " + System.Text.Json.JsonSerializer.Deserialize<string>(await app.Walls[i].AskAsync(FrameProbe)));
+            for (int i = 0; i < app.Walls.Count; i++) { var json = await app.Walls[i].AskAsync(FrameProbe); Log.Write($"eval [{i}] " + (string.IsNullOrEmpty(json) ? "(no answer)" : System.Text.Json.JsonSerializer.Deserialize<string>(json))); }
             await Probe(app, "b");
             await Shoot(app, "b");
             Log.Write("TEST DONE");
