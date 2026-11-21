@@ -65,27 +65,41 @@ function buildNoise() {
 // reg: [gx0, gy0, gx1, gy1] grid cells to compute (inclusive); everything else is copied from base. Across several
 // displays the field covers the whole world, and recomputing all of it on every window update (3840 × 2062 points:
 // ~45 ms, on each display, in one shared web process) left no time to draw while a window was dragged.
+// one island's pull added into f1, within the grid cells [rx0, ry0]–[rx1, ry1]
+function addRect(f1, r, rx0, ry0, rx1, ry1) {
+  const sig = P.sigma, is1 = 1 / (sig * sig), wa = P.warp * 2.2, wmax = wa * 0.5;
+  // the whole rect and its falloff: it used to reach only half the rect's size from its centre, which cut a straight
+  // channel of sea into the land of any window wider than ~1670 pt (a maximized window on a 1920 monitor)
+  const Rx = r.hw + 5.5 * sig + wmax, Ry = r.hh + 5.5 * sig + wmax;
+  const gx0 = Math.max(rx0, Math.floor((r.cx - Rx) / STEP)), gx1 = Math.min(rx1, Math.ceil((r.cx + Rx) / STEP));
+  const gy0 = Math.max(ry0, Math.floor((r.cy - Ry) / STEP)), gy1 = Math.min(ry1, Math.ceil((r.cy + Ry) / STEP));
+  // coast (f = 0.35) lands on the rect edge: core = rect shrunk by σ·√(−ln 0.35)
+  const chw = Math.max(r.hw - 1.025 * sig, 0), chh = Math.max(r.hh - 1.025 * sig, 0), wgt = r.w || 1;
+  for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+    const i = gy * Gw + gx;
+    const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
+    let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+    if (dx < 0) dx = 0; if (dy < 0) dy = 0;
+    f1[i] += wgt * Math.exp(-(dx * dx + dy * dy) * is1);
+  }
+}
+// The islets never move: their pull is summed once per grid and every later field starts from it (they were most of
+// the work of each update while a window was dragged).
+let ISL = null, islFor = null, F1 = null;
+function isletField() {
+  if (!ISL || islFor !== ISLETS || ISL.nz !== NZ || ISL.length !== Gw * Gh) {
+    ISL = new Float32Array(Gw * Gh); ISL.nz = NZ; islFor = ISLETS;
+    for (const r of ISLETS) addRect(ISL, r, 0, 0, Gw - 1, Gh - 1);
+  }
+  return ISL;
+}
 function computeField(rects, reg = null, base = null) {
   const t0 = performance.now();
-  const N = Gw * Gh, f1 = new Float32Array(N);
-  const [rx0, ry0, rx1, ry1] = reg && base ? reg : [0, 0, Gw - 1, Gh - 1];
-  const sig = P.sigma, is1 = 1 / (sig * sig), wa = P.warp * 2.2, wmax = wa * 0.5;
-  for (const r of rects) {
-    // the whole rect and its falloff: it used to reach only half the rect's size from its centre, which cut a straight
-    // channel of sea into the land of any window wider than ~1670 pt (a maximized window on a 1920 monitor)
-    const Rx = r.hw + 5.5 * sig + wmax, Ry = r.hh + 5.5 * sig + wmax;
-    const gx0 = Math.max(rx0, Math.floor((r.cx - Rx) / STEP)), gx1 = Math.min(rx1, Math.ceil((r.cx + Rx) / STEP));
-    const gy0 = Math.max(ry0, Math.floor((r.cy - Ry) / STEP)), gy1 = Math.min(ry1, Math.ceil((r.cy + Ry) / STEP));
-    // coast (f = 0.35) lands on the rect edge: core = rect shrunk by σ·√(−ln 0.35)
-    const chw = Math.max(r.hw - 1.025 * sig, 0), chh = Math.max(r.hh - 1.025 * sig, 0), wgt = r.w || 1;
-    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
-      const i = gy * Gw + gx;
-      const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
-      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
-      if (dx < 0) dx = 0; if (dy < 0) dy = 0;
-      f1[i] += wgt * Math.exp(-(dx * dx + dy * dy) * is1);
-    }
-  }
+  const N = Gw * Gh; if (!F1 || F1.length !== N) F1 = new Float32Array(N);
+  const f1 = F1, [rx0, ry0, rx1, ry1] = reg && base ? reg : [0, 0, Gw - 1, Gh - 1], sig = P.sigma;
+  const withIslets = rects.some(r => r.islet), isl = withIslets ? isletField() : null;
+  for (let gy = ry0; gy <= ry1; gy++) { const a = gy * Gw + rx0, b = gy * Gw + rx1 + 1; if (isl) f1.set(isl.subarray(a, b), a); else f1.fill(0, a, b); }
+  for (const r of rects) if (!r.islet) addRect(f1, r, rx0, ry0, rx1, ry1);
   const c0 = Math.sqrt(-Math.log(0.35)), s = reg && base ? base.s.slice() : new Float32Array(N), fMin = Math.exp(-30);
   for (let gy = ry0; gy <= ry1; gy++) for (let gx = rx0, i = gy * Gw + rx0; gx <= rx1; gx++, i++) {
     const g = Math.log(Math.max(f1[i], fMin));
@@ -331,7 +345,7 @@ function seedIslets() {
   const n = Math.round(W * H / 52000); ISLETS = [];
   for (let i = 0; i < n; i++) {
     const big = rnd() < 0.18;
-    ISLETS.push({ cx: rnd() * W, cy: rnd() * H, hw: big ? 30 + rnd() * 50 : 0, hh: big ? 20 + rnd() * 35 : 0, w: big ? 0.8 + rnd() * 0.3 : 0.37 + rnd() * 0.2 });
+    ISLETS.push({ cx: rnd() * W, cy: rnd() * H, hw: big ? 30 + rnd() * 50 : 0, hh: big ? 20 + rnd() * 35 : 0, w: big ? 0.8 + rnd() * 0.3 : 0.37 + rnd() * 0.2, islet: true });
   }
 }
 const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2, hh: ic.h / 2 })).concat(ISLETS);
@@ -367,12 +381,13 @@ function settleWorld() {                                              // the who
 function commit(fromEmpty = false) {
   const rects = iconRects(), single = !Span.world || Span.frames().length < 2;
   if (!fromEmpty && laid && FB && !diffRects(rects, laid).length) return;   // nothing moved
-  const reg = fromEmpty || single ? null : myRegion(rects);
+  // only the cells the change reaches; on one display that is exact, across several the rest of the world follows later
+  const reg = fromEmpty ? null : myRegion(rects);
   laid = rects;
-  if (!reg) { staleWorld = false; clearTimeout(worldT); }              // a whole-world layout: nothing left to settle
-  if (reg === 'none') { staleWorld = true; settleWorld(); return; }   // nothing near this display moved
+  if (!reg || single) { staleWorld = false; clearTimeout(worldT); }   // nothing left to settle
+  if (reg === 'none') { if (!single) { staleWorld = true; settleWorld(); } return; }   // nothing near this display moved
   const nf = computeField(rects, reg, FB);
-  if (reg) { staleWorld = true; settleWorld(); }
+  if (reg && !single) { staleWorld = true; settleWorld(); }
   const target = 1 - toI, t = performance.now();
   mixNow = mixAt(t);                                                  // where the land is now (updates can come every frame, before one is drawn)
   if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); }
@@ -769,18 +784,17 @@ function frame0(now) {
   lastT = now;
   const e = Math.min((now - morphT0) / morphDur, 1);
   const morphing = e < 1;
-  if (morphing || needMap) {
-    mixNow = mixAt(now);
-    renderMap(); needMap = false;
-  }
+  let draw = morphing || needMap;                                     // drawn once, after the towns have stepped
+  if (draw) mixNow = mixAt(now);
   // a changing map plays at the full rate until it has settled (the calm rate, 12 fps, is for a map at rest: a morph or
   // a town easing in drawn at it steps visibly); renewed every frame it's still moving, so it stops the moment it rests
   const settling = morphing;
   if (FB) { const t = Span.secs(16384);                     // (the world's clock: a ship's bob matches across a seam)
     if (Span.leader()) { for (const m of movers) { if (m.el.style.opacity === '0') m.el.style.opacity = 1; stepMover(m, dt, t); } stepBoat(dt, t); sendSea(now); }
     else applySea(t); }
-  if (stepTowns(dt)) { renderMap(); if (window.__twSettle) window.__twSettle(150); }
+  if (stepTowns(dt)) { draw = true; if (window.__twSettle) window.__twSettle(150); }
   else if (settling && window.__twSettle) window.__twSettle(150);
+  if (draw) { renderMap(); needMap = false; }
   if (layoutDirty && !morphing && now - lastLandChange > 600) layoutOverlay();
   requestAnimationFrame(frame);            // sprites keep sailing; the map only re-renders when the land changes
 }

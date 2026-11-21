@@ -91,8 +91,8 @@
 
   // fast movers keep each step small by moving no faster than the frames they can get allow
   window.__twMaxRate = () => LIVE / paceK;
-  window.__twHover = ms => { hoverUntil = extend(hoverUntil, ms); };
-  window.__twBoost = ms => { boostUntil = extend(boostUntil, ms); };
+  window.__twHover = ms => { const was = rateNow(); hoverUntil = extend(hoverUntil, ms); if (rateNow() > was) hurry(); };
+  window.__twBoost = ms => { const was = rateNow(); boostUntil = extend(boostUntil, ms); if (rateNow() > was) hurry(); };
   window.__twSettle = ms => { settleUntil = extend(settleUntil, ms); window.__twBoost(ms); };
   window.__twSettling = () => performance.now() < settleUntil;
 
@@ -109,17 +109,30 @@
 
   const raf = window.requestAnimationFrame.bind(window);
   let due = 0, lastT = -1, go = false;
-  window.requestAnimationFrame = cb => raf(function tick(t) {
+  function rateNow() { const now = performance.now(); return now < boostUntil ? LIVE : now < hoverUntil ? Math.max(HOVER, calmRate()) : calmRate(); }
+  // A loop that isn't due for a while sleeps on a timer rather than waking at every vsync to find it isn't due yet.
+  // A drag or the pointer arriving wakes the sleepers at once: the first frames of a move never wait out a calm step.
+  const sleeping = new Map();
+  const sleep = (tick, wait) => { const id = setTimeout(() => { sleeping.delete(id); raf(tick); }, wait); sleeping.set(id, tick); };
+  function hurry() {
+    if (!sleeping.size) return;
+    due = Math.min(due, performance.now());
+    for (const [id, tick] of sleeping) { clearTimeout(id); raf(tick); }
+    sleeping.clear();
+  }
+  window.requestAnimationFrame = cb => {
+    const wait = due - performance.now() - 6;
+    if (wait > 4) sleep(tick, wait); else raf(tick);
+    function tick(t) {
     if (t !== lastT) {
       lastT = t;
-      const now = performance.now();
-      const rate = now < boostUntil ? LIVE : now < hoverUntil ? Math.max(HOVER, calmRate()) : calmRate();
+      const step = paceK * 1000 / rateNow();
       go = t + 2 >= due;
-      if (go) due = Math.max(due + paceK * 1000 / rate, t);
+      if (go) due = due + step < t ? t + step : due + step;          // back from a rest: the next frame is a step away, not the next vsync
     }
     if (!go) {
       const wait = due - t - 6;
-      if (wait > 4) setTimeout(() => raf(tick), wait); else raf(tick);
+      if (wait > 4) sleep(tick, wait); else raf(tick);
       return;
     }
     if (!window.__prof) return cb(t);
@@ -127,5 +140,6 @@
     cb(t);
     window.__prof.n++;
     window.__prof.ms += performance.now() - start;
-  });
+    }
+  };
 })

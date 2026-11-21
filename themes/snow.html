@@ -19,7 +19,7 @@
 <canvas id="gl" class="layer"></canvas>
 <script>
 'use strict';
-window.__opaque = false;
+window.__opaque = true;       // the backdrop covers every pixel (it's drawn into the GL scene before the first frame): the compositor copies, never blends
 let W = innerWidth, H = innerHeight, K = devicePixelRatio, paused = false, fpsEMA = 0, fieldMs = 0;
 const P = { quality: 2 };
 const $ = id => document.getElementById(id), cv = $('bg');

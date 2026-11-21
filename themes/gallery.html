@@ -157,7 +157,8 @@ function setFrame(p, x, y, w, h, opt) {
 // a label goes where it fits: below the frame, else above, else beside it — never over anything else on the wall
 function setPlate(p, label, claimed) {
   p.plateBox = null;
-  if (label) { const [a, t, m] = p.plate.children; a.textContent = label.artist; t.textContent = label.title; m.textContent = label.medium; }
+  if (label) { const [a, t, m] = p.plate.children;                     // only when it changed: each write re-laid and repainted the label
+    if (a.textContent !== label.artist) a.textContent = label.artist; if (t.textContent !== label.title) t.textContent = label.title; if (m.textContent !== label.medium) m.textContent = label.medium; }
   if (!label) { p.plate.style.opacity = 0; return; }
   const [fx, fy, fx1, fy1] = p.box, fw = fx1 - fx, g = 14, PF = frameOf(p.box) || [0, 0, W, H], X0 = PF[0], X1 = PF[0] + PF[2], Y0 = PF[1], Y1 = PF[1] + PF[3];
   for (const sc of [1, .84, .72]) {
@@ -190,7 +191,11 @@ function place(p, x, y, w, h, opt) { setFrame(p, x, y, w, h, opt); setPlate(p, o
 let wins = [];                                                         // one piece per window, matched by app and position
 let niches = [], stands = [];
 // Stage Manager's thumbnails move as one strip: they share one recessed niche and one label, never a frame each
+let stripKey = null, standKey = null;
 function stageStrip(list) {
+  const key = JSON.stringify([list.filter(t => t.sm).map(t => [t.x, t.y, t.w, t.h]), FR, W, H]);
+  if (key === stripKey) return;                                        // the same strip (most messages, while a window is dragged): it stays up
+  stripKey = key;
   for (const n of niches) { n.el.remove(); n.plate.remove(); } niches = [];
   const groups = []; for (const t of list.filter(t => t.sm).sort((a, b) => a.x - b.x)) { const g = groups.find(g => Math.abs(g.cx - (t.x + t.w / 2)) < 60); if (g) g.items.push(t); else groups.push({ cx: t.x + t.w / 2, items: [t] }); }
   for (const g of groups) {
@@ -205,8 +210,14 @@ function stageStrip(list) {
 // wall shelf. A plinth needs a clear column down to the floor (nothing else in the way), or it becomes a shelf.
 const isWidget = t => /notification cent/i.test(t.app);
 function standWidgets(widgets, all) {
-  for (const s of stands) if (!s.icon) s.els.forEach(e => e.remove()); stands = stands.filter(s => s.icon);   // (the icon shelves stay up: shelveIcons keeps them)
   const PL = FRAMES.plinth;
+  // a widget's plinth needs a clear column down to the floor; whether each one has it is all the other windows decide
+  const column = t => { const WF = frameOf([t.x, t.y, t.x + t.w, t.y + t.h]), low = !WF || WF[1] + WF[3] >= H - 2, floorY = low ? H * .978 : -1e9;
+    const pw = t.w * 1.08, colX0 = t.x + t.w / 2 - pw / 2; return [colX0, t.y + t.h + 2, colX0 + pw, floorY]; };
+  const key = JSON.stringify([widgets.map(t => [t.x, t.y, t.w, t.h, all.some(o => o !== t && hit([o.x, o.y, o.x + o.w, o.y + o.h], [column(t)]))]), FR, W, H]);
+  if (key === standKey) return;                                        // the same stands as now: they stay up
+  standKey = key;
+  for (const s of stands) if (!s.icon) s.els.forEach(e => e.remove()); stands = stands.filter(s => s.icon);   // (the icon shelves stay up: shelveIcons keeps them)
   for (const t of widgets) {
     const WF = frameOf([t.x, t.y, t.x + t.w, t.y + t.h]), low = !WF || WF[1] + WF[3] >= H - 2, floorY = low ? H * .978 : -1e9;   // plinths stand on the floor, which only the lowest displays show
     const pw = t.w * 1.08, k = pw / PL.size[0], top = t.y + t.h - 3 - PL.front * k, colX0 = t.x + t.w / 2 - pw / 2, col = [colX0, t.y + t.h + 2, colX0 + pw, floorY];

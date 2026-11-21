@@ -39,6 +39,7 @@ final class Bench {
 
   private func run() {
     app.tracker.onUpdate = { _, _ in }   // the real, changing desk never reaches the pages
+    app.tracker.onCursor = { _ in }      // nor the real pointer (it boosted the wall under test whenever it crossed it)
     setUpDesk()
     if !sweep {
       after(1.5) { [self] in

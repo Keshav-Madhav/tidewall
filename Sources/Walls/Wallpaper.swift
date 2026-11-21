@@ -33,7 +33,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   private var lastLayout: (rects: [CGRect], owners: [String], pause: Bool)?
   private var pending: (() -> Void)?
   /// A theme that ignores the pointer says so ("nocursor"): no 120 Hz messages for it.
-  private var wantsCursor = true
+  private(set) var wantsCursor = true
   private var wasOverWindow = false
   private var lastOverSend = 0.0
   private var crashes: [Double] = []
@@ -114,10 +114,13 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     window.close()
   }
 
-  func send(_ json: String, live: Bool = false) {
-    guard ready else { return }
-    let lit = String(data: try! JSONSerialization.data(withJSONObject: [json]), encoding: .utf8)!
-    web.evaluateJavaScript("window.__live=\(live);window.__hostSend(\(lit)[0]);window.__live=false;null", completionHandler: nil)
+  func send(_ json: String, live: Bool = false) { send([json], live: live) }
+
+  /// Several messages in one go (one trip to the page, and it never draws with only some of them in).
+  func send(_ jsons: [String], live: Bool = false) {
+    guard ready, !jsons.isEmpty else { return }
+    let lit = String(data: try! JSONSerialization.data(withJSONObject: jsons), encoding: .utf8)!
+    web.evaluateJavaScript("window.__live=\(live);\(lit).forEach(s=>window.__hostSend(s));window.__live=false;null", completionHandler: nil)
   }
 
   // MARK: messages from the page
@@ -227,12 +230,11 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     let k = scale, o = cgFrame.origin
     let local = rects.map { $0.offsetBy(dx: -o.x, dy: -o.y) }
-    sendWindows(local, rects: rects, owners: owners, scale: k, live: live)
-    sendRoomAround(local, scale: k, live: live)
+    send([windowsMessage(local, rects: rects, owners: owners, scale: k, live: live), roomMessage(local, scale: k)].compactMap { $0 }, live: live)
   }
 
   /// The windows' own edges and app names, for themes that draw around the real window (Estate, say).
-  private func sendWindows(_ local: [CGRect], rects: [CGRect], owners: [String], scale k: CGFloat, live: Bool) {
+  private func windowsMessage(_ local: [CGRect], rects: [CGRect], owners: [String], scale k: CGFloat, live: Bool) -> String? {
     let raw = local.map { boxJSON($0, scale: k) }.joined(separator: ",")
     // Desktop widgets reach the themes under one name, whatever this Mac's language calls Notification Center.
     let named = owners.enumerated().map { i, o in
@@ -241,22 +243,20 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let names = String(data: try! JSONSerialization.data(withJSONObject: named), encoding: .utf8)!
     let sm = rects.map { Tracker.stageRects.contains("\($0)") ? "1" : "0" }.joined(separator: ",")
     let wins = "{\"t\":\"windows\",\"live\":\(live),\"r\":[\(raw)],\"n\":\(names),\"sm\":[\(sm)]}"
-    if wins != lastSent.windows {
-      lastSent.windows = wins
-      send(wins, live: live)
-    }
+    guard wins != lastSent.windows else { return nil }
+    lastSent.windows = wins
+    return wins
   }
 
-  private func sendRoomAround(_ local: [CGRect], scale k: CGFloat, live: Bool) {
+  private func roomMessage(_ local: [CGRect], scale k: CGFloat) -> String? {
     let m = Cfg.margin
     let icons = local.map { boxJSON($0.insetBy(dx: -m, dy: -m), scale: k) }.joined(separator: ",")
     // compared whole: with no windows the list is empty, and an empty list compared bare matched "never sent", so a
     // page opened on an empty desk never heard it and drew nothing until the first window appeared
     let message = "{\"t\":\"icons\",\"vis\":true,\"r\":[\(icons)]}"
-    if message != lastSent.icons {
-      lastSent.icons = message
-      send(message, live: live)
-    }
+    guard message != lastSent.icons else { return nil }
+    lastSent.icons = message
+    return message
   }
 
   func cursor(_ p: CGPoint) {

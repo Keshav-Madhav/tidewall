@@ -386,7 +386,7 @@ float hash2(vec2 p) {
 }
 float ss(float a, float b, float x) { float t = clamp((x - a) / (b - a), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
 vec4 N(vec2 p, float scale) { return texture(uNoise, p / scale + uSeed * 0.013); }
-float fieldS(sampler2D t, vec2 p) { return texture(t, (p / uStep + 0.5) / uGrid).r; }
+float fieldS(sampler2D t, vec2 p) { return textureLod(t, (p / uStep + 0.5) / uGrid, 0.0).r; }   // (no mipmaps: the same sample, and safe inside branches)
 
 vec3 seaRamp(float v) {
   v = clamp(v, 0.0, 1.0) * 4.0;
@@ -470,9 +470,12 @@ void main() {
   // 陆地太窄（探到对面的水）或水域太小（探不到深水）→ 浪减弱到平静
   vec2 gr = vec2(dFdx(s0), -dFdy(s0));
   vec2 nrm = length(gr) > 1e-4 ? normalize(gr) : vec2(0.0, 1.0);
-  float sIn = mix(fieldS(uFA, p - nrm * 45.0), fieldS(uFB, p - nrm * 45.0), uMix);
-  float sOut = mix(fieldS(uFA, p + nrm * 70.0), fieldS(uFB, p + nrm * 70.0), uMix);
-  float energy = mix(ss(2.0, -18.0, sIn), 1.0, ss(15.0, 40.0, s)) * ss(25.0, 70.0, sOut);
+  float energy = 1.0;                                    // Tidewall: only the sea reads it (on the sand ss(2, 10, s) is 0, so wk ignores it)
+  if (s > 2.0) {
+    float sIn = mix(fieldS(uFA, p - nrm * 45.0), fieldS(uFB, p - nrm * 45.0), uMix);
+    float sOut = mix(fieldS(uFA, p + nrm * 70.0), fieldS(uFB, p + nrm * 70.0), uMix);
+    energy = mix(ss(2.0, -18.0, sIn), 1.0, ss(15.0, 40.0, s)) * ss(25.0, 70.0, sOut);
+  }
   // 沙滩上（冲上来的薄水、湿沙带）用"岸线处"的能量：沿法线回到岸线上再往两边探。
   // 不能按像素自己的位置探——越往岸上离开阔水面越远、能量越小，薄水冲多远就取决于像素自己在哪，
   // 岸线一拐弯探的方向变得快，前沿就出现台阶和缺口
@@ -538,6 +541,7 @@ void main() {
       if (float(i) >= uKayN) break;
       vec4 k = uKay[i];
       vec2 q2 = rot(-k.z) * (p - k.xy - vec2(8.0, 13.0));
+      if (dot(q2, q2) > 900.0) continue;                // Tidewall: past the hull and the paddle, as the kayak itself
       float sd = hullSD(q2);
       vec2 pd = paddleSD(q2, k.w);
       shadow = max(shadow, ss(1.6, -1.6, min(sd, min(pd.x, pd.y))));

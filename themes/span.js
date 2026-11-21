@@ -30,7 +30,7 @@
   if (ch) ch.onmessage = e => {
     const m = e.data; if (!m || m.key !== key() || m.from === D.i) return;
     if (m.t === 'hb') { peers.set(m.from, { at: performance.now(), paused: !!m.paused, grace: !!m.grace }); return; }
-    if ((m.t === 'cur' || m.t === 'ccur') && !m.w && window.__twBoost) window.__twBoost(900);   // you're working on another display of this world: keep up
+    if ((m.t === 'cur' || m.t === 'ccur') && !m.w && window.__twHover) window.__twHover(900);   // the pointer is over this world on another display: keep up, at the pointer's rate (≤ 60)
     const f = handlers[m.t]; if (f) try { f(m); } catch (err) { try { webkit.messageHandlers.host.postMessage('JSERR span ' + m.t + ' ' + err.message); } catch (_) { } }
   };
   const beat = () => send('hb', { paused: pausedSelf, grace: inGrace() });

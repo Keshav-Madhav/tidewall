@@ -55,6 +55,8 @@ tools/update-test.sh [--quick]              # self-update end to end, isolated: 
                                             # app window never brought forward: tests run unseen while you work
 tools/thumbs.sh <theme>                     # regenerate a gallery thumbnail
 tools/mem.sh <theme> [--small]              # memory footprint of a theme's page
+tools/bench.sh LABEL SECS -- --theme T --layout cascade [--sweep] [--profile]   # cost: CPU + GPU of the app AND the WebKit
+                                            # processes that draw ("family"); TIDEWALL_ROOT=<checkout> measures another checkout
 ./tidewall --bench … --film DIR --film-start S --film-dur S --film-move dx,dy   # promo footage: timestamped 1920 px frames while a window glides
 ./tidewall --bench … --film DIR --choreo shot.json --timescale 0.4   # scripted desktop (keyframed windows, Stage Manager cards, cursor path)
                                                                        # in slow motion: the page's clocks run 0.4×, so frames play back smooth
@@ -63,7 +65,9 @@ tools/mem.sh <theme> [--small]              # memory footprint of a theme's page
 
 There are no unit tests: `tools/regress.sh` is the safety net (JS errors, crashes, pages that never get ready, blank walls; `tools/visual-check.py` compares each wall with `tools/visual-baseline.json`, and after a deliberate visual change, `--update-visuals` once you have looked at the sheet). Beyond that, verify by looking: `--bench --snapshot` (and `--frames DIR --every S` for motion, `--hop S`
 for a window moving) and read the image. `--bench` prints `window.__dbg()` every 3 s; themes put their state there.
-Run benches one at a time; several at once skew each other. Quit any running Tidewall before running `./tidewall`
+Run benches one at a time; several at once skew each other. One bench run is noise (GPU % swings 2–4×): compare
+before and after back to back, three times each, on mains power, and look at frames/s too (a wall drawing more frames
+costs more). Shader early-outs (`continue` in a loop) can make Apple GPUs slower: measure them, don't assume. Quit any running Tidewall before running `./tidewall`
 from source, or two wallpapers stack.
 
 ## Releasing (and how installed copies update)

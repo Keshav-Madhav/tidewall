@@ -22,6 +22,7 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #93c96b; }
   canvas.board { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+  .lamp { position: fixed; left: 0; top: 0; pointer-events: none; z-index: 2; opacity: 0; transition: opacity 380ms cubic-bezier(.45,0,.25,1); }
   .sprite { position: fixed; left: 0; top: 0; pointer-events: none; will-change: transform; z-index: 2; }
   .puff { position: fixed; left: 0; top: 0; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; pointer-events: none; z-index: 3;
     background: radial-gradient(circle at 38% 34%, #fff 0%, #f6f6f3 38%, #dcdcd6 64%, rgba(215,215,208,0) 71%);
@@ -743,12 +744,25 @@ function prep() {
     x.beginPath(); x.ellipse(h1(i * 1.7 + 1) * 80, h1(i * 2.3 + 2) * 80, r < .9 ? .6 : .8, r < .9 ? 1.2 : .8, 0, 0, 7); x.fill(); }
 }
 function speck(ctx) { let p = pats.get(ctx); if (!p) { p = ctx.createPattern(speckCv, 'repeat'); p.setTransform(new DOMMatrix().scale(1 / K)); pats.set(ctx, p); } return p; }
+// the bare ground (grass, its wash, the specks) never changes between builds: drawn once and copied, while the board
+// is being redrawn (a full-screen high-quality upscale and a pattern fill each time, before), and freed with the back buffer
+let ground = null, groundKey = '';
+function groundFor(target) {
+  const key = `${target.width}x${target.height}|${W}x${H}|${OX},${OY}|${K}`;
+  if (ground && groundKey === key && ground.wash === washCv) return ground;
+  if (!ground) ground = document.createElement('canvas');
+  ground.width = target.width; ground.height = target.height; ground.wash = washCv; groundKey = key;
+  const g = ground.getContext('2d'); g.setTransform(K, 0, 0, K, -OX * K, -OY * K);
+  g.fillStyle = '#93c96b'; g.fillRect(0, 0, W, H);
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; g.drawImage(washCv, 0, 0, W, H);
+  g.fillStyle = speck(g); g.fillRect(0, 0, W, H);
+  return ground;
+}
 function drawBoard(ctx) {
   const t0 = performance.now(); bx = ctx;
-  bx.setTransform(K, 0, 0, K, -OX * K, -OY * K); bx.globalAlpha = 1;   // the world, shifted so this display's part lands on its canvas
-  bx.fillStyle = '#93c96b'; bx.fillRect(0, 0, W, H);
-  bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = 'high'; bx.drawImage(washCv, 0, 0, W, H);
-  bx.fillStyle = speck(bx); bx.fillRect(0, 0, W, H);
+  bx.setTransform(1, 0, 0, 1, 0, 0); bx.globalAlpha = 1; bx.drawImage(groundFor(ctx.canvas), 0, 0);
+  bx.setTransform(K, 0, 0, K, -OX * K, -OY * K);                      // the world, shifted so this display's part lands on its canvas
+  bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = 'high';
   for (const f of fields) drawField(f);
   drawWater();
   bx.lineJoin = 'round';                                               // the hills, layer on layer: shadow, cut edge, top, a light catch on the rim
@@ -833,7 +847,9 @@ function drawGreen(s) {
   bx.save(); bx.globalAlpha = a; bx.fillStyle = 'rgba(35,70,25,.22)';
   for (const [px, py] of pts) { bx.beginPath(); bx.ellipse(px + 2.5, py - 1, 5, 2.6, .45, 0, 7); bx.fill(); }   // their shadows, to the lower right like the rest
   for (const [px, py, seed] of pts) { const list = ATLAS.T.bush, rr = list[Math.floor(h1(seed) * list.length)], dh = 8 + 2.5 * h1(seed + .3), dw = dh * rr[2] / rr[3];
-    bx.drawImage(IMG.trees, rr[0], rr[1], rr[2], rr[3], px - dw / 2, py - dh, dw, dh); }
+    const e = scaled('trees', rr, dw);                                  // from the pre-shrunk sheet, as every other tree: hundreds of high-quality downscales were the slow part
+    if (!e) { bx.drawImage(IMG.trees, rr[0], rr[1], rr[2], rr[3], px - dw / 2, py - dh, dw, dh); continue; }
+    const w = e.sw / K, h = e.sh / K; bx.drawImage(SC.cv, e.sx, e.sy, e.sw, e.sh, Math.round((px - w / 2) * K) / K, Math.round((py - h) * K) / K, w, h); }
   bx.restore();
 }
 function drawRoad(s) {
@@ -947,8 +963,42 @@ function drawLoop(st) {
   for (const e of [0, 1]) { const u = e ? LOOP_HALF - 6 : -LOOP_HALF + 6, p = at(st.L, st.s + u), a = tangent(st.L, st.s + u), o = -st.loopSide * 10, x = p[0] - Math.sin(a) * o, y = p[1] + Math.cos(a) * o;
     bx.globalAlpha = v; bx.fillStyle = 'rgba(30,60,20,.3)'; bx.fillRect(x - 2, y - 1.5, 5, 4.5);
     bx.fillStyle = '#4a4d55'; bx.beginPath(); bx.roundRect(x - 2.5, y - 2.5, 5, 4.5, 1); bx.fill();
-    bx.fillStyle = st.sw[e] ? '#4ee08a' : '#ff6b5a'; bx.beginPath(); bx.arc(x, y - .3, 1.3, 0, 7); bx.fill(); }
+    bx.fillStyle = st.sw[e] ? '#4ee08a' : '#ff6b5a'; bx.beginPath(); bx.arc(x, y - .3, 1.3, 0, 7); bx.fill();
+    (st.lampAt ||= [])[e] = [x, y - .3]; }
+  st.drawnSw = [st.sw[0], st.sw[1]]; st.drawnV = v;                    // what the board shows, for the lamps laid over it
   bx.globalAlpha = 1;
+}
+// A switch thrown between redraws: the board keeps its picture and a lamp the size of a pea cross-fades over the old
+// one (a whole board redraw and blend, every few seconds at rest, before). Drawn at the board's own pixel grid, on its
+// lever box's grey, so when the next redraw catches up it disappears with nothing to see.
+const lamps = new Map();
+function lampEl(st, e) {
+  const key = st.id + ':' + e; let el = lamps.get(key);
+  if (!el) { el = document.createElement('canvas'); el.className = 'lamp'; document.body.insertBefore(el, document.body.firstChild); lamps.set(key, el); el._st = st; el._col = null; void el.offsetWidth; }   // (laid out at 0 first, so its first showing fades)
+  return el;
+}
+function lampShow(st, e, on) {
+  const el = lampEl(st, e), [x, y] = st.lampAt[e], col = st.sw[e];
+  const lx = Math.floor((x - OX - 3) * K) / K, ly = Math.floor((y - OY - 3) * K) / K, at = `${lx},${ly}`;
+  if (on && (el._col !== col || el._at !== at)) {
+    el.width = el.height = Math.ceil(6 * K) + 1; el.style.width = el.style.height = el.width / K + 'px';
+    const c = el.getContext('2d'); c.setTransform(K, 0, 0, K, -lx * K, -ly * K);
+    c.fillStyle = '#4a4d55'; c.beginPath(); c.arc(x - OX, y - OY, 1.8, 0, 7); c.fill();
+    c.fillStyle = col ? '#4ee08a' : '#ff6b5a'; c.beginPath(); c.arc(x - OX, y - OY, 1.3, 0, 7); c.fill();
+    el.style.transform = `translate3d(${lx}px,${ly}px,0)`; el._col = col; el._at = at;
+  }
+  const o = on ? '1' : '0'; if (el.style.opacity !== o) el.style.opacity = o;
+}
+function switchThrown(st) {
+  if (st.drawnV !== 1 || !st.lampAt || !st.drawnSw) { swDirty = true; return; }   // the board is still fading it in: redraw
+  for (const e of [0, 1]) if (st.lampAt[e]) lampShow(st, e, st.sw[e] !== st.drawnSw[e]);
+}
+function lampsCaughtUp() {                                             // after a redraw has blended in: the board shows every lamp as it is
+  for (const [key, el] of lamps) {
+    const st = el._st, e = +key.split(':')[1];
+    if (!stations.includes(st) || !st.lampAt || !st.lampAt[e]) { el.remove(); lamps.delete(key); continue; }
+    el.style.transition = 'none'; lampShow(st, e, st.sw[e] !== st.drawnSw[e]); void el.offsetWidth; el.style.transition = '';
+  }
 }
 function junctionBox(b) {
   if (b.vis <= 0) return;
@@ -1054,7 +1104,9 @@ function drawWorldFrame() {
 let cv = document.getElementById('board'), back = null, lastPresent = 0, backFreed = true;
 let quick = false, rebuildGen = 0, presentGen = 0, blendT0 = 0;
 const BLEND = 380, blendF = (gen, now) => gen !== presentGen ? 0 : (t => t * t * (3 - 2 * t))(clamp((now - blendT0) / BLEND, 0, 1));
+let lampsT = 0;
 function present(blend) {
+  clearTimeout(lampsT); lampsT = setTimeout(lampsCaughtUp, blend ? BLEND + 60 : 0);
   if (!blend) { drawBoard(cv.getContext('2d')); return; }
   if (!back) { back = document.createElement('canvas'); back.className = 'board'; document.body.insertBefore(back, cv); }
   if (backFreed || back.width !== cv.width) { back.width = cv.width; back.height = cv.height; backFreed = false; }
@@ -1064,7 +1116,8 @@ function present(blend) {
   void back.offsetWidth; back.style.transition = `opacity ${BLEND}ms cubic-bezier(.45,0,.25,1)`; back.style.opacity = 1;
   [cv, back] = [back, cv];
 }
-function freeBack() { if (back && !backFreed && performance.now() - lastPresent > 1500) { back.width = back.height = 1; backFreed = true; pats.delete(back.getContext('2d')); } }
+function freeBack() { if (back && !backFreed && performance.now() - lastPresent > 1500) { back.width = back.height = 1; backFreed = true; pats.delete(back.getContext('2d'));
+  if (ground) { pats.delete(ground.getContext('2d')); ground.width = ground.height = 1; ground = null; groundKey = ''; } } }
 
 /* ======================= small pictures the compositor moves ======================= */
 function sprite(w, h, draw) {
@@ -1180,7 +1233,7 @@ function stepTrains(dt, layoutMoving) {
     // switches: set for the loop while the freight is near one end of it
     if (spec.kind === 'freight') for (const st of stations) if (st.ok && st.kind === 'main' && st.L === L) {
       const d = rel(L, t.s - st.s), sw = [d > -LOOP_HALF - 90 && d < -LOOP_HALF + 40 ? 1 : 0, d - len > LOOP_HALF - 60 || (d > LOOP_HALF - 60 && d - len < LOOP_HALF + 10) ? 1 : 0];
-      if (sw[0] !== st.sw[0] || sw[1] !== st.sw[1]) { st.sw = sw; swDirty = true; } }
+      if (sw[0] !== st.sw[0] || sw[1] !== st.sw[1]) { st.sw = sw; switchThrown(st); } }
     placeCars(t);
   }
 }
@@ -1326,7 +1379,8 @@ function stepBoats(dt) {
     placeBoat(b);
   }
 }
-function clearMovers() { for (const b of boats) b.el.remove(); boats = []; for (const c of rcars) c.el.remove(); rcars = []; for (const [, sp] of crSprites) { sp.arms.forEach(e => e.remove()); sp.lights.forEach(e => e.remove()); } crSprites.clear(); crossings = []; }
+function clearMovers() { for (const b of boats) b.el.remove(); boats = []; for (const c of rcars) c.el.remove(); rcars = []; for (const [, sp] of crSprites) { sp.arms.forEach(e => e.remove()); sp.lights.forEach(e => e.remove()); } crSprites.clear(); crossings = [];
+  for (const [, el] of lamps) el.remove(); lamps.clear(); }
 
 /* ---------- a balloon, now and then ---------- */
 const balPic = x => { x.scale(.85, .85);

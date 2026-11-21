@@ -19,7 +19,7 @@ window.DLWake = function (color, width = 1, life = 1.7, spreadRate = 16) {
     p.setAttribute('stroke-linecap', 'round'); p.setAttribute('opacity', (1 - b / BUCKETS) * .85);
     svg.appendChild(p); paths.push(p);
   }
-  const pts = [];
+  const pts = []; let cleared = false;
   let lastX = null, lastY = null;
   const attach = () => { if (!svg.isConnected && document.body) document.body.appendChild(svg); };
   return {
@@ -32,6 +32,8 @@ window.DLWake = function (color, width = 1, life = 1.7, spreadRate = 16) {
     reset() { lastX = lastY = null; },
     draw(now) {
       while (pts.length && now - pts[0].t > life * 1000) pts.shift();
+      if (!pts.length && cleared) return false;                         // no wake, and its paths already empty
+      cleared = !pts.length;
       const ds = paths.map(() => '');
       for (let i = 1; i < pts.length; i++) {
         const p = pts[i - 1], q = pts[i], age = (now - q.t) / 1000 / life, b = Math.min(BUCKETS - 1, Math.floor(age * BUCKETS));
@@ -108,7 +110,7 @@ function cursorAt(x, y) {
 }
 function companionCursor(m) {
   const k = devicePixelRatio || 1, x = m.x / k + offX(), y = m.y / k + offY();
-  cursorAt(x, y); if (W0()) Span.post('ccur', { x, y });
+  cursorAt(x, y); if (W0() && (isBeach() || isMeadow())) Span.post('ccur', { x, y });   // only themes with a companion listen
 }
 if (window.Span) Span.on('ccur', m => cursorAt(m.x, m.y));
 function sprite(w, h) {
