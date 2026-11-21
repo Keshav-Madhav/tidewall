@@ -113,7 +113,8 @@ internal static class Config
         }
     }
     public static bool Paused { get => Get("paused", false); set => Set("paused", value); }
-    public static double IdleMinutes { get => Get("idleMinutes", 3.0); set => Set("idleMinutes", value); }
+    /// Rest after this long with no keyboard or mouse (0: never). Test runs never rest: a CI machine has no input at all.
+    public static double IdleMinutes { get => Args.Has("--test") ? 0 : Get("idleMinutes", 3.0); set => Set("idleMinutes", value); }
     public static int Battery { get => Get("battery", 0); set => Set("battery", value); }
     public static string? Variant(string theme) => data["variant." + theme]?.GetValue<string>();
 }

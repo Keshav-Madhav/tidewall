@@ -59,6 +59,7 @@ internal static class TestRun
     /// CI: the runner's own windows out of the way, so the pictures show the test windows on the wall.
     static void ClearDesk(TidewallApp app)
     {
+        app.Tracker.Look();
         foreach (var t in app.Tracker.Windows) Native.ShowWindow(t.Handle, Native.SW_MINIMIZE);
         app.Tracker.Look();
     }
