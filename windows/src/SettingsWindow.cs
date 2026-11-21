@@ -24,8 +24,10 @@ internal sealed class SettingsWindow : Form
         pendingPage = page;
         Text = "Tidewall";
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(1180, 780);
-        MinimumSize = new Size(980, 680);
+        // as on the Mac, but never bigger than the screen it opens on (a small laptop screen, a VM)
+        var work = Screen.FromPoint(Cursor.Position).WorkingArea;
+        ClientSize = new Size(Math.Min(1180, work.Width - 40), Math.Min(780, work.Height - 60));
+        MinimumSize = new Size(Math.Min(980, work.Width), Math.Min(680, work.Height));
         BackColor = web.DefaultBackgroundColor;
         Icon = TidewallApp.AppIcon();
         Controls.Add(web);
