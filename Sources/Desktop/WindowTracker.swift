@@ -11,6 +11,8 @@ final class Tracker {
 
   static var idle = false
   static var allHidden = false
+  /// Some page on a showing screen follows the pointer (else the mouse moving needs no ticks of ours).
+  static var wantsCursor = true
   /// Stage Manager thumbnails and badges seen in the last read (macOS draws them tilted).
   static var stageRects = Set<String>()
   static var widgetRects = Set<String>()
@@ -27,6 +29,7 @@ final class Tracker {
   private var lastPoll = 0.0
   private var burstUntil = 0.0
   private var mouseUntil = 0.0
+  private var pressUntil = 0.0
   private var lastCursor = CGPoint(x: -1, y: -1)
   private var lastCursorT = 0.0
   private var wasDragging = false
@@ -37,12 +40,15 @@ final class Tracker {
   private var stats = PollStats()
 
   func start() {
-    schedule(fast: false)
+    schedule(interval: slowInterval)
     let mouse: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
-    mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouse) { [weak self] _ in
+    mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouse) { [weak self] e in
       guard let self, !Self.idle else { return }
+      // the pointer just moving: ticks only to pass it on (at the 60 the pages take), and none if no page wants it;
+      // a press (a drag may start) watches the windows at 120 Hz
+      if e.type == .mouseMoved { guard Self.wantsCursor else { return } } else { pressUntil = now() + 0.4 }
       mouseUntil = now() + 0.4
-      schedule(fast: true)
+      schedule(interval: e.type == .mouseMoved && now() >= pressUntil ? Self.cursorInterval : Self.fastInterval)
     }
     let nc = NSWorkspace.shared.notificationCenter
     for n in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification,
@@ -55,7 +61,7 @@ final class Tracker {
   func burst(_ s: Double) {
     burstUntil = max(burstUntil, now() + s)
     lastPoll = 0
-    schedule(fast: true)
+    schedule(interval: Self.fastInterval)
   }
 
   func forceResend() {
@@ -65,12 +71,14 @@ final class Tracker {
 
   private func now() -> Double { ProcessInfo.processInfo.systemUptime }
 
-  /// Every screen covered: a look twice a second is plenty.
-  private var slowInterval: Double { Self.allHidden ? 0.5 : Self.idleInterval }
+  /// Every screen covered: a look twice a second is plenty; resting (paused, locked, asleep, idle), every 2 s.
+  private var slowInterval: Double { Self.idle ? 2 : Self.allHidden ? 0.5 : Self.idleInterval }
+  private static let fastInterval = 1.0 / 120, cursorInterval = 1.0 / 60
 
-  private func schedule(fast: Bool) {
-    let interval = fast ? 1.0 / 120 : slowInterval
-    if timer != nil && fast == fastTimer && interval == timerInterval { return }
+  /// Ticks every `interval`; a faster timer already running stays (a press beats the pointer moving).
+  private func schedule(interval: Double) {
+    let fast = interval < slowInterval
+    if timer != nil && (interval == timerInterval || (fast && fastTimer && timerInterval < interval)) { return }
     timer?.invalidate()
     fastTimer = fast
     timerInterval = interval
@@ -85,7 +93,11 @@ final class Tracker {
     trackCursor(at: t)
     let dragging = NSEvent.pressedMouseButtons & 1 != 0 || SimInput.pressed
     let fast = dragging || t < burstUntil
-    if !fast && t > mouseUntil && (fastTimer || timerInterval != slowInterval) { schedule(fast: false) }
+    if !fast && t > mouseUntil && (fastTimer || timerInterval != slowInterval) { schedule(interval: slowInterval) }
+    else if !fast && t > pressUntil && timerInterval == Self.fastInterval {   // the press is over, the pointer still moving
+      timer?.invalidate(); timer = nil
+      schedule(interval: Self.wantsCursor ? Self.cursorInterval : slowInterval)
+    }
     holdLowLatency(fast, at: t)
     // fast: every tick, as the page paces itself to its own fps
     guard fast || t - lastPoll >= (Self.idle ? 2 : slowInterval) else { return }
@@ -114,7 +126,7 @@ final class Tracker {
 
   /// The pointer, at most 60 times a second: the pages draw at most 60 fps while you work, so more is only overhead.
   private func trackCursor(at t: Double) {
-    guard t - lastCursorT >= 1.0 / 60 else { return }
+    guard t - lastCursorT >= 1.0 / 60 - 0.004 else { return }   // (slack: a tick a hair early mustn't halve the rate)
     let m = SimInput.point ?? NSEvent.mouseLocation
     guard m != lastCursor else { return }
     lastCursor = m
@@ -191,19 +203,22 @@ final class Tracker {
   }
 }
 
-/// The exact area (pt²) of a screen no window covers: the union of the rects by coordinate compression. A handful of
-/// rects take microseconds, and a 2 pt sliver between windows still counts (no sampling to miss it).
-func uncoveredArea(_ screen: CGRect, _ rects: [CGRect]) -> Double {
+/// Whether less than 1 pt² of a screen shows past the windows: the uncovered area by coordinate compression, stopping
+/// as soon as the answer is known. A handful of rects take microseconds, and a 2 pt sliver between windows still counts
+/// (no sampling to miss it).
+func isCovered(_ screen: CGRect, _ rects: [CGRect]) -> Bool {
   let rs = rects.map { $0.intersection(screen) }.filter { !$0.isNull && $0.width > 0 && $0.height > 0 }
-  if rs.isEmpty { return Double(screen.width * screen.height) }
+  if rs.isEmpty { return Double(screen.width * screen.height) < 1 }
+  if rs.contains(where: { $0.contains(screen) }) { return true }
   let xs = Array(Set(rs.flatMap { [$0.minX, $0.maxX] } + [screen.minX, screen.maxX])).sorted()
   let ys = Array(Set(rs.flatMap { [$0.minY, $0.maxY] } + [screen.minY, screen.maxY])).sorted()
   var free = 0.0
   for i in 0..<(xs.count - 1) {
     for j in 0..<(ys.count - 1) {
       let centre = CGPoint(x: (xs[i] + xs[i + 1]) / 2, y: (ys[j] + ys[j + 1]) / 2)
-      if !rs.contains(where: { $0.contains(centre) }) { free += Double((xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j])) }
+      if !rs.contains(where: { $0.contains(centre) }) { free += Double((xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j])); if free >= 1 { return false } }
     }
   }
-  return free
+  return free < 1
 }
+

@@ -39,6 +39,7 @@ final class Bench {
 
   private func run() {
     app.tracker.onUpdate = { _, _ in }   // the real, changing desk never reaches the pages
+    app.tracker.onCursor = { _ in }      // nor the real pointer (it boosted the wall under test whenever it crossed it)
     setUpDesk()
     if !sweep {
       after(1.5) { [self] in
@@ -52,6 +53,7 @@ final class Bench {
       startSweep()
     }
     logStatsEvery3s()
+    measureFamily()
     if let dir = argValue("--film") { film(into: dir) }
     if let dir = argValue("--frames") { takeFrames(into: dir) }
     if let shot = argValue("--snapshot") { snapshot(shot) }
@@ -116,6 +118,17 @@ final class Bench {
   }
 
   // MARK: stats
+
+  /// What the whole run cost from 6 s in (loaded and settled) to the end: CPU and GPU of the app and every process
+  /// macOS bills to it (WebKit's web content and GPU processes do the drawing), for tools/bench.sh.
+  private func measureFamily() {
+    let meter = Usage()
+    after(6) { _ = meter.sample() }
+    after(max(secs - 0.5, 6.5)) {
+      let s = meter.sample()
+      log(String(format: "bench usage cpu=%.1f gpu=%.1f mem=%.0f procs=%d", s.cpu, s.gpu, s.memMB, s.procs))
+    }
+  }
 
   private static let statsProbe = "(()=>{try{return [(window.__prof?('JSms/frame='+(__prof.ms/Math.max(1,__prof.n)).toFixed(2)+' frames/s='+(__prof.n/((performance.now()-__prof.t0)/1000)).toFixed(1)):''),(typeof window.__dbg==='function'?__dbg():''), (typeof icons!=='undefined'?'icon0='+JSON.stringify(icons[0]&&{x:icons[0].x|0,y:icons[0].y|0,w:icons[0].w|0,h:icons[0].h|0})+' s@c='+(typeof curS==='function'&&icons[0]?curS(icons[0].x+icons[0].w/2,icons[0].y+icons[0].h/2).toFixed(0):'-')+' frames='+(typeof frameN!=='undefined'?frameN:'-')+' icons='+icons.length+' mix='+(typeof curMix!=='undefined'?curMix.toFixed(2):'-')+' from/to='+(typeof fromI!=='undefined'?fromI+'/'+toI:'-')+' morphT0='+(typeof morphT0!=='undefined'?(morphT0|0):'-')+' FB='+(typeof FB!=='undefined'&&!!FB)+' iconsSeen='+(typeof iconsSeen!=='undefined'?iconsSeen:'-'):''), 'dpr=' + devicePixelRatio, cv.width+'x'+cv.height, cv._scale, P.quality, Math.round(fpsEMA), fieldMs.toFixed(1), (window.__gl?window.__gl.drawingBufferWidth:0)+'x'+(window.__gl?window.__gl.drawingBufferHeight:0), paused].join(' ')}catch(e){return 'page loading'}})()"
 

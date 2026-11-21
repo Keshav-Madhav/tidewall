@@ -517,7 +517,7 @@ void main() {
    WebGL
    ====================================================================== */
 const cv = document.getElementById('art');
-const gl = cv.getContext('webgl2', { antialias: false });
+const gl = cv.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });   // kept between frames: between cloud updates only the boy's corner is redrawn
 if (!gl) document.getElementById('nogl').style.display = 'grid';
 function program(fs) {
   const mk = (type, src) => {
@@ -953,7 +953,7 @@ function frame(now) {
   if (++frameN % 10 === 0) updateStats();
 }
 const isMainDisplay = () => { const [mx, my] = Span.main; return mx >= OX && my >= OY && mx < OX + W && my < OY + H; };
-let circAt = -1e9, redraw = true;                          // Tidewall: when the clouds were last rebuilt; something else needs a frame
+let circAt = -1e9, redraw = true, lastBoxes = null;                          // Tidewall: when the clouds were last rebuilt; something else needs a frame
 function draw(now) {
   const measure = !!window.__measure && frameN % 20 === 0,   // Tidewall: a GPU stall every 20 frames, only when profiling
     t0 = performance.now();
@@ -973,6 +973,15 @@ function draw(now) {
   window.__twCalm = actor || cat ? 30 : 15;                 // only the clouds moving: 15 frames a second is plenty
   if (!actor && !cat && !circDue && !redraw) return;
   if (circDue) { uploadCircles((now - T0) / 1000); circAt = now; }
+  // Between cloud updates nothing changes but the boy (and the cat, drawn in its own pass below): only the box he was in
+  // and the box he's in now are drawn again. The shader is the same and nothing it reads has changed, so the rest of the
+  // picture is exactly what it would draw.
+  const k = cv._scale, box = r => r && [Math.max(0, Math.floor(r[0] * k) - 1), Math.max(0, Math.floor(r[1] * k) - 1), Math.min(cv.width, Math.ceil((r[0] + r[2]) * k) + 1), Math.min(cv.height, Math.ceil((r[1] + r[3]) * k) + 1)];
+  const aBox = box(actor && actor.rect), cBox = box(cat && cat.bounds);
+  const part = !circDue && !redraw && !!aBox && !!lastBoxes;
+  let clip = null;
+  if (part) for (const b of [aBox, cBox, ...lastBoxes]) if (b) clip = clip ? [Math.min(clip[0], b[0]), Math.min(clip[1], b[1]), Math.max(clip[2], b[2]), Math.max(clip[3], b[3])] : b.slice();
+  lastBoxes = [aBox, cBox];
   redraw = false;
   const render=(renderer,withCat)=>{
     const { p, U } = renderer;
@@ -1006,7 +1015,8 @@ function draw(now) {
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   };
-  render(actor?actorPR:PR,false);
+  if (clip) { gl.enable(gl.SCISSOR_TEST); gl.scissor(clip[0], cv.height - clip[3], Math.max(0, clip[2] - clip[0]), Math.max(0, clip[3] - clip[1])); }
+  try { render(actor?actorPR:PR,false); } finally { if (clip) gl.disable(gl.SCISSOR_TEST); }
   if(cat){
     if(actor&&!catActorPR)catActorPR=program(FS.replace('#version 300 es','#version 300 es\n#define MEADOW_ACTOR\n#define MEADOW_CAT'));
     if(!actor&&!catPR)catPR=program(FS.replace('#version 300 es','#version 300 es\n#define MEADOW_CAT'));

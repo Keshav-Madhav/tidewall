@@ -463,8 +463,14 @@ function buildPaper({ W, H, K, seed, OX = 0, OY = 0, WW = W, WH = H, E = null })
   const R = rng(seed + 77), S = 2, sw = Math.ceil(W / S), sh = Math.ceil(H / S);
   // how far inside the sheet: to the world's outside edges (E: segments), else to this display's own edges
   const edgeD = (X, Y) => { if (!E) return Math.min(X, Y, W - X, H - Y); let d = 1e9; for (const [ax, ay, bx, by] of E) { const px = X - ax, py = Y - ay, vx = bx - ax, vy = by - ay, h = Math.max(0, Math.min(1, (px * vx + py * vy) / (vx * vx + vy * vy || 1))); d = Math.min(d, Math.hypot(px - vx * h, py - vy * h)); } return d; };
-  const small = new OffscreenCanvas(sw, sh), sx = small.getContext('2d'), img = sx.createImageData(sw, sh), d = img.data;
   const ox = R() * 100, oy = R() * 100;
+  // The sheet itself (noise, creases, burnt edges) is the same every time for the same place and seed: worked out once,
+  // reused by every later town (each built it again, twice at boot and on every change of the big windows)
+  const key = JSON.stringify([W, H, seed, OX, OY, WW, WH, E]);
+  if (paperCache.key !== key) { paperCache.key = key; paperCache.small = sheet(); }
+  return finishPaper(paperCache.small, R, { W, H, K, OX, OY, WW, WH, E });
+  function sheet() {
+  const small = new OffscreenCanvas(sw, sh), sx = small.getContext('2d'), img = sx.createImageData(sw, sh), d = img.data;
   for (let j = 0; j < sh; j++) for (let i = 0; i < sw; i++) {
     const X = i * S + OX, Y = j * S + OY;
     // base: warm tan, lighter towards the middle, mottled
@@ -483,6 +489,11 @@ function buildPaper({ W, H, K, seed, OX = 0, OY = 0, WW = W, WH = H, E = null })
     d[o] = r + grain; d[o + 1] = g + grain; d[o + 2] = b + grain * .8; d[o + 3] = 255;
   }
   sx.putImageData(img, 0, 0);
+  return small;
+  }
+}
+const paperCache = { key: '', small: null };
+function finishPaper(small, R, { W, H, K, OX, OY, WW, WH, E }) {
   const cv = new OffscreenCanvas(Math.round(W * K), Math.round(H * K)), x = cv.getContext('2d');
   x.imageSmoothingQuality = 'high'; x.drawImage(small, 0, 0, cv.width, cv.height); x.setTransform(K, 0, 0, K, -OX * K, -OY * K);
   // fine fibre grain at full resolution

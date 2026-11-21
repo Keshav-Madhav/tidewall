@@ -13,7 +13,9 @@ extension App {
     if !benchMode && !live { updateCoveredScreens() }
     scheduleCoverCheck()
     let resting = userPaused || asleep || idleRest
+    let wasIdle = Tracker.idle
     Tracker.idle = resting || power.paused
+    if wasIdle && !Tracker.idle { tracker.burst(0) }                    // back: a fresh look now, not at the next 2 s rest tick
     if resting { scheduleRelease() } else { cancelRelease() }
 
     let hidden = NSScreen.screens.allSatisfy { dormant.contains($0.displayID) || coveredSince[$0.displayID] != nil }
@@ -29,11 +31,12 @@ extension App {
       w.realRects = lastRects.filter { $0.intersects(w.cgFrame) }
       w.usable = benchMode ? nil : usableFrame(w)
       // never pause while windows move: a sliver of the scene may still show and must keep up
-      let onlyBehindBars = !live && uncoveredArea(benchMode ? w.cgFrame : usableFrame(w), w.realRects) < 1
+      let onlyBehindBars = !live && isCovered(benchMode ? w.cgFrame : usableFrame(w), w.realRects)
       let pause = resting || power.paused || onlyBehindBars
       if !pause && w.ready && w.seenSince == nil { w.seenSince = now }
       w.update(rects: shown.map { lastRects[$0] }, owners: shown.map(owner), live: live, pause: pause)
     }
+    Tracker.wantsCursor = Cfg.reactCursor && walls.values.contains { $0.paused == false && $0.wantsCursor }
   }
 
   private func owner(_ i: Int) -> String { i < lastOwners.count ? lastOwners[i] : "" }
@@ -64,8 +67,8 @@ extension App {
     let now = ProcessInfo.processInfo.systemUptime
     for s in NSScreen.screens {
       let id = s.displayID
-      let full = uncoveredArea(s.cgFrame, lastRects) < 1
-      let covered = full || uncoveredArea(usableFrame(s), lastRects) < 1
+      let covered = isCovered(usableFrame(s), lastRects)                 // (the usable part lies inside the whole screen)
+      let full = covered && isCovered(s.cgFrame, lastRects)
       if covered {
         if coveredSince[id] == nil {
           coveredSince[id] = now

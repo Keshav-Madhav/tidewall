@@ -128,6 +128,7 @@ final class App: NSObject, NSApplicationDelegate {
         dispatch(live: false)
       }
     }
+    idleTimer?.tolerance = 0.25                                        // a second, give or take: macOS can fold it in with other wake-ups
   }
 
   private func observeSystem() {

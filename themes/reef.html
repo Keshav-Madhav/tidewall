@@ -1161,14 +1161,27 @@ function common(p) {
   bindTex(p, [['uNrm', nrmTex], ['uLight', litTex], ['uShadow', shTex], ['uSand', sandTex], ['uA', atlasA], ['uNm', atlasN], ['uRuf', rufTex], ['uRock', rockTex], ['uGrow', grow[gi]]]);
 }
 const full = () => { gl.bindVertexArray(emptyVao); gl.drawArrays(gl.TRIANGLES, 0, 3); };
+// The reefs grow towards a target that only changes when windows (or the world) do; once they've grown in there's
+// nothing left to step, so the grow pass rests until the target changes again.
+const growWas = { R: new Float32Array(32 * 4), B: new Float32Array(32 * 4), Bm: new Float32Array(16 * 4), key: '' };
+let growSince = 0;
+function growTargetChanged() {
+  const key = `${nR}|${bommies.length}|${SW}x${SH}|${W}x${H}|${OX},${OY}|${gw}x${gh}`;
+  let same = key === growWas.key;
+  for (let i = 0; same && i < nR * 4; i++) same = uR[i] === growWas.R[i] && uB[i] === growWas.B[i];
+  for (let i = 0; same && i < 64; i++) same = uBm[i] === growWas.Bm[i];
+  if (same) return false;
+  growWas.key = key; growWas.R.set(uR); growWas.B.set(uB); growWas.Bm.set(uBm); growSince = performance.now(); return true;
+}
 function render() {
   const dw = cv.width, dh = cv.height;
   gl.disable(gl.BLEND);
   // the reefs grow towards where the windows are now
+  if (growTargetChanged() || growReset || performance.now() - growSince < 30000) {   // grown in: after 30 s still the rest is under a half-float step
   gl.bindFramebuffer(gl.FRAMEBUFFER, growF[1 - gi]); gl.viewport(0, 0, gw, gh); gl.useProgram(GROW);
   bindTex(GROW, [['uPrev', grow[gi]]]); gl.uniform2f(GROW.u.uRes, SW, SH); worldU(GROW); gl.uniform1f(GROW.u.uDt, growReset ? 100 : DT); growReset = false;
   gl.uniform4fv(GROW.u.uR, uR); gl.uniform4fv(GROW.u.uB, uB); gl.uniform1i(GROW.u.uN, nR);
-  gl.uniform4fv(GROW.u.uBm, uBm); gl.uniform1i(GROW.u.uNB, bommies.length); full(); gi = 1 - gi;
+  gl.uniform4fv(GROW.u.uBm, uBm); gl.uniform1i(GROW.u.uNB, bommies.length); full(); gi = 1 - gi; }
   // ripples: 60 steps a second whatever the frame rate (the wave travels and dies away at the same pace at 30 fps)
   ripAcc = Math.min(ripAcc + DT, 4 / 60);
   const dd = DROPS; dd.fill(0); drops.forEach((d, i) => dd.set(d, i * 4));            // radius in ripple texels

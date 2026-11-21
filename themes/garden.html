@@ -66,7 +66,9 @@ function nodeAt(id) { if (id === 'pond') return pond.life > .01 ? [pond.x, pond.
 const gate = { x: 0, ly: 0, ry: 0 };
 
 /* ======================= windows → beds (eased, so the plan morphs) ======================= */
+const slotSig = () => slots.map(c => `${c.id}:${c.tx},${c.ty},${c.tw},${c.th},${c.alive}`).join('|');
 function setTargets(list) {
+  const was = slotSig();
   // Stage Manager's thumbnails make one long bed, not a row of tiny ones
   const sm = list.filter(t => t.sm), rest = list.filter(t => !t.sm && t.w >= 50 && t.h >= 40);
   if (sm.length) { const x0 = Math.min(...sm.map(t => t.x)), y0 = Math.min(...sm.map(t => t.y)), x1 = Math.max(...sm.map(t => t.x + t.w)), y1 = Math.max(...sm.map(t => t.y + t.h));
@@ -79,6 +81,7 @@ function setTargets(list) {
     else { const id = nextId++, c = { id, style: t.owner === '__icons' ? 4 : Math.floor(h1(id * 3.17 + SEED * 1.3) * 4), owner: t.owner, x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, life: 0, alive: true }; slots.push(c); used.add(c); }
   }
   for (const c of slots) if (!used.has(c)) c.alive = false;
+  if (slotSig() === was) return;                                       // the same beds (a drag's last message, the icons resent): nothing to redraw
   plan(); wake();
 }
 // the layout's bones, recomputed from where things are going: the pond's spot, the walks between beds, the gate
@@ -217,7 +220,7 @@ const PLAN = prog(`#version 300 es
 out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUV = p; gl_Position = vec4(p * 2. - 1., 0., 1.); }`, `#version 300 es
 precision highp float; in vec2 vUV; out vec4 o;
 uniform vec2 uRes, uOff; uniform float uK, uSeed; uniform vec4 uE[${MAXE}]; uniform int uNE;
-uniform vec4 uR[${MAXR}]; uniform float uRL[${MAXR}], uRS[${MAXR}]; uniform int uN;
+uniform vec4 uR[${MAXR}]; uniform float uRL[${MAXR}], uRS[${MAXR}], uRI[${MAXR}]; uniform int uN;
 uniform vec4 uO[${MAXO}]; uniform int uNO;
 uniform vec4 uS[${MAXS}]; uniform float uSW[${MAXS}]; uniform int uNS;
 uniform vec4 uPond;
@@ -239,8 +242,8 @@ void main() {
   float eW = 1e5, eWs = 1e5, best = 1e5, styl = 0., bedSeed = 0.;
   for (int i = 0; i < ${MAXR}; i++) { if (i >= uN) break; vec4 r = uR[i]; float sh = (1. - uRL[i]) * SHRINK;
     float d = sdRB(p - r.xy - r.zw * .5, r.zw * .5, 10.) + sh;
-    eW = smin(eW, d, 14.); if (d < best) { best = d; styl = uRS[i]; bedSeed = float(i) * 7.3 + uRS[i] * 13.1; }
-    eWs = min(eWs, sdRB(p - vec2(2.5, 3.5) - r.xy - r.zw * .5, r.zw * .5, 10.) + sh); }   // the same beds, offset: the hedges' shadows
+    eW = smin(eW, d, 14.); if (d < best) { best = d; styl = uRS[i]; bedSeed = uRI[i] * 7.3 + uRS[i] * 13.1; }   // the bed's own id: by its place in the list, closing a window re-planted every bed after it
+    eWs = min(eWs, sdRB(p - vec2(2.5, 3.5) - r.xy - r.zw * .5, r.zw * .5, 10.) + sh); }   // the same beds, offset: the hedges' shadows (only read below BED + 1, and the offset is 4.3)
   float eP = uPond.w > .01 ? length(p - uPond.xy) - uPond.z * uPond.w : 1e5;
   float segD = 1e5;
   for (int i = 0; i < ${MAXS}; i++) { if (i >= uNS) break; segD = min(segD, sdSeg(p, uS[i].xy, uS[i].zw) - PW * .5 * uSW[i]); }
@@ -431,17 +434,19 @@ function render() {
   ornaments();
   layTrees();
   gl.bindTexture(gl.TEXTURE_2D, treeTex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, TG[0], TG[1], 0, gl.RGBA, gl.FLOAT, treeArr);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  if (treeTex.size !== TG[0] + 'x' + TG[1]) { treeTex.size = TG[0] + 'x' + TG[1];
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, TG[0], TG[1], 0, gl.RGBA, gl.FLOAT, treeArr);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST); }
+  else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TG[0], TG[1], gl.RGBA, gl.FLOAT, treeArr);
   gl.viewport(0, 0, cv.width, cv.height); gl.useProgram(PLAN);
-  const R = new Float32Array(MAXR * 4), RL = new Float32Array(MAXR), RS = new Float32Array(MAXR); let n = 0;
-  for (const s of slots) { if (n >= MAXR) break; R.set([s.x, s.y, s.w, s.h], n * 4); RL[n] = s.life; RS[n] = s.style + .01; n++; }
+  const R = new Float32Array(MAXR * 4), RL = new Float32Array(MAXR), RS = new Float32Array(MAXR), RI = new Float32Array(MAXR); let n = 0;
+  for (const s of slots) { if (n >= MAXR) break; R.set([s.x, s.y, s.w, s.h], n * 4); RL[n] = s.life; RS[n] = s.style + .01; RI[n] = (s.id - 1) % 997; n++; }   // (ids start at 1: the first beds keep the plantings they always had)
   const S = new Float32Array(MAXS * 4), SW = new Float32Array(MAXS); let m = 0;
   for (const g of segs) { if (m >= MAXS) break; const a = nodeAt(g.a), b = nodeAt(g.b); if (!a || !b) continue; S.set([a[0], a[1], b[0], b[1]], m * 4); SW[m] = g.life; m++; }
   const E = new Float32Array(MAXE * 4); EDGES.slice(0, MAXE).forEach((e, i) => E.set(e, i * 4));
   gl.uniform4fv(PLAN.u.uE, E); gl.uniform1i(PLAN.u.uNE, Math.min(EDGES.length, MAXE)); gl.uniform2f(PLAN.u.uOff, OX, OY);
   gl.uniform2f(PLAN.u.uRes, VW, VH); gl.uniform1f(PLAN.u.uK, K); gl.uniform1f(PLAN.u.uSeed, SEED * 3.7);
-  gl.uniform4fv(PLAN.u.uR, R); gl.uniform1fv(PLAN.u.uRL, RL); gl.uniform1fv(PLAN.u.uRS, RS); gl.uniform1i(PLAN.u.uN, n);
+  gl.uniform4fv(PLAN.u.uR, R); gl.uniform1fv(PLAN.u.uRL, RL); gl.uniform1fv(PLAN.u.uRS, RS); gl.uniform1fv(PLAN.u.uRI, RI); gl.uniform1i(PLAN.u.uN, n);
   gl.uniform4fv(PLAN.u.uO, OB.arr); gl.uniform1i(PLAN.u.uNO, OB.n);
   gl.uniform4fv(PLAN.u.uS, S); gl.uniform1fv(PLAN.u.uSW, SW); gl.uniform1i(PLAN.u.uNS, m);
   gl.uniform4f(PLAN.u.uPond, pond.x, pond.y, pond.r, pond.life);
@@ -693,13 +698,13 @@ function placeBlock() {
 
 /* ======================= loop: the plan is drawn only while it changes; the little lives go on ======================= */
 let running = false, lastT = 0;
-function wake() { dirty = true; if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
+function wake(redraw = true) { if (redraw) dirty = true; if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
 function loop(now) { try { loop0(now); } catch (e) { running = false; post('JSERR loop ' + e.message + ' ' + (e.stack || '').split('\n')[0]); setTimeout(wake, 1000); } }
 function loop0(now) {
   if (paused) { running = false; return; }
-  const dt = lastT ? Math.min((now - lastT) / 1000, .1) : 1 / 30; lastT = now;
+  const gap = lastT ? (now - lastT) / 1000 : 1 / 30, dt = Math.min(gap, .1); lastT = now;
   fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
-  const moving = stepLayout(dt);
+  const moving = stepLayout(Math.min(gap, .5));                       // the plan eases in real time (it's exponential): a slow renderer isn't made to draw 30 frames of it
   if (moving) window.__twSettle && window.__twSettle(150);   // the plan easing to a new layout plays at the full rate until it has settled
   if (moving || dirty) { render(); dirty = false; }
   if (Span.leader()) { stepGardeners(dt, moving); stepBirds(dt); sendLife(now); }
@@ -722,7 +727,7 @@ function curAt(x, y, from) { if (Math.hypot(x - cur.x, y - cur.y) > 2) cur.t = p
 Span.on('cur', m => curAt(m.x, m.y, m.from));
 Span.on('curoff', m => { if (curFrom === m.from) cur.on = false; });
 const handle = m => {
-  if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
+  if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(false); return; }   // the picture is still there
   if (m.t === 'desk') { const k = [m.i, m.x, m.y, m.w, m.h, JSON.stringify(m.fr || [])].join('|'); if (k === deskKey) return; deskKey = k;
     Span.desk(m); SEED = Span.world ? 7 : m.i | 0;                    // one world: one garden (each display alone grows its own)
     for (const g of gardeners) { g.placed = false; g.path = null; } for (const b of birds) b.placed = false; remote = null; build(); return; }

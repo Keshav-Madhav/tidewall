@@ -255,7 +255,7 @@ void main() {
   float band = wand ? 1. : uNS > 0 ? mix(.025, .8, exp(-pow(near / .06, 2.))) : mix(.025, 1., exp(-pow(near / .17, 2.)));   // bright smoke around the model, faint toward the edges: no screen full of stripes
   vA = ok ? band * fade * pow(min(1., uRef * uK / max(len, 1e-3)), 2.) * (wand ? .9 : .8 + .35 * h1(float(row) + 3.)) : 0.;   // the light sheet lights some lines a little more
   vec2 d = len > 1e-4 ? dv / len : vec2(1., 0.), n = vec2(-d.y, d.x);
-  int e = (c == 1 || c == 4 || c == 5) ? 1 : 0; float side = (c == 2 || c == 3 || c == 5) ? 1. : -1., hw = uW * .5 + 1.;
+  int e = c & 1; float side = c >= 2 ? 1. : -1., hw = uW * .5 + 1.;   // a strip of four: the same two triangles as six vertices made, a third less work
   vec2 p = (e == 1 ? pb : pa) + n * side * hw; vD = side * hw;
   vec2 R = uRes * uK;
   gl_Position = ok ? vec4(p.x / R.x * 2. - 1., 1. - p.y / R.y * 2., 0., 1.) : vec4(9., 9., 9., 1.);
@@ -283,13 +283,18 @@ void main() {
   vec2 mt = vec2(uv.x, 1. - uv.y);
   mt = (mt - uMBox.xy) / uMBox.zw;                                      // the model's texture covers only its own box
   float inBox = step(0., mt.x) * step(0., mt.y) * step(mt.x, 1.) * step(mt.y, 1.);
-  float m = texture(uModel, mt).a * inBox, mb = textureLod(uModel, mt, 3.).a * inBox;
-  float gy = textureLod(uModel, mt + vec2(0., uMTex.y * 3.), 1.).a - textureLod(uModel, mt - vec2(0., uMTex.y * 3.), 1.).a;
-  float rim = pow(clamp(gy * 1.8, 0., 1.), 1.6) * (1. - smoothstep(.5, .9, textureLod(uModel, mt, 1.).a));
-  float lightY = clamp(1. - (px.y - uRes.y * .3) / (uRes.y * .4), 0., 1.);   // the light sheet falls from above
-  vec3 model = vec3(.105, .108, .118) + vec3(.07, .072, .08) * lightY + vec3(.55, .57, .6) * rim - vec3(.04) * smoothstep(.6, 1., mb);   // a lit dark-grey model with a sheen along its top
-  if (uReal > .5) model = texture(uModel, mt).rgb;                     // a real model: its own colours, lit as rendered
-  col = mix(col, model, m);
+  if (inBox > 0.) {                                                     // only inside the model's own box (the crop is a texel per pixel: level 0 is what was sampled)
+    vec4 t0 = textureLod(uModel, mt, 0.); float m = t0.a; vec3 model;
+    if (uReal > .5) model = t0.rgb;                                     // a real model: its own colours, lit as rendered
+    else {
+      float mb = textureLod(uModel, mt, 3.).a;
+      float gy = textureLod(uModel, mt + vec2(0., uMTex.y * 3.), 1.).a - textureLod(uModel, mt - vec2(0., uMTex.y * 3.), 1.).a;
+      float rim = pow(clamp(gy * 1.8, 0., 1.), 1.6) * (1. - smoothstep(.5, .9, textureLod(uModel, mt, 1.).a));
+      float lightY = clamp(1. - (px.y - uRes.y * .3) / (uRes.y * .4), 0., 1.);   // the light sheet falls from above
+      model = vec3(.105, .108, .118) + vec3(.07, .072, .08) * lightY + vec3(.55, .57, .6) * rim - vec3(.04) * smoothstep(.6, 1., mb);   // a lit dark-grey model with a sheen along its top
+    }
+    col = mix(col, model, m);
+  }
   col += (hash(px * 1.7) - .5) / 255. * 2.;                            // dither against banding in the dark gradients
   // the cursor's ball: polished steel, lit by the same light sheet as the model
   if (uBallPx.z > .5) {
@@ -459,7 +464,7 @@ function render() {
   gl.uniform1f(PT_DRAW.u.uRef, U0 * STEPS_PER_SEC * CELL * LIFE / P_W);   // how far apart smoke released one after another sits in undisturbed air
   gl.uniform1f(PT_DRAW.u.uT, simT); gl.uniform1f(PT_DRAW.u.uLife, LIFE); gl.uniform1f(PT_DRAW.u.uWandLife, WAND_LIFE); gl.uniform1i(PT_DRAW.u.uLines, LINES);
   const sp = new Float32Array(16); SPANS.forEach((v, i) => sp.set(v, i * 2)); gl.uniform2fv(PT_DRAW.u.uSpan, sp); gl.uniform1i(PT_DRAW.u.uNS, SPANS.length);
-  gl.bindVertexArray(vao); gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, P_W * P_H);
+  gl.bindVertexArray(vao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, P_W * P_H);
   gl.disable(gl.BLEND);
   gl.bindTexture(gl.TEXTURE_2D, smokeT); gl.generateMipmap(gl.TEXTURE_2D);
   // the picture

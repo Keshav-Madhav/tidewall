@@ -133,18 +133,22 @@ async function maybeFetch() {
   fetching = false;
 }
 // wind (m/s, east/north) at a place and time, from the hourly grid: bilinear in space, linear in time
+const cr = (a, b, c, d, t) => b + .5 * t * (c - a + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
+// one forecast hour at a point, bicubic over the data grid
+function bicAt(A, o, g, fx, fy) {
+  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy, nx = g.nx, ny = g.ny;
+  const c0 = clamp(ix - 1, 0, nx - 1), c1 = clamp(ix, 0, nx - 1), c2 = clamp(ix + 1, 0, nx - 1), c3 = clamp(ix + 2, 0, nx - 1);
+  const row = j => { const r = o + clamp(iy + j, 0, ny - 1) * nx; return cr(A[r + c0], A[r + c1], A[r + c2], A[r + c3], tx); };
+  return cr(row(-1), row(0), row(1), row(2), ty);
+}
+function windHour(tSec) {
+  const T = DATA.times; let ti = 0; while (ti < T.length - 2 && T[ti + 1] <= tSec) ti++;
+  return { ti, ft: clamp((tSec - T[ti]) / (T[ti + 1] - T[ti]), 0, 1) };
+}
+const gridX = (g, lon) => clamp((lon - g.lo0) / (g.gs || GS), 0, g.nx - 1.001), gridY = (g, lat) => clamp((lat - g.la0) / (g.gs || GS), 0, g.ny - 1.001);
 function sampleWind(lon, lat, tSec, out) {
-  const D = DATA, g = D.g, n = g.nx * g.ny, T = D.times;
-  let ti = 0; while (ti < T.length - 2 && T[ti + 1] <= tSec) ti++;
-  const ft = clamp((tSec - T[ti]) / (T[ti + 1] - T[ti]), 0, 1);
-  const gs = g.gs || GS, fx = clamp((lon - g.lo0) / gs, 0, g.nx - 1.001), fy = clamp((lat - g.la0) / gs, 0, g.ny - 1.001);
-  const ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy;
-  const cr = (a, b, c, d, t) => b + .5 * t * (c - a + t * (2 * a - 5 * b + 4 * c - d + t * (3 * (b - c) + d - a)));
-  const at = (A, o, i, j) => A[o + clamp(j, 0, g.ny - 1) * g.nx + clamp(i, 0, g.nx - 1)];
-  const bic = (A, o) => { const r = []; for (let j = -1; j <= 2; j++) r.push(cr(at(A, o, ix - 1, iy + j), at(A, o, ix, iy + j), at(A, o, ix + 1, iy + j), at(A, o, ix + 2, iy + j), tx));
-    return cr(r[0], r[1], r[2], r[3], ty); };
-  const o0 = ti * n, o1 = (ti + 1) * n;
-  out[0] = bic(D.u, o0) * (1 - ft) + bic(D.u, o1) * ft; out[1] = bic(D.v, o0) * (1 - ft) + bic(D.v, o1) * ft;
+  const D = DATA, g = D.g, n = g.nx * g.ny, { ti, ft } = windHour(tSec), fx = gridX(g, lon), fy = gridY(g, lat), o0 = ti * n, o1 = (ti + 1) * n;
+  out[0] = bicAt(D.u, o0, g, fx, fy) * (1 - ft) + bicAt(D.u, o1, g, fx, fy) * ft; out[1] = bicAt(D.v, o0, g, fx, fy) * (1 - ft) + bicAt(D.v, o1, g, fx, fy) * ft;
 }
 
 /* ======================= GL ======================= */
@@ -266,19 +270,37 @@ function buildTargets() {
   buildTarget(true);
 }
 // the real wind on the fluid grid (px/s, y down), for the current minute
-const tgtBuf = { a: null };
+// Between two forecast hours only the blend changes: each cell's two hours are worked out once (when the hour, the
+// data or the grid changes) and every later rebuild just blends them.
+const tgtBuf = { a: null, hours: null, key: '' };
 function buildTarget(seedVelocity) {
   const n = GW * GH; if (!tgtBuf.a || tgtBuf.a.length !== n * 2) tgtBuf.a = new Float32Array(n * 2);
-  const A = tgtBuf.a, out = [0, 0], tSec = Date.now() / 1000;
-  for (let j = 0; j < GH; j++) {
-    const y = (j + .5) * CELL, lat = LAT(y), row = GH - 1 - j;          // texture rows run bottom-up
-    for (let i = 0; i < GW; i++) {
-      const x = (i + .5) * CELL;
-      if (DATA) sampleWind(LON(x), lat, tSec, out);
-      else { out[0] = -.4 + .2 * Math.sin(y * .004 + 1); out[1] = -.3 + .18 * Math.cos(x * .003); }   // no data: barely-moving air, so it can't pass for a forecast
-      const o = (row * GW + i) * 2; A[o] = clamp(out[0] * VS, -180, 180); A[o + 1] = clamp(-out[1] * VS, -180, 180);
+  const A = tgtBuf.a, tSec = Date.now() / 1000;
+  if (DATA) {
+    const { ti, ft } = windHour(tSec), D = DATA, g = D.g, nn = g.nx * g.ny;
+    const key = `${ti}|${GW}x${GH}|${LAT(.5 * CELL)},${LAT((GH - .5) * CELL)}|${LON(.5 * CELL)},${LON((GW - .5) * CELL)}`;
+    if (tgtBuf.key !== key || tgtBuf.data !== D) {
+      const H4 = tgtBuf.hours && tgtBuf.hours.length === n * 4 ? tgtBuf.hours : new Float64Array(n * 4), o0 = ti * nn, o1 = (ti + 1) * nn;
+      for (let j = 0; j < GH; j++) {
+        const fy = gridY(g, LAT((j + .5) * CELL)), row = GH - 1 - j;    // texture rows run bottom-up
+        for (let i = 0; i < GW; i++) {
+          const fx = gridX(g, LON((i + .5) * CELL)), k = (row * GW + i) * 4;
+          H4[k] = bicAt(D.u, o0, g, fx, fy); H4[k + 1] = bicAt(D.u, o1, g, fx, fy); H4[k + 2] = bicAt(D.v, o0, g, fx, fy); H4[k + 3] = bicAt(D.v, o1, g, fx, fy);
+        }
+      }
+      tgtBuf.hours = H4; tgtBuf.key = key; tgtBuf.data = D;
     }
-  }
+    const H4 = tgtBuf.hours;
+    for (let c = 0; c < n; c++) { const k = c * 4;
+      A[c * 2] = clamp((H4[k] * (1 - ft) + H4[k + 1] * ft) * VS, -180, 180); A[c * 2 + 1] = clamp(-(H4[k + 2] * (1 - ft) + H4[k + 3] * ft) * VS, -180, 180); }
+  } else
+    for (let j = 0; j < GH; j++) {
+      const y = (j + .5) * CELL, row = GH - 1 - j;
+      for (let i = 0; i < GW; i++) {                                     // no data: barely-moving air, so it can't pass for a forecast
+        const x = (i + .5) * CELL, o = (row * GW + i) * 2;
+        A[o] = clamp((-.4 + .2 * Math.sin(y * .004 + 1)) * VS, -180, 180); A[o + 1] = clamp(-(-.3 + .18 * Math.cos(x * .003)) * VS, -180, 180);
+      }
+    }
   gl.bindTexture(gl.TEXTURE_2D, Tt); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, GW, GH, gl.RG, gl.FLOAT, A);
 }
 
@@ -382,7 +404,9 @@ const vn = (x, y) => { const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix
 function paintMap() {
   const dw = Math.round(W * K), dh = Math.round(H * K), c = document.createElement('canvas'); c.width = dw; c.height = dh;
   const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, dw, dh); x.globalCompositeOperation = 'lighter';
-  const layer = draw => { const l = document.createElement('canvas'); l.width = dw; l.height = dh; const y = l.getContext('2d'); y.scale(K, K); draw(y); x.drawImage(l, 0, 0); };
+  // each ink is drawn alone, then added on: one scratch canvas serves them all (a screen-sized canvas each held ~150 MB until collected)
+  const l = document.createElement('canvas'); l.width = dw; l.height = dh; const y = l.getContext('2d');
+  const layer = draw => { y.clearRect(0, 0, dw, dh); y.save(); y.scale(K, K); draw(y); y.restore(); x.drawImage(l, 0, 0); };
   const ring = (y, r, sh = 0) => { y.beginPath(); for (let i = 0; i < r.length; i += 2) { const px = X(r[i] + sh), py = Y(r[i + 1]); i ? y.lineTo(px, py) : y.moveTo(px, py); } y.closePath(); };
   const shifts = [0]; if (PJ.lon1 > 180) shifts.push(360); if (PJ.lon0 < -180) shifts.push(-360);
   if (COAST) {
@@ -456,9 +480,11 @@ function palette() {
 }
 const capCv = document.getElementById('cap');
 // a clock in the chosen country's local time (from the wind data's timezone), else this Mac's
+const clocks = new Map();                                             // a formatter per zone: making one costs far more than using it
+const clockIn = zone => clocks.get(zone) || clocks.set(zone, new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hour12: false })).get(zone);
 function localTime(ms, tz) { if (!tz) return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   // by the zone's name when we have it (an offset saved before a daylight-saving change would be an hour out after it)
-  if (tz.name) try { return new Intl.DateTimeFormat('en-GB', { timeZone: tz.name, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms)); } catch (_) { }
+  if (tz.name) try { return clockIn(tz.name).format(new Date(ms)); } catch (_) { }
   const d = new Date(ms + tz.off * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }
 // desktop icons sit on the chart the way names do on a printed map: in a halo of bare paper (the wind and the
 // fine lines knocked out round them), with no lettering of the map's own beneath; painted once per change, at ¼ size
@@ -623,7 +649,8 @@ function makeCard() {
 const rgbOf = a => `rgb(${a.map(v => Math.round(v * 255)).join(',')})`;
 // the report, inked straight onto the chart: no panel, just type in the map's own hand
 function paintCard(c, lat, lon) {
-  const e = wxFor(lat, lon), d = e.d, place = placeName(lat, lon), t = localTime(Date.now(), d && d.w ? { off: d.w.utc_offset_seconds || 0, name: d.w.timezone || '' } : (DATA && DATA.tz));
+  const pk = lat.toFixed(4) + ',' + lon.toFixed(4); if (c._pk !== pk || !c._place) { c._pk = pk; c._place = placeName(lat, lon); }   // the nearest of 1,251 places: only when the card moves
+  const e = wxFor(lat, lon), d = e.d, place = c._place, t = localTime(Date.now(), d && d.w ? { off: d.w.utc_offset_seconds || 0, name: d.w.timezone || '' } : (DATA && DATA.tz));
   const key = `${place}|${t}|${e.v || 0}|${dayF.toFixed(2)}`; if (key === c._key) return; c._key = key;
   const x = c.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); x.clearRect(0, 0, CW, CH);
   const ink = rgbOf(PAL.ink), soft = `rgba(${PAL.ink.map(v => Math.round(v * 255)).join(',')},.68)`;
@@ -693,7 +720,8 @@ let seed = 0;
 function render(dt) {
   gl.disable(gl.BLEND);
   // particles ride the real wind; nothing on your desktop bends it
-  gl.viewport(0, 0, PW, PH); gl.bindFramebuffer(gl.FRAMEBUFFER, Pfx[1 - pj]); gl.useProgram(PSTEP); simUniforms(PSTEP, dt); gl.uniform1i(PSTEP.u.uN, 0);
+  gl.viewport(0, 0, PW, PH); gl.bindFramebuffer(gl.FRAMEBUFFER, Pfx[1 - pj]); gl.useProgram(PSTEP);
+  gl.uniform2f(PSTEP.u.uGrid, GW, GH); gl.uniform1f(PSTEP.u.uCell, CELL); if (PSTEP.u.uDt) gl.uniform1f(PSTEP.u.uDt, dt); gl.uniform2f(PSTEP.u.uRes, W, H); if (PSTEP.u.uN) gl.uniform1i(PSTEP.u.uN, 0);
   bindT(PSTEP, [['uP', Ptx[pj]], ['uT', Tt]]); gl.uniform1f(PSTEP.u.uSeed, (seed = (seed + 1) % 9973)); full();
   // trails: fade what's there, then lay this frame's segments on top
   gl.viewport(0, 0, trailT.w, trailT.h); gl.bindFramebuffer(gl.FRAMEBUFFER, trailF);
