@@ -41,6 +41,10 @@
 
   /* ---------- sidebar (transparent: the window's vibrancy shows through) ---------- */
   aside { width: 222px; flex: none; display: flex; flex-direction: column; padding: 54px 10px 12px; -webkit-app-region: drag; }
+  /* Windows has no vibrancy behind the page: the sidebar gets a colour of its own, and Windows' own type */
+  .win aside { background: #e8e8eb; padding-top: 22px; }
+  .win body { font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  @media (prefers-color-scheme: dark) { .win aside { background: #232326; } }
   .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 20px; }
   .brand img { width: 36px; height: 36px; filter: drop-shadow(0 2px 4px rgba(0,0,0,.18)); }
   .brand b { font: 650 17px/1 -apple-system, "SF Pro Display", sans-serif; letter-spacing: -.2px; }

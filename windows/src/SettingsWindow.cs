@@ -11,7 +11,7 @@ namespace Tidewall;
 internal sealed class SettingsWindow : Form
 {
     readonly TidewallApp app;
-    readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(32, 32, 34) };
+    readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(245, 245, 243) };
     readonly System.Windows.Forms.Timer usageTimer = new() { Interval = 3000 };
     readonly Dictionary<int, TimeSpan> cpuBefore = [];
     DateTime cpuAt = DateTime.UtcNow;
