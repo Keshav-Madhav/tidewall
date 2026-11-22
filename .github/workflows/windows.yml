@@ -4,7 +4,7 @@ name: Windows
 # layer changed with 24H2). GitHub's runners have no GPU: frame rates here are a floor, not the real thing.
 on:
   push:
-    branches: [windows]
+    branches: [main, windows]
     paths: [windows/**, themes/**, .github/workflows/windows.yml]
   workflow_dispatch:
     inputs:

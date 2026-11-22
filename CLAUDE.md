@@ -1,6 +1,6 @@
 # Tidewall — notes for AI coding assistants
 
-Tidewall is a macOS live wallpaper that reshapes itself around the user's windows. Read `README.md` for what it is
+Tidewall is a live wallpaper for macOS and Windows that reshapes itself around the user's windows. Read `README.md` for what it is
 and `CONTRIBUTING.md` for the theme contract (messages, required globals) before changing anything.
 
 ## Layout
@@ -18,6 +18,7 @@ themes/variants.json    per-theme variants (Wind Map region, Lava Lamp colours, 
 assets/                 app icon (Tidewall.icns, icon-1024.png)
 tools/                  dev tools: thumbs, page syntax check, memory and GPU measurement
 build.sh                → build/Tidewall.app (universal; ad-hoc, or the Tidewall certificate when TIDEWALL_SIGN_ID is set)
+windows/                the Windows host (C# .NET 10, WinForms + WebView2): see "Windows" below
 ```
 
 Inside `Sources/`:
@@ -133,6 +134,32 @@ from source, or two wallpapers stack.
   comes up (rollback). The swap is a detached helper (its own session and a clean environment). It renames the old app to `.tidewall-update/previous.app` beside it, opens the
   new one and waits up to 3 minutes for `~/Library/Caches/app.tidewall/update-alive`. If that doesn't arrive, it rolls back and
   writes `update-result`, which the next launch reads (`update.failed` in defaults).
+
+## Windows
+
+`windows/` is the Windows host; the walls are the same `themes/` pages (`windows/web/bridge.js` gives them WebKit's
+message handlers on WebView2's channel). `src/`: `Program` (single instance; Velopack's install hooks first),
+`TidewallApp` (walls per display, tray, idle/lock/covered rest, Explorer-restart recovery, second launch → Settings),
+`DesktopLayer` (WorkerW before 24H2, a layered child of Progman from 24H2), `Wallpaper` (one WebView2 per display, one
+shared browser environment), `WindowTracker` (WinEvent hooks, coalesced looks capped at the refresh rate),
+`DeskIcons` (Explorer's icon list, read in its own memory), `SettingsWindow` (themes/ui with `platform: 'windows'` in
+state: a taskbar instead of the menu bar, `.mac-only` rows hidden; `web/frame.js` makes the preview frame talk to the
+page around it), `Updater` (Velopack from the GitHub releases), `Display` (`--fakescreens N` splits the main display),
+`Covered` (the Mac's covered-area check), `TestRun` (`--test DIR`: windows, a glide, pictures, frame times).
+
+- Build on the Mac: the .NET SDK (`~/.dotnet`; `dotnet publish windows/Tidewall.csproj -r win-arm64|win-x64`).
+  `windows/pack.sh VERSION [rids]` makes `Tidewall-<rid>-Setup.exe` and the update packages with Velopack (`vpk`,
+  cross-packing from macOS); `release.yml`'s `windows` job does the same for every tag and attaches them.
+- `.github/workflows/windows.yml` runs every wall hands-off on Windows Server 2022 (pre-24H2 desktop) and 2025.
+  Those runners have no GPU (WebGL on the CPU): frame rates there are a floor, not the real thing.
+- Test flags: `--test DIR`, `--settings-shot`, `--fakescreens N`, `--cdp PORT` (drive the pages from outside),
+  `TIDEWALL_UPDATE_SOURCE=<folder>` and `TIDEWALL_UPDATE_INSTALL_NOW=1` (updates from a local feed).
+- Gotchas: the app's data lives in `%LOCALAPPDATA%\TidewallData`, never `%LOCALAPPDATA%\Tidewall` (the install folder:
+  a folder there reads as installed, and uninstalling clears it). Explorer restarting destroys the desktop window the
+  walls live in (rebuild on `TaskbarCreated`). Explorer's own windows other than folders (`CabinetWClass`) are shell
+  furniture, not app windows. A test machine with no input idles the walls after 3 minutes (synthetic cursor moves
+  aren't input). Windows' Widgets and Search run WebView2 too: count Tidewall's processes by `TidewallData`. On a
+  software renderer a busy start can lose a WebGL context once (the page reloads itself).
 
 ## Rules the project lives by
 

@@ -38,5 +38,15 @@ You'll get a reply within a week.
 - **No downgrades.** Older versions are never installed.
 - **Development builds** (anything not built with `RELEASE=1`) don't update themselves.
 
+## Windows
+
+- **Updates** come through Velopack from the same GitHub releases, over HTTPS: the app reads `releases.<channel>.json`
+  from the latest release and checks each package's SHA-256 against it before installing. That feed isn't signed with
+  the Ed25519 key the Mac's is, so on Windows trust rests on GitHub and HTTPS alone. Updates install for the user, in
+  `%LOCALAPPDATA%\Tidewall`, with no administrator involved.
+- **Installers are unsigned** for now (no code-signing certificate), so SmartScreen warns on first run.
+- **Data:** settings in `%APPDATA%\Tidewall`, the log and the browser's cache in `%LOCALAPPDATA%\TidewallData`
+  (removed with the app). Desktop icons are read from Explorer's own icon list; no permission is involved.
+
 Residual risk, by design: whoever controls the release key (or the GitHub account and its release environment) can
 ship code to every install that has automatic updates on. Keep 2FA on the account.
