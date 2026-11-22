@@ -44,7 +44,8 @@ internal sealed class TidewallApp : ApplicationContext
         SystemEvents.DisplaySettingsChanged += (_, _) => loop.BeginInvoke(() => RebuildSoon("displays changed"));
         // Explorer restarted (it crashed, or someone restarted it): the desktop window the walls lived in went with it.
         // It says so to every top-level window ("TaskbarCreated"); the walls are made again in the new one.
-        explorerWatch = new ExplorerWatch(() => loop.BeginInvoke(() => RebuildSoon("Explorer restarted")), () => loop.BeginInvoke(() => ShowSettings()));
+        explorerWatch = new ExplorerWatch(() => loop.BeginInvoke(() => RebuildSoon("Explorer restarted")), () => loop.BeginInvoke(() => ShowSettings()),
+            () => loop.BeginInvoke(() => { Log.Write("asked to quit (being uninstalled)"); ExitThread(); }));
         SystemEvents.SessionSwitch += (_, e) =>
         {
             if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect) { locked = true; Updates.Locked(); }
@@ -61,6 +62,21 @@ internal sealed class TidewallApp : ApplicationContext
     static void CloseWall(Wallpaper w)
     {
         try { w.Close(); } catch (Exception e) { Log.Write($"a wall closed uncleanly ({e.GetType().Name}): its desktop had gone"); }
+    }
+
+    /// From the uninstaller: the running copy quits (it's being removed); if it hasn't within 5 s, it's stopped.
+    public static void AskRunningToQuit()
+    {
+        var h = Native.FindWindow(null, ExplorerWatch.Caption);
+        if (h == IntPtr.Zero) return;
+        Native.GetWindowThreadProcessId(h, out uint pid);
+        Native.SendMessageTimeout(h, ExplorerWatch.Quit, IntPtr.Zero, IntPtr.Zero, 0x2, 2000, out _);
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            if (!p.WaitForExit(5000)) p.Kill();
+        }
+        catch (ArgumentException) { }                                     // (already gone)
     }
 
     /// From a second copy: the running one shows its window (and may bring it to the front: this process just started).
@@ -254,12 +270,13 @@ internal sealed class ExplorerWatch : NativeWindow
 {
     public const string Caption = "Tidewall.ExplorerWatch";
     public static readonly uint ShowSettings = Native.RegisterWindowMessage("Tidewall.ShowSettings");
+    public static readonly uint Quit = Native.RegisterWindowMessage("Tidewall.Quit");
     static readonly uint taskbarCreated = Native.RegisterWindowMessage("TaskbarCreated");
-    readonly Action restarted, show;
+    readonly Action restarted, show, quit;
 
-    public ExplorerWatch(Action restarted, Action show)
+    public ExplorerWatch(Action restarted, Action show, Action quit)
     {
-        this.restarted = restarted; this.show = show;
+        this.restarted = restarted; this.show = show; this.quit = quit;
         CreateHandle(new CreateParams { Caption = Caption });
     }
 
@@ -267,6 +284,7 @@ internal sealed class ExplorerWatch : NativeWindow
     {
         if (m.Msg == taskbarCreated) restarted();
         else if (m.Msg == ShowSettings) show();
+        else if (m.Msg == Quit) quit();
         base.WndProc(ref m);
     }
 }

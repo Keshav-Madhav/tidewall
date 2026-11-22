@@ -4,11 +4,20 @@ namespace Tidewall;
 
 internal static class Program
 {
+    /// Uninstalling: out of Start with Windows, and the log and the browser's cache gone with the app (your settings, a
+    /// small file in Roaming, stay for a reinstall).
+    static void Uninstalling()
+    {
+        LoginItem.Enabled = false;
+        TidewallApp.AskRunningToQuit();                                   // (else the uninstaller waits five minutes for it)
+        try { if (Directory.Exists(Config.DataDir)) Directory.Delete(Config.DataDir, true); } catch (Exception) { }
+    }
+
     [STAThread]
     static void Main(string[] args)
     {
         // the installer's hooks first (install, update, uninstall): uninstalling also takes Tidewall out of "Start with Windows"
-        VelopackApp.Build().OnBeforeUninstallFastCallback(_ => LoginItem.Enabled = false).Run();
+        VelopackApp.Build().OnBeforeUninstallFastCallback(_ => Uninstalling()).Run();
         Args.Init(args);
         Config.Load();
         Log.Init();
