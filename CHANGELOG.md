@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.3.1]
+
+### Windows: like the Mac
+- Opening Tidewall (the Start menu, the desktop shortcut, the end of the install) shows its window, as on a Mac; it
+  only stays in the background when it starts with Windows. Before, it opened nothing you could see.
+- The tray menu is the Mac's menu-bar menu: what's new, an update ready to install, a live CPU, GPU and memory
+  readout, Open Tidewall…, the wall on each display, Pause, Rest when idle, Start with Windows, Check for Updates….
+  A click on the tray icon opens the window.
+- On battery (or with Battery saver on), Settings ▸ On battery now applies: Calmer draws at half the rate, Pause
+  rests the walls. They rest while the PC sleeps.
+- Away a while (paused or locked for 90 s, idle for 10 minutes), or hidden 30 s behind a maximised window, a wall
+  becomes a still picture and lets go of its memory (about half of Tidewall's), and comes back when it's wanted.
+  Switching walls hands over the same way: the old one stays until the new one is drawn, never a bare desktop.
+- Settings shows the GPU Tidewall uses, from Windows' own counters.
+
+### Fixed
+- On a PC without Microsoft Edge WebView2 (some Windows 10 installs), Tidewall started but couldn't draw anything,
+  and said nothing. The installer now adds WebView2 where it's missing, and Tidewall says so if it's still not there.
+
 ## [1.3.0]
 
 ### Tidewall for Windows

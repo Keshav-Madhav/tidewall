@@ -13,8 +13,7 @@ internal sealed class SettingsWindow : Form
     readonly TidewallApp app;
     readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(245, 245, 243) };
     readonly System.Windows.Forms.Timer usageTimer = new() { Interval = 3000 };
-    readonly Dictionary<int, TimeSpan> cpuBefore = [];
-    DateTime cpuAt = DateTime.UtcNow;
+    readonly Usage usage = new();
     string? pendingPage;
     bool loaded;
 
@@ -80,7 +79,6 @@ internal sealed class SettingsWindow : Form
         if (!loaded) return;
         var variants = new JsonObject();
         foreach (var (id, _) in Config.Themes) if (Config.Variant(id) is { } v) variants[id] = v;
-        var power = SystemInformation.PowerStatus;
         Send(new JsonObject
         {
             ["t"] = "state", ["platform"] = "windows", ["current"] = Config.Theme, ["displays"] = Displays(), ["variants"] = variants,
@@ -93,7 +91,7 @@ internal sealed class SettingsWindow : Form
                 ["autoUpdate"] = Config.AutoUpdate, ["deskIcons"] = Config.DeskIcons, ["deskIconsState"] = "ok",
                 ["reactWindows"] = Config.ReactWindows, ["reactStage"] = true, ["reactWidgets"] = true, ["reactCursor"] = Config.ReactCursor,
                 ["idleMinutes"] = Config.IdleMinutes > 0 ? Config.IdleMinutes : 0, ["battery"] = Config.Battery,
-                ["onBattery"] = power.PowerLineStatus == PowerLineStatus.Offline, ["lowPower"] = false,
+                ["onBattery"] = app.Power.OnBattery, ["lowPower"] = app.Power.Saver,
             },
             ["update"] = new JsonObject { ["s"] = app.Updates.State, ["v"] = app.Updates.Version, ["err"] = app.Updates.Error, ["checked"] = app.Updates.Checked },
             ["newNotes"] = Config.NotesSeen != Config.Version && Config.Changelog.Length > 0, ["notesSeen"] = Config.NotesSeen ?? "",
@@ -142,27 +140,12 @@ internal sealed class SettingsWindow : Form
             .Select(r => (JsonNode)new JsonArray((r.X - f.X) / k, (r.Y - f.Y) / k, r.Width / k, r.Height / k)).ToArray());
     }
 
-    /// What the wallpaper costs: this process and the browser processes behind every wall (this window's own counted apart).
+    /// What Tidewall costs (this window shares the walls' browser, so it's counted in, while it's open).
     void PushUsage()
     {
         if (!loaded || web.CoreWebView2 == null) return;
-        var now = DateTime.UtcNow; double dt = Math.Max(.5, (now - cpuAt).TotalSeconds); cpuAt = now;
-        double cpu = 0, mem = 0;
-        IEnumerable<int> pids = [Environment.ProcessId];
-        try { pids = pids.Concat(Wallpaper.SharedEnvironment?.GetProcessInfos().Select(p => p.ProcessId) ?? []); } catch (Exception) { }
-        foreach (var pid in pids.Distinct())
-        {
-            try
-            {
-                using var p = Process.GetProcessById(pid);
-                var t = p.TotalProcessorTime;
-                if (cpuBefore.TryGetValue(pid, out var was)) cpu += (t - was).TotalSeconds / dt * 100;
-                cpuBefore[pid] = t;
-                mem += p.WorkingSet64 / 1048576.0;
-            }
-            catch (Exception) { cpuBefore.Remove(pid); }
-        }
-        Js(JsonSerializer.Serialize(new { t = "usage", cpu = Math.Round(cpu, 2), gpu = -1, mem = Math.Round(mem, 1) }));
+        var u = usage.Measure();
+        Js(JsonSerializer.Serialize(new { t = "usage", cpu = u.Cpu, gpu = u.Gpu, mem = u.MemMB }));
     }
 
     // MARK: from the page
@@ -264,7 +247,7 @@ internal sealed class SettingsWindow : Form
                 if (!Config.ReactCursor) foreach (var w in app.Walls) w.CursorOff();
                 app.Dispatch(false);
                 break;
-            case "battery": Config.Battery = (int)Num(v, 0); break;
+            case "battery": Config.Battery = (int)Num(v, 0); app.CheckPower(); break;
             case "autoUpdate": Config.AutoUpdate = On(v, true); if (Config.AutoUpdate) _ = app.Updates.Check(); break;
             case "deskIcons": Config.DeskIcons = On(v, true); app.DeskIcons.Read(); break;
         }

@@ -48,6 +48,14 @@ internal static class TestRun
             await Probe(app, "b");
             await Shoot(app, "b");
             if (Args.Has("--settings-shot")) await ShootSettings(app);
+            if (Args.Has("--menu-shot"))
+            {
+                app.ShowMenuForTest(); await Task.Delay(4500);                 // (the usage lines fill in after 2 s)
+                using var bmp = new Bitmap(SystemInformation.VirtualScreen.Width, SystemInformation.VirtualScreen.Height);
+                using (var g = Graphics.FromImage(bmp)) g.CopyFromScreen(SystemInformation.VirtualScreen.Location, Point.Empty, bmp.Size);
+                bmp.Save(Path.Combine(dir, "menu.png"), ImageFormat.Png);
+                Log.Write("test: menu shot");
+            }
             Log.Write("TEST DONE");
         }
         catch (Exception e) { Log.Write($"CRASH test: {e}"); }

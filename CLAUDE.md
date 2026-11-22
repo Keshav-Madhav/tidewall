@@ -145,7 +145,12 @@ shared browser environment), `WindowTracker` (WinEvent hooks, coalesced looks ca
 `DeskIcons` (Explorer's icon list, read in its own memory), `SettingsWindow` (themes/ui with `platform: 'windows'` in
 state: a taskbar instead of the menu bar, `.mac-only` rows hidden; `web/frame.js` makes the preview frame talk to the
 page around it), `Updater` (Velopack from the GitHub releases), `Display` (`--fakescreens N` splits the main display),
-`Covered` (the Mac's covered-area check), `TestRun` (`--test DIR`: windows, a glide, pictures, frame times).
+`Covered` (the Mac's covered-area check), `TestRun` (`--test DIR`: windows, a glide, pictures, frame times),
+`Usage` (CPU/memory of Tidewall's processes, GPU from Windows' "GPU Engine" counters), `Power` (battery / Battery
+saver → Settings ▸ On battery: pace 2 or paused). As on the Mac: opened by hand (not `--background`) or first ever →
+the window; away 90 s (paused, locked, asleep) or idle 10 min → every wall a still picture (`Wallpaper.FreezeAsync`),
+covered 30 s → that wall; walls are replaced with a hand-over (`Replacing`: the new one starts beneath the old, which
+goes when the new one is ready). The tray menu mirrors the Mac's menu-bar menu (`ShowMenuForTest`, `--menu-shot`).
 
 - Build on the Mac: the .NET SDK (`~/.dotnet`; `dotnet publish windows/Tidewall.csproj -r win-arm64|win-x64`).
   `windows/pack.sh VERSION [rids]` makes `Tidewall-<rid>-Setup.exe` and the update packages with Velopack (`vpk`,

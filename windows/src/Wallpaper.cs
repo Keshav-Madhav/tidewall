@@ -29,6 +29,7 @@ internal sealed class Wallpaper : Form
     public event Action<Wallpaper>? BecameReady;
 
     string lastWindows = "", lastIcons = "", lastDesk = "";
+    DateTime started = DateTime.UtcNow;
 
     public Wallpaper(Display screen, string theme)
     {
@@ -52,10 +53,16 @@ internal sealed class Wallpaper : Form
         }
     }
 
+    /// The wall this one replaces: this one starts beneath it, and it's closed once this one is ready.
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public Wallpaper? Replacing { get; set; }
+
     public async Task StartAsync(DesktopLayer.Host layer)
     {
+        var t0 = DateTime.UtcNow;
         Show();
-        DesktopLayer.Attach(Handle, layer, Screen.Bounds);
+        DesktopLayer.Attach(Handle, layer, Screen.Bounds, Replacing is { IsDisposed: false } r ? r.Handle : default);
+        started = t0;
 
         await web.EnsureCoreWebView2Async(await EnvironmentAsync());
         var core = web.CoreWebView2;
@@ -110,8 +117,9 @@ internal sealed class Wallpaper : Form
                 lastWindows = lastIcons = lastDesk = lastDeskIcons = "";
                 SendDesk();
                 Send($"{{\"t\":\"me\",\"seed\":{Config.Seed}}}");
+                if (Pace != 1) Send($"{{\"t\":\"pace\",\"k\":{Pace}}}");
                 if (Paused) Send("{\"t\":\"pause\",\"v\":true}");
-                Log.Write($"[{theme}] ready on {Screen.Name} {Screen.Bounds} scale {PixelScale:0.##}");
+                Log.Write($"[{theme}] ready on {Screen.Name} {Screen.Bounds} scale {PixelScale:0.##} in {(DateTime.UtcNow - started).TotalSeconds:0.0} s");
                 BecameReady?.Invoke(this);
                 break;
             case "nocursor":
@@ -207,6 +215,36 @@ internal sealed class Wallpaper : Form
     public void CursorOff() => Send("{\"t\":\"cursorOff\"}");
 
     /// A picture of the page (tests and the Settings preview).
+    /// On battery with Settings ▸ On battery ▸ Calmer: every wall draws at half its rate (2), else 1.
+    public static double Pace { get; private set; } = 1;
+    public static void SetPace(double k, IEnumerable<Wallpaper> walls)
+    {
+        if (k == Pace) return;
+        Pace = k;
+        foreach (var w in walls) w.Send($"{{\"t\":\"pace\",\"k\":{k}}}");
+    }
+
+    /// A still picture of the wall: the page let go (all of its memory with it) while nobody would see it move (away
+    /// from the PC a while, or behind a maximised window). Made again when it's wanted.
+    public bool Frozen { get; private set; }
+    public async Task FreezeAsync()
+    {
+        if (Frozen || web.CoreWebView2 == null) return;
+        Frozen = true;
+        try
+        {
+            using var png = new MemoryStream();
+            await web.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, png);
+            BackgroundImage = Image.FromStream(new MemoryStream(png.ToArray()));
+            BackgroundImageLayout = ImageLayout.Stretch;
+        }
+        catch (Exception e) { Log.Write($"[{theme}] no still picture ({e.Message}): the wall's colour stands in"); }
+        Ready = false;
+        Controls.Remove(web);
+        web.Dispose();
+        Log.Write($"[{theme}] let go on {Screen.Name}: a still picture stands in");
+    }
+
     public async Task SnapshotAsync(string path)
     {
         if (web.CoreWebView2 == null) return;

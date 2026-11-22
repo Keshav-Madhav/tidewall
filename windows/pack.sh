@@ -11,6 +11,7 @@ for rid in $rids; do
   dotnet publish windows/Tidewall.csproj -c Release -r $rid --self-contained -p:PublishSingleFile=true -p:TidewallVersion=$version -o $dir | grep -E " error |Tidewall ->" || true
   cp windows/Tidewall.ico CHANGELOG.md $dir/; rsync -a --delete themes/ $dir/themes/
   vpk "[win]" pack --packId Tidewall --packVersion $version --packDir $dir --mainExe Tidewall.exe --packTitle Tidewall \
-    --packAuthors "Keshav Madhav" --icon windows/Tidewall.ico --runtime $rid --channel $rid --outputDir windows/Releases/$rid --yes
+    --packAuthors "Keshav Madhav" --icon windows/Tidewall.ico --runtime $rid --channel $rid --outputDir windows/Releases/$rid \
+    --framework webview2 --yes                                          # (the installer adds WebView2 where it's missing)
 done
 ls -la windows/Releases/*/

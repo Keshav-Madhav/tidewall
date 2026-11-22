@@ -139,6 +139,8 @@ internal static class Config
 
     /// Each wall keeps your desktop icons clear (on by default: unlike Finder's, Explorer's need no permission).
     public static bool DeskIcons { get => Get("deskIcons", true); set => Set("deskIcons", value); }
+    /// The window has been shown once (the first launch ever shows it, even at login).
+    public static bool Welcomed { get => Get("welcomed", false); set => Set("welcomed", value); }
     public static bool AutoUpdate { get => Get("autoUpdate", true); set => Set("autoUpdate", value); }
     public static bool SpanWorlds { get => Get("spanWorlds", true); set => Set("spanWorlds", value); }
     public static bool ReactWindows { get => Get("reactWindows", true); set => Set("reactWindows", value); }

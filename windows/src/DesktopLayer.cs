@@ -34,7 +34,8 @@ internal static class DesktopLayer
     }
 
     /// Puts a window into the desktop layer at a screen rectangle (physical pixels).
-    public static void Attach(IntPtr window, Host host, Rectangle screen)
+    /// `below`: a wall this one replaces, which stays on top (its picture showing) until this one is ready.
+    public static void Attach(IntPtr window, Host host, Rectangle screen, IntPtr below = default)
     {
         var style = Native.GetWindowLongPtr(window, Native.GWL_STYLE).ToInt64();
         Native.SetWindowLongPtr(window, Native.GWL_STYLE, new IntPtr((style & ~Native.WS_POPUP) | Native.WS_CHILD));
@@ -46,8 +47,9 @@ internal static class DesktopLayer
             Native.SetLayeredWindowAttributes(window, 0, 255, Native.LWA_ALPHA);
         }
         var origin = SystemInformation.VirtualScreen.Location;
-        Native.SetWindowPos(window, host.InsideProgman ? host.Icons : IntPtr.Zero,
+        bool under = below != IntPtr.Zero && Native.IsWindow(below);
+        Native.SetWindowPos(window, under ? below : host.InsideProgman ? host.Icons : IntPtr.Zero,
             screen.X - origin.X, screen.Y - origin.Y, screen.Width, screen.Height,
-            Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW | (host.InsideProgman ? 0 : Native.SWP_NOZORDER));
+            Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW | (under || host.InsideProgman ? 0 : Native.SWP_NOZORDER));
     }
 }
