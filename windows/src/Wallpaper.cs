@@ -127,7 +127,7 @@ internal sealed class Wallpaper : Form
 
     public void Send(string json, bool live = false)
     {
-        if (!Ready) return;
+        if (!Ready || IsDisposed || web.IsDisposed || web.CoreWebView2 == null) return;   // (a wall already closed: nothing to tell)
         var literal = JsonSerializer.Serialize(json);
         _ = web.CoreWebView2.ExecuteScriptAsync($"window.__live={(live ? "true" : "false")};window.__hostSend({literal});window.__live=false;");
     }

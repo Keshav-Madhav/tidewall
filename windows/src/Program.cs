@@ -13,7 +13,12 @@ internal static class Program
         Config.Load();
         Log.Init();
         using var single = new Mutex(true, Args.Has("--test") ? "Tidewall.Test" : "Tidewall.Single", out bool first);
-        if (!first) return;
+        if (!first)
+        {
+            // already running (opened again from the Start menu, say): that one shows its window; this one goes
+            if (!Args.Has("--background") && !Args.Has("--test")) TidewallApp.AskRunningToShowSettings();
+            return;
+        }
         ApplicationConfiguration.Initialize();
         Application.ThreadException += (_, e) => Log.Write($"CRASH {e.Exception}");
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Write($"CRASH {e.ExceptionObject}");

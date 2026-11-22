@@ -44,7 +44,7 @@ internal sealed class TidewallApp : ApplicationContext
         SystemEvents.DisplaySettingsChanged += (_, _) => loop.BeginInvoke(() => RebuildSoon("displays changed"));
         // Explorer restarted (it crashed, or someone restarted it): the desktop window the walls lived in went with it.
         // It says so to every top-level window ("TaskbarCreated"); the walls are made again in the new one.
-        explorerWatch = new ExplorerWatch(() => loop.BeginInvoke(() => RebuildSoon("Explorer restarted")));
+        explorerWatch = new ExplorerWatch(() => loop.BeginInvoke(() => RebuildSoon("Explorer restarted")), () => loop.BeginInvoke(() => ShowSettings()));
         SystemEvents.SessionSwitch += (_, e) =>
         {
             if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect) { locked = true; Updates.Locked(); }
@@ -63,6 +63,17 @@ internal sealed class TidewallApp : ApplicationContext
         try { w.Close(); } catch (Exception e) { Log.Write($"a wall closed uncleanly ({e.GetType().Name}): its desktop had gone"); }
     }
 
+    /// From a second copy: the running one shows its window (and may bring it to the front: this process just started).
+    public static void AskRunningToShowSettings()
+    {
+        var h = Native.FindWindow(null, ExplorerWatch.Caption);
+        if (h == IntPtr.Zero) return;
+        Native.GetWindowThreadProcessId(h, out uint pid);
+        AllowSetForegroundWindow(pid);
+        Native.SendMessageTimeout(h, ExplorerWatch.ShowSettings, IntPtr.Zero, IntPtr.Zero, 0x2, 2000, out _);
+    }
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(uint pid);
+
     public static Icon AppIcon()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Tidewall.ico");
@@ -75,6 +86,7 @@ internal sealed class TidewallApp : ApplicationContext
     {
         foreach (var w in walls) CloseWall(w);
         walls.Clear();
+        pointerWall = null;                                               // (it was one of those)
         layer = DesktopLayer.Find();
         Log.Write($"desktop layer: {(layer.InsideProgman ? "inside Progman (24H2)" : "WorkerW")} {layer.Parent}");
         foreach (var screen in Display.All)
@@ -236,21 +248,25 @@ internal static class LoginItem
     }
 }
 
-/// A hidden top-level window that hears Explorer's "TaskbarCreated" broadcast (a message-only window never hears it).
+/// A hidden top-level window that hears Explorer's "TaskbarCreated" broadcast (a message-only window never hears it),
+/// and a second copy of Tidewall asking this one to show its window.
 internal sealed class ExplorerWatch : NativeWindow
 {
+    public const string Caption = "Tidewall.ExplorerWatch";
+    public static readonly uint ShowSettings = Native.RegisterWindowMessage("Tidewall.ShowSettings");
     static readonly uint taskbarCreated = Native.RegisterWindowMessage("TaskbarCreated");
-    readonly Action restarted;
+    readonly Action restarted, show;
 
-    public ExplorerWatch(Action restarted)
+    public ExplorerWatch(Action restarted, Action show)
     {
-        this.restarted = restarted;
-        CreateHandle(new CreateParams { Caption = "Tidewall.ExplorerWatch" });
+        this.restarted = restarted; this.show = show;
+        CreateHandle(new CreateParams { Caption = Caption });
     }
 
     protected override void WndProc(ref Message m)
     {
         if (m.Msg == taskbarCreated) restarted();
+        else if (m.Msg == ShowSettings) show();
         base.WndProc(ref m);
     }
 }
