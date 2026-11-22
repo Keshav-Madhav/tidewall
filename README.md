@@ -2,12 +2,12 @@
 
 <h1 align="center">Tidewall</h1>
 
-<p align="center">A live wallpaper for macOS that flows around your windows.<br>
+<p align="center">A live wallpaper for macOS and Windows that flows around your windows.<br>
 Move a window and the world grows, parts and settles around it.</p>
 
 https://github.com/user-attachments/assets/c33c186e-0f5f-4735-90ab-21153e9e83ce
 
-<p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/latest"><b>Download Tidewall</b></a> · free for macOS 14+ · <a href="https://tidewall.keshav-madhav.com/">Website</a></p>
+<p align="center"><a href="https://github.com/Keshav-Madhav/tidewall/releases/latest"><b>Download Tidewall</b></a> · free for macOS 14+ and Windows 10 & 11 · <a href="https://tidewall.keshav-madhav.com/">Website</a></p>
 
 <p align="center"><img src="docs/app.png" width="860" alt="The Tidewall window: a live preview of Model Railway on your own desktop, with the wall gallery below"></p>
 
@@ -48,6 +48,8 @@ desktop icons and the pointer on or off.
 
 ## Install
 
+### macOS
+
 1. Download `Tidewall-<version>.zip` from [Releases](../../releases/latest) and double-click it to unzip.
 2. Open **Tidewall.app**. The first time, macOS says it can't check the app for malicious software, because Tidewall
    isn't signed with a paid Apple developer certificate. Open **System Settings ▸ Privacy & Security**, scroll down,
@@ -68,6 +70,19 @@ update is the same app and keeps what you've allowed it (Finder, for the desktop
 Tidewall lives in the menu bar, as a little window riding a wave. Click it and choose **Open Tidewall…** for the
 window, where you can try every wall on a live preview of your own desktop, give each display its own wall, and
 turn on **Open at login**.
+
+### Windows
+
+1. Download **[Tidewall-win-x64-Setup.exe](https://github.com/Keshav-Madhav/tidewall/releases/latest/download/Tidewall-win-x64-Setup.exe)** (most PCs), or
+   **[Tidewall-win-arm64-Setup.exe](https://github.com/Keshav-Madhav/tidewall/releases/latest/download/Tidewall-win-arm64-Setup.exe)** for a Windows on Arm PC (Snapdragon).
+2. Run it. Windows SmartScreen says it protected your PC, because Tidewall isn't signed with a paid certificate:
+   click **More info**, then **Run anyway**.
+3. That's it: Tidewall installs for you alone (no administrator needed), adds itself to the Start menu and starts.
+
+Requires Windows 10 or 11 (64-bit), with Microsoft Edge WebView2, which Windows 11 and up-to-date Windows 10 already
+have. Tidewall lives in the system tray: right-click it for the walls, Pause and **Settings…**, or double-click it.
+Updates install themselves, from these GitHub releases, while your screen is locked (or with **Restart to Update** in
+Settings ▸ About). Uninstall it from Settings ▸ Apps like any other app.
 
 ## Light on your Mac
 
