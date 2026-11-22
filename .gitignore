@@ -8,3 +8,4 @@
 *.log
 /windows/bin/
 /windows/obj/
+/windows/Releases/

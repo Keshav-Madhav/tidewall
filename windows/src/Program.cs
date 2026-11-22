@@ -1,3 +1,5 @@
+using Velopack;
+
 namespace Tidewall;
 
 internal static class Program
@@ -5,6 +7,8 @@ internal static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        // the installer's hooks first (install, update, uninstall): uninstalling also takes Tidewall out of "Start with Windows"
+        VelopackApp.Build().OnBeforeUninstallFastCallback(_ => LoginItem.Enabled = false).Run();
         Args.Init(args);
         Config.Load();
         Log.Init();

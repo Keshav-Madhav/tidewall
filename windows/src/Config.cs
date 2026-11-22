@@ -57,7 +57,9 @@ internal static class Config
 
     public const string DefaultTheme = "inkmap";
 
-    public static string DataDir { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Tidewall");
+    /// The log and the browser's cache. Not %LOCALAPPDATA%\Tidewall: that's where the installer puts the app itself (a
+    /// folder there already reads as "installed", and uninstalling clears it).
+    public static string DataDir { get; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TidewallData");
     static string SettingsPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Tidewall", "settings.json");
 
     public static string ThemesRoot { get; } = Path.GetFullPath(Args.Value("--themes") ?? Path.Combine(AppContext.BaseDirectory, "themes"));
@@ -137,6 +139,7 @@ internal static class Config
 
     /// Each wall keeps your desktop icons clear (on by default: unlike Finder's, Explorer's need no permission).
     public static bool DeskIcons { get => Get("deskIcons", true); set => Set("deskIcons", value); }
+    public static bool AutoUpdate { get => Get("autoUpdate", true); set => Set("autoUpdate", value); }
     public static bool SpanWorlds { get => Get("spanWorlds", true); set => Set("spanWorlds", value); }
     public static bool ReactWindows { get => Get("reactWindows", true); set => Set("reactWindows", value); }
     public static bool ReactCursor { get => Get("reactCursor", true); set => Set("reactCursor", value); }

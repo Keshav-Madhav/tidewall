@@ -12,7 +12,7 @@ internal sealed class Wallpaper : Form
     static CoreWebView2Environment? environment;
     public static CoreWebView2Environment? SharedEnvironment => environment;
 
-    /// One browser for every wall and the Settings window (its data in %LOCALAPPDATA%\\Tidewall\\WebView2).
+    /// One browser for every wall and the Settings window (its data in %LOCALAPPDATA%\TidewallData\WebView2).
     public static async Task<CoreWebView2Environment> EnvironmentAsync() => environment ??= await CoreWebView2Environment.CreateAsync(null,
         Path.Combine(Config.DataDir, "WebView2"), new CoreWebView2EnvironmentOptions("--autoplay-policy=no-user-gesture-required --disable-features=msSmartScreenProtection"));
 

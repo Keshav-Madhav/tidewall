@@ -21,6 +21,7 @@ internal sealed class TidewallApp : ApplicationContext
     public IReadOnlyList<Wallpaper> Walls => walls;
     public WindowTracker Tracker => tracker;
     public DeskIcons DeskIcons => deskIcons;
+    public Updater Updates { get; }
     public Control Loop => loop;
 
     public TidewallApp()
@@ -30,6 +31,8 @@ internal sealed class TidewallApp : ApplicationContext
         tracker = new WindowTracker(loop);
         tracker.Changed += (_, live) => Dispatch(live);
         deskIcons = new DeskIcons();
+        Updates = new Updater();
+        Updates.Changed += () => settings?.PushState();
         deskIcons.Changed += () => { foreach (var w in walls) if (w.Ready) w.SendDeskIcons(deskIcons, WorldFor(w)); };
         tray = new NotifyIcon { Icon = AppIcon(), Text = "Tidewall", Visible = !Args.Has("--test") };
         tray.DoubleClick += (_, _) => ShowSettings();
@@ -40,7 +43,7 @@ internal sealed class TidewallApp : ApplicationContext
         SystemEvents.DisplaySettingsChanged += (_, _) => loop.BeginInvoke(BuildWalls);
         SystemEvents.SessionSwitch += (_, e) =>
         {
-            if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect) locked = true;
+            if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect) { locked = true; Updates.Locked(); }
             if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect) locked = false;
             loop.BeginInvoke(() => Dispatch(false));
         };

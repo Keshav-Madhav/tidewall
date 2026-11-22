@@ -90,12 +90,12 @@ internal sealed class SettingsWindow : Form
             {
                 ["spanWorlds"] = Config.SpanWorlds, ["login"] = LoginItem.Enabled, ["loginBlocked"] = false,
                 ["restWhenIdle"] = Config.IdleMinutes > 0, ["paused"] = Config.Paused, ["fps"] = Config.Fps, ["margin"] = Config.Margin,
-                ["autoUpdate"] = false, ["deskIcons"] = Config.DeskIcons, ["deskIconsState"] = "ok",
+                ["autoUpdate"] = Config.AutoUpdate, ["deskIcons"] = Config.DeskIcons, ["deskIconsState"] = "ok",
                 ["reactWindows"] = Config.ReactWindows, ["reactStage"] = true, ["reactWidgets"] = true, ["reactCursor"] = Config.ReactCursor,
                 ["idleMinutes"] = Config.IdleMinutes > 0 ? Config.IdleMinutes : 0, ["battery"] = Config.Battery,
                 ["onBattery"] = power.PowerLineStatus == PowerLineStatus.Offline, ["lowPower"] = false,
             },
-            ["update"] = new JsonObject { ["s"] = "off", ["err"] = "New versions are on tidewall.keshav-madhav.com for now: this build doesn't update itself yet." },
+            ["update"] = new JsonObject { ["s"] = app.Updates.State, ["v"] = app.Updates.Version, ["err"] = app.Updates.Error, ["checked"] = app.Updates.Checked },
             ["newNotes"] = Config.NotesSeen != Config.Version && Config.Changelog.Length > 0, ["notesSeen"] = Config.NotesSeen ?? "",
         });
     }
@@ -200,8 +200,11 @@ internal sealed class SettingsWindow : Form
             case "quit":
                 app.ExitThread();
                 return;
-            case "checkUpdate" or "installUpdate":
-                OpenUrl("https://tidewall.keshav-madhav.com/");
+            case "checkUpdate":
+                _ = app.Updates.Check(manual: true);
+                return;
+            case "installUpdate":
+                app.Updates.Install();
                 return;
         }
         if (!Change(t, o)) { Log.Write($"[ui] unknown message {t}"); return; }
@@ -262,6 +265,7 @@ internal sealed class SettingsWindow : Form
                 app.Dispatch(false);
                 break;
             case "battery": Config.Battery = (int)Num(v, 0); break;
+            case "autoUpdate": Config.AutoUpdate = On(v, true); if (Config.AutoUpdate) _ = app.Updates.Check(); break;
             case "deskIcons": Config.DeskIcons = On(v, true); app.DeskIcons.Read(); break;
         }
     }
