@@ -472,11 +472,21 @@ function sunAltitude(date, lat, lon) {
 }
 const DAY = { bg: [.925, .905, .862], land: [.882, .858, .80], line: [.12, .17, .22], fast: [.60, .21, .11], grat: [.62, .60, .55], ink: [.26, .27, .28] };
 const NIGHT = { bg: [.03, .05, .078], land: [.1, .132, .17], line: [.7, .76, .82], fast: [.96, .74, .44], grat: [.22, .27, .33], ink: [.8, .83, .86] };   // night: land clearly above the sea, ink brighter than the wind so the chart reads first
-let PAL = null, dayF = 1;
+const DUSK = { bg: [.17, .19, .27], land: [.23, .25, .335], grat: [.33, .35, .44] };   // twilight paper: slate blue, light ink on it
+const INK = { line: 1, fast: 1, ink: 1 };
+let PAL = null, dayF = 1, inkF = 1;
 function palette() {
   dayF = clamp((sunAltitude(new Date(), HOME.lat, HOME.lon) + 8) / 14, 0, 1); dayF = dayF * dayF * (3 - 2 * dayF);
-  const mix = (a, b) => a.map((v, i) => b[i] + (v - b[i]) * dayF);
-  PAL = {}; for (const k in DAY) PAL[k] = mix(DAY[k], NIGHT[k]);
+  // twilight is its own colour, not a half-way grey: a straight day-to-night mix slid the paper and the ink to the same
+  // grey at dusk and the chart vanished. The paper goes day -> DUSK slate -> night; the ink keeps the night's light
+  // colours through dusk and flips to the day's dark ones quickly, where the paper is half-way between the two
+  const lerp = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+  const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+  // dark ink on a still-grey paper is as bad as grey on grey, so the paper lightens fast in the same few minutes
+  inkF = ss(.67, .73, dayF);                                          // 0 = night ink, 1 = day ink: flips as the paper passes half-way
+  const lit = ss(.62, .82, dayF);
+  PAL = {}; for (const k in DAY) PAL[k] = INK[k] ? lerp(NIGHT[k], DAY[k], inkF)
+    : lit > 0 ? lerp(DUSK[k], DAY[k], lit) : lerp(NIGHT[k], DUSK[k], dayF / .62);
 }
 const capCv = document.getElementById('cap');
 // a clock in the chosen country's local time (from the wind data's timezone), else this Mac's
@@ -651,7 +661,7 @@ const rgbOf = a => `rgb(${a.map(v => Math.round(v * 255)).join(',')})`;
 function paintCard(c, lat, lon) {
   const pk = lat.toFixed(4) + ',' + lon.toFixed(4); if (c._pk !== pk || !c._place) { c._pk = pk; c._place = placeName(lat, lon); }   // the nearest of 1,251 places: only when the card moves
   const e = wxFor(lat, lon), d = e.d, place = c._place, t = localTime(Date.now(), d && d.w ? { off: d.w.utc_offset_seconds || 0, name: d.w.timezone || '' } : (DATA && DATA.tz));
-  const key = `${place}|${t}|${e.v || 0}|${dayF.toFixed(2)}`; if (key === c._key) return; c._key = key;
+  const key = `${place}|${t}|${e.v || 0}|${dayF.toFixed(2)}|${inkF.toFixed(2)}`; if (key === c._key) return; c._key = key;
   const x = c.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); x.clearRect(0, 0, CW, CH);
   const ink = rgbOf(PAL.ink), soft = `rgba(${PAL.ink.map(v => Math.round(v * 255)).join(',')},.68)`;
   x.textBaseline = 'alphabetic'; x.fillStyle = ink;
@@ -736,7 +746,7 @@ function render(dt) {
   // the chart
   gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, cv.width, cv.height);
   gl.useProgram(COMP); bindT(COMP, [['uTrail', trailT], ['uMap', mapT], ['uHalo', haloT]]);
-  gl.uniform1f(COMP.u.uDayF, dayF);
+  gl.uniform1f(COMP.u.uDayF, inkF);                                  // the shader's weights are for light ink or dark ink
   { const UW = DESK.uw || W, UH = DESK.uh || H; gl.uniform4f(COMP.u.uWorld, (DESK.x || 0) / UW, (DESK.y || 0) / UH, W / UW, H / UH); }
   for (const [u, key] of [['uBg', 'bg'], ['uLand', 'land'], ['uLine', 'line'], ['uFast', 'fast'], ['uGrat', 'grat'], ['uInk', 'ink']]) gl.uniform3fv(COMP.u[u], PAL[key]);
   full();

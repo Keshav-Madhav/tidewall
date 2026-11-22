@@ -18,6 +18,8 @@
 ### Fixed
 - On a PC without Microsoft Edge WebView2 (some Windows 10 installs), Tidewall started but couldn't draw anything,
   and said nothing. The installer now adds WebView2 where it's missing, and Tidewall says so if it's still not there.
+- Wind Map washed out to a flat grey for half an hour round sunset, as the paper and the ink met half-way. Twilight
+  is now its own colour, a deep slate blue under light ink, and the ink turns dark only as the paper brightens.
 
 ## [1.3.0]
 
