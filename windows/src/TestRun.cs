@@ -112,7 +112,7 @@ internal static class TestRun
                 "stage: typeof ready !== 'undefined' ? ready : null, buildGen: typeof buildGen !== 'undefined' ? buildGen : null, " +
                 "gpu: (() => { try { const g = document.createElement('canvas').getContext('webgl2'), x = g.getExtension('WEBGL_debug_renderer_info'); " +
                 "return x ? g.getParameter(x.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER); } catch (e) { return 'none'; } })() })");
-            Log.Write($"probe {tag} wall {i} {w.Theme} on {w.Screen.DeviceName} ready={w.Ready} paused={w.Paused} {answer}");
+            Log.Write($"probe {tag} wall {i} {w.Theme} on {w.Screen.Name} ready={w.Ready} paused={w.Paused} {answer}");
         }
         Log.Write($"probe {tag} windows: {string.Join(" | ", app.Tracker.Windows.Select(t => $"{t.Owner} {t.Bounds}"))}");
     }

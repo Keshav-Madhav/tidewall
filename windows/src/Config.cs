@@ -122,7 +122,7 @@ internal static class Config
 
     /// A display's own wall, if it has one (else it shows the main wall). Keyed by the display's device name.
     public static string? OwnTheme(string device) => ThemeOverride == null ? data["theme.display." + device]?.GetValue<string>() : null;
-    public static string ThemeFor(Screen s) => OwnTheme(s.DeviceName) ?? Theme;
+    public static string ThemeFor(Display s) => OwnTheme(s.Name) ?? Theme;
     public static void SetOwnTheme(string device, string? theme)
     {
         if (theme == null) data.Remove("theme.display." + device); else data["theme.display." + device] = theme;

@@ -18,7 +18,8 @@ internal sealed class Wallpaper : Form
 
     readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(239, 228, 204) };
     readonly string theme;
-    public Screen Screen { get; }
+    /// The display this wall is drawn on.
+    public Display Screen { get; }
     public Rectangle Frame => Screen.Bounds;
     public bool Ready { get; private set; }
     public bool Paused { get; private set; }
@@ -28,7 +29,7 @@ internal sealed class Wallpaper : Form
 
     string lastWindows = "", lastIcons = "", lastDesk = "";
 
-    public Wallpaper(Screen screen, string theme)
+    public Wallpaper(Display screen, string theme)
     {
         Screen = screen;
         this.theme = theme;
@@ -79,7 +80,7 @@ internal sealed class Wallpaper : Form
     {
         // the display's refresh rate, for the page's frame pacer (it draws at most this fast while things move)
         var mode = new DEVMODE { dmSize = (short)System.Runtime.InteropServices.Marshal.SizeOf<DEVMODE>() };
-        return EnumDisplaySettings(Screen.DeviceName, -1, ref mode) && mode.dmDisplayFrequency > 1 ? mode.dmDisplayFrequency : 60;
+        return EnumDisplaySettings(Screen.Device, -1, ref mode) && mode.dmDisplayFrequency > 1 ? mode.dmDisplayFrequency : 60;
     }
 
     /// The page's console errors and uncaught exceptions, in Tidewall's log (a wall that fails quietly is still caught).
@@ -109,7 +110,7 @@ internal sealed class Wallpaper : Form
                 SendDesk();
                 Send($"{{\"t\":\"me\",\"seed\":{Config.Seed}}}");
                 if (Paused) Send("{\"t\":\"pause\",\"v\":true}");
-                Log.Write($"[{theme}] ready on {Screen.DeviceName} {Screen.Bounds} scale {PixelScale:0.##}");
+                Log.Write($"[{theme}] ready on {Screen.Name} {Screen.Bounds} scale {PixelScale:0.##}");
                 BecameReady?.Invoke(this);
                 break;
             case "nocursor":
@@ -134,7 +135,7 @@ internal sealed class Wallpaper : Form
     public double PixelScale => DeviceDpi / 96.0;
 
     /// Where this display sits among the others, in page pixels.
-    public void SendDesk(IReadOnlyList<Screen>? world = null)
+    public void SendDesk(IReadOnlyList<Display>? world = null)
     {
         var frames = (world ?? [Screen]).Select(s => s.Bounds).ToList();
         var u = frames.Aggregate(frames[0], Rectangle.Union);
@@ -167,7 +168,7 @@ internal sealed class Wallpaper : Form
     }
 
     /// The desktop icons in this wall's world (screen pixels in), as the page wants them: its own device pixels.
-    public void SendDeskIcons(DeskIcons di, IReadOnlyList<Screen>? world = null)
+    public void SendDeskIcons(DeskIcons di, IReadOnlyList<Display>? world = null)
     {
         var frames = (world ?? [Screen]).Select(s => s.Bounds).ToList(); var f = Frame;
         string Enc(IEnumerable<Rectangle> rs) => string.Join(",", rs.Where(r => frames.Any(w => w.IntersectsWith(r)))

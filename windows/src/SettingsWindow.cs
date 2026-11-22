@@ -101,14 +101,14 @@ internal sealed class SettingsWindow : Form
     }
 
     /// Display ids are their place in Windows' list, from 1 (what the page and the macOS app call a display's id).
-    static int IdOf(Screen s) => Array.IndexOf(Screen.AllScreens, s) + 1;
-    static Screen? ScreenOf(int id) => id >= 1 && id <= Screen.AllScreens.Length ? Screen.AllScreens[id - 1] : null;
-    double ScaleOf(Screen s) => app.Walls.FirstOrDefault(w => w.Screen.DeviceName == s.DeviceName)?.PixelScale ?? DeviceDpi / 96.0;
+    static int IdOf(Display s) => Display.All.ToList().IndexOf(s) + 1;
+    static Display? ScreenOf(int id) => Display.All is var all && id >= 1 && id <= all.Count ? all[id - 1] : null;
+    double ScaleOf(Display s) => app.Walls.FirstOrDefault(w => w.Screen.Name == s.Name)?.PixelScale ?? DeviceDpi / 96.0;
 
     JsonArray Displays()
     {
         var list = new JsonArray();
-        var screens = Screen.AllScreens;
+        var screens = Display.All;
         foreach (var s in screens)
         {
             double k = ScaleOf(s); var b = s.Bounds; var theme = Config.ThemeFor(s);
@@ -118,7 +118,7 @@ internal sealed class SettingsWindow : Form
             {
                 ["id"] = IdOf(s), ["name"] = s.Primary ? "Main display" : $"Display {IdOf(s)}",
                 ["x"] = b.X / k, ["y"] = b.Y / k, ["w"] = b.Width / k, ["h"] = b.Height / k,
-                ["theme"] = theme, ["own"] = Config.OwnTheme(s.DeviceName) != null, ["main"] = s.Primary, ["world"] = new JsonArray(world),
+                ["theme"] = theme, ["own"] = Config.OwnTheme(s.Name) != null, ["main"] = s.Primary, ["world"] = new JsonArray(world),
             });
         }
         return list;
@@ -127,7 +127,7 @@ internal sealed class SettingsWindow : Form
     /// A display (the main one by default) and the windows on it now, in its page pixels, so the preview shows your own desktop.
     JsonObject Desktop(int? id = null)
     {
-        var s = (id is { } i ? ScreenOf(i) : null) ?? Screen.PrimaryScreen ?? Screen.AllScreens[0];
+        var s = (id is { } i ? ScreenOf(i) : null) ?? Display.All.FirstOrDefault(d => d.Primary) ?? Display.All[0];
         double k = ScaleOf(s); var f = s.Bounds;
         var windows = new JsonArray();
         foreach (var w in app.Tracker.Windows.Reverse())   // back to front: the page stacks them in order
@@ -223,7 +223,7 @@ internal sealed class SettingsWindow : Form
                 var theme = o["theme"]?.GetValue<string>();
                 if (theme != null && !Config.IsTheme(theme)) break;
                 if (o["display"]?.GetValue<int>() is not int d || ScreenOf(d) is not { } s) { Toast("That display isn't connected any more."); break; }
-                Config.SetOwnTheme(s.DeviceName, theme);
+                Config.SetOwnTheme(s.Name, theme);
                 app.RebuildWalls();
                 break;
             case "variant":

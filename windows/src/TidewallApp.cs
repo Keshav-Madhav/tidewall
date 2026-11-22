@@ -64,7 +64,7 @@ internal sealed class TidewallApp : ApplicationContext
         walls.Clear();
         layer = DesktopLayer.Find();
         Log.Write($"desktop layer: {(layer.InsideProgman ? "inside Progman (24H2)" : "WorkerW")} {layer.Parent}");
-        foreach (var screen in Screen.AllScreens)
+        foreach (var screen in Display.All)
         {
             var wall = new Wallpaper(screen, Config.ThemeFor(screen));
             wall.BecameReady += _ => Dispatch(false);
@@ -81,7 +81,7 @@ internal sealed class TidewallApp : ApplicationContext
     }
 
     /// One world across the displays that show a spanning wall with the same scale (mixed scales: each its own).
-    IReadOnlyList<Screen>? WorldFor(Wallpaper w)
+    IReadOnlyList<Display>? WorldFor(Wallpaper w)
     {
         if (!Config.SpanWorlds || !Config.SpanThemes.Contains(w.Theme)) return null;
         var same = walls.Where(o => o.Theme == w.Theme && o.DeviceDpi == w.DeviceDpi).Select(o => o.Screen).ToList();
