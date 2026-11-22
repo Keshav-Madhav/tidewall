@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.3.0]
+
+### Tidewall for Windows
+- Every wall now runs on Windows 10 and 11 too, behind your desktop icons: the windows, the icons and the pointer
+  shape the scene just as on a Mac, and the walls that span displays draw one world across them. It lives in the
+  system tray, with the same Tidewall window (walls with a live preview, displays, settings), an installer that needs
+  no administrator, and updates that install themselves. Download it from the website or the release.
+- Wind Tunnel now draws on computers without a working graphics card (a virtual machine, a remote session): it spins
+  up on a lighter grid there and fades in, rather than staying blank for over a minute.
+
+### Lighter, the picture unchanged
+- Ink Map works out far less while a window moves (its fixed islets once, only the land a change reaches), and draws
+  each frame once: about a fifth less CPU and two fifths less GPU during a drag.
+- Model Railway no longer redraws the whole board every few seconds to change a signal lamp, and draws its icon
+  greens and grass from ready-made pieces: a quarter less CPU and half the GPU while windows move.
+- Meadow redraws only the boy's corner between cloud updates (half the GPU at rest); Wind Tunnel shades its model
+  only inside its box (half the GPU at rest); Estate, Wind Map, Reef, Snowfall, Gallery and Beach drop work they
+  repeated for nothing.
+- A calm wall no longer wakes at every display refresh to find it isn't due; a drag or the pointer arriving wakes it
+  at once, so the first frames of a move come sooner.
+- The menu-bar app watches the pointer at 60 Hz only while a wall follows it (it was 120 Hz on every mouse move), and
+  looks for windows only every 2 s while everything rests.
+
+### Fixed
+- Garden Plan: closing a window re-planted the flowerbeds of every bed after it.
+
 ## [1.2.8]
 
 ### Ink Map, first

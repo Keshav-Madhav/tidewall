@@ -41,6 +41,10 @@
 
   /* ---------- sidebar (transparent: the window's vibrancy shows through) ---------- */
   aside { width: 222px; flex: none; display: flex; flex-direction: column; padding: 54px 10px 12px; -webkit-app-region: drag; }
+  /* Windows has no vibrancy behind the page: the sidebar gets a colour of its own, and Windows' own type */
+  .win aside { background: #e8e8eb; padding-top: 22px; }
+  .win body { font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  @media (prefers-color-scheme: dark) { .win aside { background: #232326; } }
   .brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 20px; }
   .brand img { width: 36px; height: 36px; filter: drop-shadow(0 2px 4px rgba(0,0,0,.18)); }
   .brand b { font: 650 17px/1 -apple-system, "SF Pro Display", sans-serif; letter-spacing: -.2px; }
@@ -140,6 +144,14 @@
     font-size: 14.5px; color: #fff; background: rgba(20,24,30,.26); backdrop-filter: blur(24px) saturate(1.4); -webkit-backdrop-filter: blur(24px) saturate(1.4); z-index: 3; }
   .menubar b { font-weight: 700; } .menubar .r { margin-left: auto; opacity: .92; }
   .menubar .notch { position: absolute; left: 50%; top: 0; width: 190px; height: 32px; margin-left: -95px; background: #000; border-radius: 0 0 14px 14px; }
+  /* on Windows: a taskbar along the bottom instead of the menu bar, and only the settings that apply there */
+  .taskbar { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 48px; align-items: center; justify-content: center; gap: 10px;
+    background: rgba(28,30,34,.78); backdrop-filter: blur(30px) saturate(1.4); -webkit-backdrop-filter: blur(30px) saturate(1.4); z-index: 3; }
+  .taskbar i { width: 30px; height: 30px; border-radius: 7px; background: rgba(255,255,255,.16); }
+  .taskbar i:first-child { background: linear-gradient(135deg, #4cc2ff, #0a74da); }
+  .taskbar .r { position: absolute; right: 18px; font-size: 13px; color: #fff; opacity: .92; text-align: right; line-height: 1.25; }
+  .win .menubar, .win .menu-notch, .win .mac-only { display: none !important; }
+  .win .taskbar { display: flex; }
   .mw { position: absolute; border-radius: 13px; overflow: hidden; z-index: 2; cursor: grab; transition: box-shadow .2s; }
   .mw.dark { background: rgba(30,31,34,.9); color: #e8e8ea; box-shadow: 0 0 0 1px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.08), 0 24px 64px rgba(0,0,0,.42); }
   .mw.light { background: rgba(250,250,252,.92); color: #333; box-shadow: 0 0 0 1px rgba(0,0,0,.22), 0 24px 64px rgba(0,0,0,.36); }
@@ -285,6 +297,7 @@
           <div class="screen" id="screen">
             <iframe id="pv" title="Preview"></iframe>
             <div class="menubar"><b>&#63743;</b><b>Finder</b><span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Window</span><span class="r" id="clock"></span><div class="notch" id="notch"></div></div>
+            <div class="taskbar"><i></i><i></i><i></i><i></i><i></i><span class="r" id="clock2"></span></div>
             <div id="mws"></div>
           </div>
           <div class="loading" id="loading"><div><div class="spin"></div><span id="loadingTxt">Loading preview…</span></div></div>
@@ -328,8 +341,8 @@
     <div class="group-t">What the wallpaper reacts to</div>
     <div class="group">
       <div class="rowx"><div class="tx"><b>Windows</b><span>The scene reshapes itself around your app windows. Off: it carries on behind them as if they weren't there.</span></div><div class="sw" data-k="reactWindows" role="switch" tabindex="0"></div></div>
-      <div class="rowx"><div class="tx"><b>Stage Manager</b><span>The strip of recent apps at the side of the screen.</span></div><div class="sw" data-k="reactStage" role="switch" tabindex="0"></div></div>
-      <div class="rowx"><div class="tx"><b>Desktop widgets</b><span>Clocks, weather and the other widgets on your desktop.</span></div><div class="sw" data-k="reactWidgets" role="switch" tabindex="0"></div></div>
+      <div class="rowx mac-only"><div class="tx"><b>Stage Manager</b><span>The strip of recent apps at the side of the screen.</span></div><div class="sw" data-k="reactStage" role="switch" tabindex="0"></div></div>
+      <div class="rowx mac-only"><div class="tx"><b>Desktop widgets</b><span>Clocks, weather and the other widgets on your desktop.</span></div><div class="sw" data-k="reactWidgets" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>Desktop icons</b><span id="iconsNote">Each wall keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.</span></div><div class="sw" data-k="deskIcons" role="switch" tabindex="0"></div></div>
       <div class="rowx"><div class="tx"><b>The pointer</b><span>Fish follow it, the snow melts round it, the boat sails to it. Off: the scene ignores it.</span></div><div class="sw" data-k="reactCursor" role="switch" tabindex="0"></div></div>
     </div>
@@ -360,8 +373,8 @@
     <div class="about">
       <img src="icon.png" alt="">
       <h1>Tidewall</h1>
-      <div class="sub">A live wallpaper for macOS that flows around your windows. Move a window and the world grows, parts and settles around it.</div>
-      <div class="tags"><span class="tag" id="ver">Version 1.0</span><span class="tag">macOS 14+</span><span class="tag">GPL-3.0</span></div>
+      <div class="sub" id="aboutSub">A live wallpaper for macOS that flows around your windows. Move a window and the world grows, parts and settles around it.</div>
+      <div class="tags"><span class="tag" id="ver">Version 1.0</span><span class="tag" id="osTag">macOS 14+</span><span class="tag">GPL-3.0</span></div>
       <div class="about-links"><a href="#" data-url="https://tidewall.keshav-madhav.com/">Website</a><span aria-hidden="true">·</span><a href="#" data-url="https://github.com/Keshav-Madhav/tidewall">Source on GitHub</a></div>
       <div class="about-upd">
         <div class="group">
@@ -404,6 +417,7 @@ const send = m => { try { webkit.messageHandlers.ui.postMessage(JSON.stringify(m
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+const WIN = () => S.platform === 'windows';
 let S = { current: 'inkmap', displays: [], settings: {}, variants: {}, seed: 1, version: '1.0' }, VARS = {}, sel = null, selDisp = null, filter = 'all';
 
 /* ======================= navigation ======================= */
@@ -540,7 +554,7 @@ $('#resetBtn').addEventListener('click', () => setMode(mode));
 function sizeScreen() {
   stageEl.style.aspectRatio = `${VW} / ${VH}`;
   Object.assign(screenEl.style, { width: VW + 'px', height: VH + 'px' }); Object.assign(pv.style, { width: VW + 'px', height: VH + 'px' });
-  $('#notch').style.display = (DESK && DESK.notch !== undefined ? DESK.notch : VW / VH < 1.58) ? '' : 'none';   // a display with a notch (the host knows)
+  $('#notch').style.display = !WIN() && (DESK && DESK.notch !== undefined ? DESK.notch : VW / VH < 1.58) ? '' : 'none';   // a display with a notch (the host knows)
   fit();
 }
 function fit() { const k = stageEl.clientWidth / VW; screenEl.style.transform = `scale(${k})`; screenEl._k = k; }
@@ -622,13 +636,14 @@ addEventListener('pointermove', e => {
   if (!drag) return;
   const w = wins[drag.i];
   w.x = Math.round(clamp(drag.x0 + (e.clientX - drag.sx) / drag.k, -w.w + 120, VW - 120));
-  w.y = Math.round(clamp(drag.y0 + (e.clientY - drag.sy) / drag.k, 32, VH - 60));
+  w.y = Math.round(clamp(drag.y0 + (e.clientY - drag.sy) / drag.k, WIN() ? 0 : 32, VH - (WIN() ? 100 : 60)));
   placeWins();
   if (!raf) raf = requestAnimationFrame(() => { raf = 0; sendWins(true); });
 });
 addEventListener('pointerup', () => { if (!drag) return; drag.el.classList.remove('grab'); drag = null; sendWins(false); });
 stageEl.addEventListener('pointerleave', () => pvReady && toFrame(JSON.stringify({ t: 'cursorOff' })));
-function tick() { const d = new Date(); $('#clock').textContent = d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) + '  ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); }
+function tick() { const d = new Date(); $('#clock').textContent = d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) + '  ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  $('#clock2').innerHTML = esc(d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) + '<br>' + esc(d.toLocaleDateString()); }
 setInterval(tick, 15000); tick();
 let rsz = 0; addEventListener('resize', () => { clearTimeout(rsz); rsz = setTimeout(() => { loadPreview(); if ($('#displays').classList.contains('on')) drawDesk(); }, 400); });   // sharper (or cheaper) after a resize
 
@@ -657,15 +672,17 @@ $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.addEvent
 function drawSettings() {
   // on, but switched off for Tidewall in System Settings ▸ Login Items: show it off, say where; the switch opens that pane
   const blocked = !!S.settings.loginBlocked; if (blocked) S.settings.login = false;
-  $('#loginNote').textContent = blocked ? 'Switched off in System Settings ▸ General ▸ Login Items. Turn this on to allow it there.' : 'Start Tidewall when you log in.';
+  $('#loginNote').textContent = blocked ? 'Switched off in System Settings ▸ General ▸ Login Items. Turn this on to allow it there.' : WIN() ? 'Start Tidewall when you sign in to Windows.' : 'Start Tidewall when you log in.';
   $$('.sw').forEach(el => { el.classList.toggle('on', !!S.settings[el.dataset.k]); el.setAttribute('aria-checked', String(!!S.settings[el.dataset.k])); });
   $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.v === S.settings[seg.dataset.k])));
   // desktop icons: say so when macOS hasn't allowed it, and offer the way there
   const denied = S.settings.deskIcons && S.settings.deskIconsState === 'denied';
-  $('#iconsNote').innerHTML = denied ? 'macOS hasn’t let Tidewall see Finder yet. <a href="#" id="iconsFix">Open Privacy &amp; Security ▸ Automation</a> and allow <b>Finder</b> under Tidewall.'
+  if (WIN()) $('#iconsNote').textContent = 'Each wall keeps your desktop icons clear and readable.';
+  else $('#iconsNote').innerHTML = denied ? 'macOS hasn’t let Tidewall see Finder yet. <a href="#" id="iconsFix">Open Privacy &amp; Security ▸ Automation</a> and allow <b>Finder</b> under Tidewall.'
     : 'Each wall keeps your desktop icons clear and readable. macOS asks you once to let Tidewall see where Finder puts them.';
   const fix = $('#iconsFix'); if (fix) fix.addEventListener('click', e => { e.preventDefault(); send({ t: 'openAutomation' }); });
-  $('#batNote').textContent = 'What the wallpaper does when your Mac isn’t plugged in (or is in Low Power Mode). Calmer draws at half the rate.' +
+  $('#batNote').textContent = WIN() ? 'What the wallpaper does when your PC isn’t plugged in. Calmer draws at half the rate.' + (S.settings.onBattery ? ' Your PC is on battery now.' : '')
+    : 'What the wallpaper does when your Mac isn’t plugged in (or is in Low Power Mode). Calmer draws at half the rate.' +
     (S.settings.onBattery ? ' Your Mac is on battery now.' : S.settings.lowPower ? ' Low Power Mode is on now.' : '');
   drawLive();
 }
@@ -723,6 +740,8 @@ window.tw = { receive(m) {
   if (m.t === 'state') {
     const first = !sel; S = Object.assign(S, m);
     $('#ver').textContent = 'Version ' + S.version;
+    document.body.classList.toggle('win', WIN());
+    if (WIN()) { $('#osTag').textContent = 'Windows 10 & 11'; $('#aboutSub').textContent = 'A live wallpaper for Windows that flows around your windows. Move a window and the world grows, parts and settles around it.'; }
     drawGrid(); drawSettings(); drawNow(); drawUpdate(); drawNotes();
     if (first) select(mainTheme()); else select(sel, true);
     if ($('#displays').classList.contains('on')) drawDesk();
@@ -735,7 +754,7 @@ window.tw = { receive(m) {
     if (firstDesk || !drag) { wins = layoutFor(mode); sizeScreen(); drawWins(); loadPreview(); sendWins(false); }   // another display: another shape
   } else if (m.t === 'notes') { NOTES = m.md || ''; drawNotes();
   } else if (m.t === 'usage') {
-    const pct = v => v.toFixed(v < 10 ? 1 : 0) + '%';
+    const pct = v => v < 0 ? '–' : v.toFixed(v < 10 ? 1 : 0) + '%';   // (no GPU figure on Windows)
     $('#mCpu').textContent = $('#uCpu').textContent = pct(m.cpu); $('#mGpu').textContent = $('#uGpu').textContent = pct(m.gpu);
     $('#mMem').textContent = Math.round(m.mem) + 'M'; $('#uMem').textContent = Math.round(m.mem) + ' MB';
     if (m.winMem) $('#winNote').textContent = `This window and its live preview use another ${Math.round(m.winMem)} MB and ${pct(m.winCpu)} CPU, all freed when you close it.`;
