@@ -112,6 +112,9 @@ internal sealed class WindowTracker : IDisposable
         if (cls is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "NotifyIconOverflowWindow"
             or "Windows.UI.Core.CoreWindow" or "XamlExplorerHostIslandWindow" or "TopLevelWindowForOverflowXamlIsland") return false;
         if (Native.GetWindowTextLength(h) == 0 && cls != "ApplicationFrameWindow") return false;   // untitled helpers and overlays
+        // Explorer's own windows are folder windows (CabinetWClass); the rest of it is the shell's furniture (taskbar
+        // thumbnails, the minimise animation, flyouts), as the Dock is on a Mac
+        if (cls != "CabinetWClass" && Owner(h) == "explorer") return false;
         if (Native.IsCloaked(h)) return false;
         bounds = Native.VisibleBounds(h);
         return bounds.Width >= 40 && bounds.Height >= 40;

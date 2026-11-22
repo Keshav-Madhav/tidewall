@@ -40,7 +40,11 @@ internal sealed class TidewallApp : ApplicationContext
         BuildWalls();
         if (Args.Has("--settings")) loop.BeginInvoke(() => ShowSettings(Args.Value("--settings")));
 
-        SystemEvents.DisplaySettingsChanged += (_, _) => loop.BeginInvoke(BuildWalls);
+        rebuildSoon.Tick += (_, _) => { rebuildSoon.Stop(); BuildWalls(); };
+        SystemEvents.DisplaySettingsChanged += (_, _) => loop.BeginInvoke(() => RebuildSoon("displays changed"));
+        // Explorer restarted (it crashed, or someone restarted it): the desktop window the walls lived in went with it.
+        // It says so to every top-level window ("TaskbarCreated"); the walls are made again in the new one.
+        explorerWatch = new ExplorerWatch(() => loop.BeginInvoke(() => RebuildSoon("Explorer restarted")));
         SystemEvents.SessionSwitch += (_, e) =>
         {
             if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect) { locked = true; Updates.Locked(); }
@@ -53,6 +57,12 @@ internal sealed class TidewallApp : ApplicationContext
         Log.Write($"Tidewall {Config.Version} on Windows {Environment.OSVersion.Version}; themes {Config.ThemesRoot}");
     }
 
+    /// A wall whose desktop window has gone (Explorer restarted) can't be closed cleanly: WebView2 throws, and it's let go.
+    static void CloseWall(Wallpaper w)
+    {
+        try { w.Close(); } catch (Exception e) { Log.Write($"a wall closed uncleanly ({e.GetType().Name}): its desktop had gone"); }
+    }
+
     public static Icon AppIcon()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Tidewall.ico");
@@ -63,7 +73,7 @@ internal sealed class TidewallApp : ApplicationContext
 
     void BuildWalls()
     {
-        foreach (var w in walls) w.Close();
+        foreach (var w in walls) CloseWall(w);
         walls.Clear();
         layer = DesktopLayer.Find();
         Log.Write($"desktop layer: {(layer.InsideProgman ? "inside Progman (24H2)" : "WorkerW")} {layer.Parent}");
@@ -80,6 +90,7 @@ internal sealed class TidewallApp : ApplicationContext
     async Task StartWall(Wallpaper wall)
     {
         try { await wall.StartAsync(layer!); }
+        catch (Exception e) when (wall.IsDisposed) { Log.Write($"a {wall.Theme} wall closed while it started ({e.GetType().Name})"); }   // (replaced by a newer one)
         catch (Exception e) { Log.Write($"JSERR could not start the {wall.Theme} wall: {e.Message}"); }
     }
 
@@ -94,14 +105,13 @@ internal sealed class TidewallApp : ApplicationContext
     public void Dispatch(bool live)
     {
         var windows = tracker.Windows;
-        var foreground = Native.GetForegroundWindow();
         foreach (var w in walls)
         {
             if (!w.Ready) continue;
             w.SendDesk(WorldFor(w));
             w.SendDeskIcons(deskIcons, WorldFor(w));
-            // a full-screen app over this display: nothing of the wall shows
-            bool covered = !live && windows.Any(t => t.Handle == foreground && t.Bounds.Contains(w.Frame));
+            // nothing of the wall shows but behind the taskbar (a maximised window, a full-screen app): it rests, as on a Mac
+            bool covered = !live && Covered.IsCovered(w.Screen.WorkingArea, windows.Select(t => t.Bounds));
             w.SetPaused(Config.Paused || locked || idle || covered);
             if (!w.Paused || live) w.SendWindows(Config.ReactWindows ? windows : Array.Empty<TrackedWindow>(), live);   // windows off: it carries on as if they weren't there
         }
@@ -110,8 +120,20 @@ internal sealed class TidewallApp : ApplicationContext
         tracker.Resting = deskIcons.Resting = Config.Paused || locked || idle;
     }
 
+    readonly ExplorerWatch explorerWatch;
+    readonly System.Windows.Forms.Timer rebuildSoon = new() { Interval = 800 };
+
+    /// Every wall again, a moment from now: the reasons come in bursts (Explorer's broadcast and the desktop window
+    /// going; a display change in several steps), and one rebuild serves them all.
+    void RebuildSoon(string why)
+    {
+        Log.Write($"{why}: the walls again");
+        rebuildSoon.Stop(); rebuildSoon.Start();
+    }
+
     void CheckIdle()
     {
+        if (layer != null && !Native.IsWindow(layer.Parent) && !rebuildSoon.Enabled) RebuildSoon("the desktop window is gone");   // (in case the broadcast was missed)
         bool now = Config.IdleMinutes > 0 && Native.IdleSeconds() > Config.IdleMinutes * 60;
         if (now == idle) return;
         idle = now;
@@ -189,9 +211,10 @@ internal sealed class TidewallApp : ApplicationContext
     {
         tray.Visible = false;
         settings?.Close();
-        foreach (var w in walls) w.Close();
+        foreach (var w in walls) CloseWall(w);
         tracker.Dispose();
         deskIcons.Dispose();
+        explorerWatch.DestroyHandle();
         base.ExitThreadCore();
     }
 }
@@ -210,5 +233,24 @@ internal static class LoginItem
             if (value) k.SetValue("Tidewall", $"\"{Environment.ProcessPath}\" --background");
             else k.DeleteValue("Tidewall", false);
         }
+    }
+}
+
+/// A hidden top-level window that hears Explorer's "TaskbarCreated" broadcast (a message-only window never hears it).
+internal sealed class ExplorerWatch : NativeWindow
+{
+    static readonly uint taskbarCreated = Native.RegisterWindowMessage("TaskbarCreated");
+    readonly Action restarted;
+
+    public ExplorerWatch(Action restarted)
+    {
+        this.restarted = restarted;
+        CreateHandle(new CreateParams { Caption = "Tidewall.ExplorerWatch" });
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == taskbarCreated) restarted();
+        base.WndProc(ref m);
     }
 }

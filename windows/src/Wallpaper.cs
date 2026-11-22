@@ -14,7 +14,8 @@ internal sealed class Wallpaper : Form
 
     /// One browser for every wall and the Settings window (its data in %LOCALAPPDATA%\TidewallData\WebView2).
     public static async Task<CoreWebView2Environment> EnvironmentAsync() => environment ??= await CoreWebView2Environment.CreateAsync(null,
-        Path.Combine(Config.DataDir, "WebView2"), new CoreWebView2EnvironmentOptions("--autoplay-policy=no-user-gesture-required --disable-features=msSmartScreenProtection"));
+        Path.Combine(Config.DataDir, "WebView2"), new CoreWebView2EnvironmentOptions("--autoplay-policy=no-user-gesture-required --disable-features=msSmartScreenProtection" +
+            (Args.Value("--cdp") is { } port ? $" --remote-debugging-port={int.Parse(port)}" : "")));   // tests: drive the pages from outside
 
     readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(239, 228, 204) };
     readonly string theme;
