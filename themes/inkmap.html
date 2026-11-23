@@ -697,7 +697,9 @@ function routeTo(tx, ty, now) {
   const cw = Math.ceil(W / RC), ch = Math.ceil(H / RC), ti = Math.floor(tx / RC), tj = Math.floor(ty / RC);
   if (route && route.ti === ti && route.tj === tj && route.fb === FB && now - route.at < 2000) return route;
   const open = new Uint8Array(cw * ch), dist = new Int32Array(cw * ch).fill(-1);
-  for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) open[j * cw + i] = seaS((i + .5) * RC, (j + .5) * RC) > 26 ? 1 : 0;
+  // (open: clear of the coast by about the boat's own room; at 26 the grid closed the channels between islands and the
+  // screen's edge, and the boat, cut off, faded out and reappeared rather than sailing round)
+  for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) open[j * cw + i] = seaS((i + .5) * RC, (j + .5) * RC) > 18 ? 1 : 0;
   const q = [], start = clamp(tj, 0, ch - 1) * cw + clamp(ti, 0, cw - 1); dist[start] = 0; q.push(start);
   for (let h = 0; h < q.length; h++) { const c = q[h], ci = c % cw, cj = (c / cw) | 0;
     for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) { const ni = ci + di, nj = cj + dj, n = nj * cw + ni;
@@ -707,16 +709,29 @@ function routeTo(tx, ty, now) {
 // where to aim: a few cells further along the shortest way (null: no way by sea from here)
 function waypoint(r) {
   let c = -1, best = 1e9; const bi = Math.floor(B.x / RC), bj = Math.floor(B.y / RC);
-  for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) { const i = bi + di, j = bj + dj, n = j * r.cw + i;
+  for (let dj = -3; dj <= 3; dj++) for (let di = -3; di <= 3; di++) { const i = bi + di, j = bj + dj, n = j * r.cw + i;
     if (i < 0 || j < 0 || i >= r.cw || j >= r.ch || r.dist[n] < 0) continue; const k = r.dist[n] + Math.hypot(di, dj) * .7; if (k < best) { best = k; c = n; } }
   if (c < 0) return null;
   for (let s = 0; s < 4 && r.dist[c] > 0; s++) { const ci = c % r.cw, cj = (c / r.cw) | 0; let nx = c;
     for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const i = ci + di, j = cj + dj, n = j * r.cw + i;
       if (i >= 0 && j >= 0 && i < r.cw && j < r.ch && r.dist[n] >= 0 && r.dist[n] < r.dist[nx]) nx = n; }
     if (nx === c) break; c = nx; }
-  return r.dist[c] === 0 ? null : [(c % r.cw + .5) * RC, (((c / r.cw) | 0) + .5) * RC];
+  return r.dist[c] === 0 ? null : [(c % r.cw + .5) * RC, (((c / r.cw) | 0) + .5) * RC, r.dist[c]];   // (and how far that cell still is)
 }
-let portage = 0;            // no way by sea: the boat fades out here and comes back out of the mist near you
+// no way by sea to where you are (a bay closed off by islands): the water the boat CAN reach that's nearest you
+let near = null;
+function nearestReachable(tx, ty, now) {
+  const cw = Math.ceil(W / RC), ch = Math.ceil(H / RC), bi = clamp(Math.floor(B.x / RC), 0, cw - 1), bj = clamp(Math.floor(B.y / RC), 0, ch - 1);
+  if (near && near.fb === FB && now - near.at < 1500 && Math.hypot(near.tx - tx, near.ty - ty) < RC) return near.p;
+  const seen = new Uint8Array(cw * ch), q = [bj * cw + bi]; seen[q[0]] = 1; let best = null, bd = 1e9;
+  for (let h = 0; h < q.length; h++) { const c = q[h], ci = c % cw, cj = (c / cw) | 0, x = (ci + .5) * RC, y = (cj + .5) * RC, d = Math.hypot(x - tx, y - ty);
+    if (d < bd) { bd = d; best = [x, y]; }
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ni = ci + di, nj = cj + dj, n = nj * cw + ni;
+      if (ni >= 0 && nj >= 0 && ni < cw && nj < ch && !seen[n] && seaS((ni + .5) * RC, (nj + .5) * RC) > 18) { seen[n] = 1; q.push(n); } } }
+  near = { fb: FB, at: now, tx, ty, p: best && bd < 260 ? best : null };
+  return near.p;
+}
+let portage = 0;            // no water near you it can reach: the boat fades out here and comes back out of the mist near you
 function stepBoat(dt, t) {
   if (!FB) return;
   if (!B.on) { const [mx, my, mw, mh] = Span.world ? Span.main : [W / 2, H / 2, W, H]; [B.x, B.y] = toWater(mx, my + mh * .2, 50); B.on = true; boat.style.opacity = 1; B.o = 1; }
@@ -727,11 +742,21 @@ function stepBoat(dt, t) {
     drawBoat(t); return;
   }
   if (B.o === 0) { B.o = 1; boat.style.opacity = 1; }                 // taken over mid-fade by another display: show it again
-  if (cursor && Math.hypot(tx - B.x, ty - B.y) > 4 * RC) {
+  // routed unless the way is plainly open: far off, or near but with land between (straight at it, it pressed against
+  // the shore, pulled one way and pushed the other: the boat "bugging out")
+  const clear = (() => { const d = Math.hypot(tx - B.x, ty - B.y), n = Math.ceil(d / 10);
+    for (let k = 1; k < n; k++) if (seaS(B.x + (tx - B.x) * k / n, B.y + (ty - B.y) * k / n) < 18) return false; return true; })();
+  if (cursor && (Math.hypot(tx - B.x, ty - B.y) > 4 * RC || !clear)) {
     const r = routeTo(tx, ty, now), w = waypoint(r);
     const here = r.dist[clamp(Math.floor(B.y / RC), 0, r.ch - 1) * r.cw + clamp(Math.floor(B.x / RC), 0, r.cw - 1)];
-    if (w) [tx, ty] = w;
-    else if (here < 0 && Math.hypot(tx - B.x, ty - B.y) > 260) { portage = now + 1400; B.o = 0; boat.style.opacity = 0; drawBoat(t); return; }
+    if (w) { [tx, ty] = w; B.togo = w[2] * RC; }
+    else if (here < 0) {
+      // cut off from you: sail to the reachable water nearest you and wait at that shore; only if that's far from you too,
+      // slip away into the mist and come back near you
+      const alt = nearestReachable(tx, ty, now);
+      if (alt) { const r2 = routeTo(alt[0], alt[1], now), w2 = waypoint(r2); [tx, ty] = w2 || alt; if (w2) B.togo = w2[2] * RC; }
+      else if (Math.hypot(tx - B.x, ty - B.y) > 260) { portage = now + 1400; B.o = 0; boat.style.opacity = 0; drawBoat(t); return; }
+    }
   }
   // its top speed fits the frames it can get: about 3 pt a step (230 pt/s at 120 a second, slower when frames are
   // scarce: a boat racing at 230 pt/s on 30 frames a second jumped 8 pt a frame and stuttered)
@@ -745,8 +770,19 @@ function stepBoat(dt, t) {
   const acc = 480 * dt; let ex = dvx - B.vx, ey = dvy - B.vy; const el = Math.hypot(ex, ey); if (el > acc) { ex *= acc / el; ey *= acc / el; }
   B.vx += ex; B.vy += ey; B.x += B.vx * dt; B.y += B.vy * dt;
   const sNow = seaS(B.x, B.y);
-  if (sNow < 16) { const [gx, gy] = seaGrad(B.x, B.y), l = Math.hypot(gx, gy) || 1; B.x += gx / l * (16 - sNow) * .5; B.y += gy / l * (16 - sNow) * .5; }
+  // land grown right over it (a window dropped on the boat): deep in, it slips away into the mist and comes back near
+  // you; at the coast it's eased back to the water, a few points a frame (shoved by its depth, it was thrown across the map)
+  if (sNow < -12) { portage = now + 1400; B.o = 0; boat.style.opacity = 0; drawBoat(t); return; }
+  if (sNow < 16) { const [gx, gy] = seaGrad(B.x, B.y), l = Math.hypot(gx, gy) || 1, k = Math.min(6, (16 - sNow) * .5); B.x += gx / l * k; B.y += gy / l * k; }
   const sp = Math.hypot(B.vx, B.vy);
+  // the last resort, for anything the routing can't see (an island grown round it, a pocket of water): no headway for
+  // 3 s while it's trying to go somewhere, and it slips away into the mist and comes back near you
+  const togo = B.togo != null ? B.togo + Math.hypot(tx - B.x, ty - B.y) : Math.hypot(tx - B.x, ty - B.y);   // (along the route, when it has one)
+  B.togo = null;
+  if (cursor && want > 0 && togo > 40) {
+    if (!B.prog || togo < B.prog.d - 25) B.prog = { d: togo, at: now };
+    else if (now - B.prog.at > 3000) { B.prog = null; portage = now + 1400; B.o = 0; boat.style.opacity = 0; drawBoat(t); return; }
+  } else B.prog = null;
   if (Math.abs(B.vx) > 8) B.flipT = B.vx > 0 ? 1 : -1;
   B.flip += (B.flipT - B.flip) * Math.min(1, dt * 5);
   const tiltT = Math.max(-.2, Math.min(.2, B.vy / maxV * .35)) * B.flipT; B.tilt += (tiltT - B.tilt) * Math.min(1, dt * 4);
