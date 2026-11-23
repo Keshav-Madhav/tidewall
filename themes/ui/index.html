@@ -672,7 +672,7 @@ $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.addEvent
 function drawSettings() {
   // on, but switched off for Tidewall in System Settings ▸ Login Items: show it off, say where; the switch opens that pane
   const blocked = !!S.settings.loginBlocked; if (blocked) S.settings.login = false;
-  $('#loginNote').textContent = blocked ? 'Switched off in System Settings ▸ General ▸ Login Items. Turn this on to allow it there.' : WIN() ? 'Start Tidewall when you sign in to Windows.' : 'Start Tidewall when you log in.';
+  $('#loginNote').textContent = blocked ? (WIN() ? 'Switched off in Windows’ Settings ▸ Apps ▸ Startup. Turn this on to allow it there.' : 'Switched off in System Settings ▸ General ▸ Login Items. Turn this on to allow it there.') : WIN() ? 'Start Tidewall when you sign in to Windows.' : 'Start Tidewall when you log in.';
   $$('.sw').forEach(el => { el.classList.toggle('on', !!S.settings[el.dataset.k]); el.setAttribute('aria-checked', String(!!S.settings[el.dataset.k])); });
   $$('.seg').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.v === S.settings[seg.dataset.k])));
   // desktop icons: say so when macOS hasn't allowed it, and offer the way there

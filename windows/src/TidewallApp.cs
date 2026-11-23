@@ -16,13 +16,13 @@ internal sealed class TidewallApp : ApplicationContext
     readonly System.Windows.Forms.Timer pointer = new() { Interval = 16 };
     readonly List<Wallpaper> walls = [];
     DesktopLayer.Host? layer;
-    bool locked, idle, asleep, released;
+    bool locked, idle, asleep, displaysOff, released;
     PowerState power = PowerState.Current();
     DateTime? restSince;
     readonly Dictionary<Wallpaper, DateTime> coveredSince = [];
     int ticks;
     public PowerState Power => power;
-    bool Resting => Config.Paused || locked || idle || asleep || power.Paused;
+    bool Resting => Config.Paused || locked || idle || asleep || displaysOff || power.Paused;
     Point lastPointer = new(-1, -1);
     Wallpaper? pointerWall;
 
@@ -39,6 +39,7 @@ internal sealed class TidewallApp : ApplicationContext
         tracker = new WindowTracker(loop);
         tracker.Changed += (_, live) => Dispatch(live);
         deskIcons = new DeskIcons();
+        tracker.ItemMoved += deskIcons.ItemMoved;
         Updates = new Updater();
         Updates.Changed += () => { settings?.PushState(); RebuildMenu(); };
         deskIcons.Changed += () =>
@@ -64,17 +65,26 @@ internal sealed class TidewallApp : ApplicationContext
         // Explorer restarted (it crashed, or someone restarted it): the desktop window the walls lived in went with it.
         // It says so to every top-level window ("TaskbarCreated"); the walls are made again in the new one.
         explorerWatch = new ExplorerWatch(() => loop.BeginInvoke(() => RebuildSoon("Explorer restarted", handOver: false)), () => loop.BeginInvoke(() => ShowSettings()),
-            () => loop.BeginInvoke(() => { Log.Write("asked to quit (being uninstalled)"); ExitThread(); }));
+            () => loop.BeginInvoke(() => { Log.Write("asked to quit (being uninstalled)"); ExitThread(); }),
+            // the displays went dark with the PC still awake (the power plan's "turn off the display"): nobody can see
+            // the walls, so they rest, as on the Mac; it's also a good moment to put a waiting update in
+            on => loop.BeginInvoke(() =>
+            {
+                if (displaysOff == !on) return;
+                displaysOff = !on; Log.Write(on ? "displays on" : "displays off");
+                if (!on) Updates.Locked(); else CheckGPUContexts();
+                Dispatch(false);
+            }));
         SystemEvents.SessionSwitch += (_, e) =>
         {
             if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.ConsoleDisconnect) { locked = true; Updates.Locked(); }
-            if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect) locked = false;
+            if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect) { locked = false; CheckGPUContexts(); }
             loop.BeginInvoke(() => Dispatch(false));
         };
         SystemEvents.PowerModeChanged += (_, e) => loop.BeginInvoke(() =>
         {
             if (e.Mode == PowerModes.Suspend) { asleep = true; Log.Write("asleep"); }
-            else if (e.Mode == PowerModes.Resume) { asleep = false; Log.Write("awake"); }
+            else if (e.Mode == PowerModes.Resume) { asleep = false; Log.Write("awake"); CheckGPUContexts(); }
             CheckPower(); Dispatch(false);
         });
         Wallpaper.SetPace(power.Pace, walls);
@@ -180,8 +190,11 @@ internal sealed class TidewallApp : ApplicationContext
             // nothing of the wall shows but behind the taskbar (a maximised window, a full-screen app): it rests, as on a Mac
             bool covered = !live && Covered.IsCovered(w.Screen.WorkingArea, windows.Select(t => t.Bounds));
             if (covered) coveredSince.TryAdd(w, DateTime.UtcNow); else coveredSince.Remove(w);
-            w.SetPaused(Resting || covered);
-            if (!w.Paused || live) w.SendWindows(Config.ReactWindows ? windows : Array.Empty<TrackedWindow>(), live);   // windows off: it carries on as if they weren't there
+            bool rest = Resting || covered;
+            // windows off: it carries on as if they weren't there. A wall that comes up resting lays itself out round the
+            // windows once first, then rests (as on the Mac), rather than resting on an empty desk
+            if (!rest || live || !w.LaidOut) w.SendWindows(Config.ReactWindows ? windows : Array.Empty<TrackedWindow>(), live);
+            w.SetPaused(rest);
         }
         // nothing to follow the pointer for: no ticks at all (it ran 60 times a second all day, paused or not)
         pointer.Enabled = walls.Any(w => w.Ready && !w.Paused && w.WantsCursor) && !Resting;
@@ -227,7 +240,7 @@ internal sealed class TidewallApp : ApplicationContext
     /// becomes a still picture and lets go of its memory, until you're back.
     void CheckAway()
     {
-        bool away = Config.Paused || locked || asleep || power.Paused;
+        bool away = Config.Paused || locked || asleep || displaysOff || power.Paused;
         if (away || idle)
         {
             restSince ??= DateTime.UtcNow;
@@ -253,11 +266,12 @@ internal sealed class TidewallApp : ApplicationContext
         foreach (var w in walls.ToList())
         {
             if (w.Frozen) { if (!Covered.IsCovered(w.Screen.WorkingArea, rects)) ReplaceWall(w); continue; }
-            if (coveredSince.TryGetValue(w, out var since) && (DateTime.UtcNow - since).TotalSeconds >= 30) { coveredSince.Remove(w); _ = w.FreezeAsync(); }
+            // as on the Mac: under a full-screen app (the taskbar hidden too) it lets go after 15 s, under maximised windows 30 s
+            double after = Covered.IsCovered(w.Screen.Bounds, rects) ? 15 : 30;
+            if (coveredSince.TryGetValue(w, out var since) && (DateTime.UtcNow - since).TotalSeconds >= after) { coveredSince.Remove(w); _ = w.FreezeAsync(); }
         }
     }
 
-    /// One wall made again (its still picture replaced by the live page).
     readonly System.Windows.Forms.Timer retune = new() { Interval = 2000 };
 
     /// Only the walls a change touches start again, as on the Mac (a theme or variant chosen for one display, or a
@@ -269,6 +283,20 @@ internal sealed class TidewallApp : ApplicationContext
         RefreshMenu();
     }
 
+    /// A few seconds after waking, unlocking or the displays coming on (monitors take a moment), any wall left without its
+    /// WebGL context starts again, as on the Mac. Pages usually notice by themselves; this is the safety net.
+    void CheckGPUContexts() => _ = Task.Delay(4000).ContinueWith(_ => loop.BeginInvoke(async () =>
+    {
+        if (released) return;
+        foreach (var w in walls.Where(w => w.Ready && !w.Frozen).ToList())
+        {
+            string lost;
+            try { lost = await w.AskAsync("return !!(window.__twGLLost && window.__twGLLost())"); } catch (Exception) { continue; }
+            if (lost.Contains("true") && walls.Contains(w)) ReplaceWall(w, "lost its GPU context");
+        }
+    }));
+
+    /// One wall made again (its still picture replaced by the live page, or a new theme or variant).
     void ReplaceWall(Wallpaper old, string why = "uncovered")
     {
         int i = walls.IndexOf(old);
@@ -422,7 +450,7 @@ internal sealed class TidewallApp : ApplicationContext
         foreach (var w in walls) CloseWall(w);
         tracker.Dispose();
         deskIcons.Dispose();
-        explorerWatch.DestroyHandle();
+        explorerWatch.Close();
         base.ExitThreadCore();
     }
 }
@@ -442,6 +470,21 @@ internal static class LoginItem
             else k.DeleteValue("Tidewall", false);
         }
     }
+
+    /// Switched off for Tidewall in Settings ▸ Apps ▸ Startup (or Task Manager's Startup apps): Windows keeps the Run
+    /// entry and marks it here, an odd first byte meaning off. As on the Mac, the switch then shows off and says where.
+    public static bool Blocked
+    {
+        get
+        {
+            try
+            {
+                return Enabled && Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run")
+                    ?.GetValue("Tidewall") is byte[] { Length: > 0 } b && (b[0] & 1) == 1;
+            }
+            catch (Exception) { return false; }
+        }
+    }
 }
 
 /// A hidden top-level window that hears Explorer's "TaskbarCreated" broadcast (a message-only window never hears it),
@@ -453,16 +496,29 @@ internal sealed class ExplorerWatch : NativeWindow
     public static readonly uint Quit = Native.RegisterWindowMessage("Tidewall.Quit");
     static readonly uint taskbarCreated = Native.RegisterWindowMessage("TaskbarCreated");
     readonly Action restarted, show, quit;
+    readonly Action<bool> displays;
+    readonly IntPtr displayNote;
+    static Guid consoleDisplayState = new("6FE69556-704A-47A0-8F24-C28D936FDA47");   // GUID_CONSOLE_DISPLAY_STATE
 
-    public ExplorerWatch(Action restarted, Action show, Action quit)
+    public ExplorerWatch(Action restarted, Action show, Action quit, Action<bool> displays)
     {
-        this.restarted = restarted; this.show = show; this.quit = quit;
+        this.restarted = restarted; this.show = show; this.quit = quit; this.displays = displays;
         CreateHandle(new CreateParams { Caption = Caption });
+        displayNote = Native.RegisterPowerSettingNotification(Handle, ref consoleDisplayState, 0);
     }
+
+    public void Close() { if (displayNote != IntPtr.Zero) Native.UnregisterPowerSettingNotification(displayNote); DestroyHandle(); }
 
     protected override void WndProc(ref Message m)
     {
-        if (m.Msg == taskbarCreated) restarted();
+        const int WM_POWERBROADCAST = 0x218, PBT_POWERSETTINGCHANGE = 0x8013;
+        if (m.Msg == WM_POWERBROADCAST && (int)m.WParam == PBT_POWERSETTINGCHANGE && m.LParam != IntPtr.Zero)
+        {
+            // POWERBROADCAST_SETTING: the setting's GUID, the data's length, then the data: 0 off, 1 on, 2 dimmed
+            var setting = System.Runtime.InteropServices.Marshal.PtrToStructure<Guid>(m.LParam);
+            if (setting == consoleDisplayState) displays(System.Runtime.InteropServices.Marshal.ReadInt32(m.LParam, 20) != 0);
+        }
+        else if (m.Msg == taskbarCreated) restarted();
         else if (m.Msg == ShowSettings) show();
         else if (m.Msg == Quit) quit();
         base.WndProc(ref m);

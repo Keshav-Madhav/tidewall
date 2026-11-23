@@ -17,8 +17,20 @@ internal sealed class DeskIcons : IDisposable
     IntPtr process;
     uint processId;
 
+    readonly System.Windows.Forms.Timer soon = new() { Interval = 350 };
+    IntPtr view;
+
+    /// An item moved in some list: if it's the desktop's, read the icons again shortly (as the Mac does after a drag),
+    /// rather than at the next 2-second look.
+    public void ItemMoved(IntPtr list)
+    {
+        if (list != view || view == IntPtr.Zero || !timer.Enabled) return;
+        soon.Stop(); soon.Start();
+    }
+
     public DeskIcons()
     {
+        soon.Tick += (_, _) => { soon.Stop(); Read(); };
         timer.Tick += (_, _) => Read();
         timer.Start();
         Read();
@@ -30,7 +42,7 @@ internal sealed class DeskIcons : IDisposable
     public void Read()
     {
         if (!Config.DeskIcons) { Set([], []); return; }
-        var view = ListView();
+        view = ListView();
         if (view == IntPtr.Zero || !Native.IsWindowVisible(view)) { Set([], []); return; }   // icons hidden (View ▸ Show desktop icons off)
         try
         {
@@ -124,7 +136,7 @@ internal sealed class DeskIcons : IDisposable
 
     public void Dispose()
     {
-        timer.Dispose();
+        timer.Dispose(); soon.Dispose();
         if (process != IntPtr.Zero) CloseHandle(process);
     }
 

@@ -17,7 +17,7 @@ internal sealed class Wallpaper : Form
         Path.Combine(Config.DataDir, "WebView2"), new CoreWebView2EnvironmentOptions("--autoplay-policy=no-user-gesture-required --disable-features=msSmartScreenProtection" +
             (Args.Value("--cdp") is { } port ? $" --remote-debugging-port={int.Parse(port)}" : "")));   // tests: drive the pages from outside
 
-    readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Color.FromArgb(239, 228, 204) };
+    readonly WebView2 web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = Paper };
     readonly string theme;
     /// The display this wall is drawn on.
     public Display Screen { get; }
@@ -59,15 +59,24 @@ internal sealed class Wallpaper : Form
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public Wallpaper? Replacing { get; set; }
 
+    bool fadeIn;
+    readonly List<DateTime> crashes = [];
+    static readonly Color Paper = Color.FromArgb(239, 228, 204);
+
     public async Task StartAsync(DesktopLayer.Host layer)
     {
         var t0 = DateTime.UtcNow;
+        // the first wall on a display (not one replacing another): until its page is ready, what was there before (your
+        // own wallpaper) rather than a blank colour, and then the wall fades in over it, as on the Mac
+        fadeIn = Replacing is not { IsDisposed: false } && !Args.Has("--test");
+        if (fadeIn) ShowDesktopPicture();
         Show();
         DesktopLayer.Attach(Handle, layer, Screen.Bounds, Replacing is { IsDisposed: false } r ? r.Handle : default);
         started = t0;
 
         await web.EnsureCoreWebView2Async(await EnvironmentAsync());
         var core = web.CoreWebView2;
+        if (fadeIn) await core.AddScriptToExecuteOnDocumentCreatedAsync("document.documentElement.style.opacity='0'");
         core.Settings.AreDefaultContextMenusEnabled = false;
         core.Settings.AreDevToolsEnabled = Args.Has("--devtools");
         core.Settings.IsStatusBarEnabled = false;
@@ -80,7 +89,16 @@ internal sealed class Wallpaper : Form
         core.DOMContentLoaded += (_, _) => _ = core.ExecuteScriptAsync(PageScripts.Late);
         core.WebMessageReceived += (_, e) => Received(e.TryGetWebMessageAsString());
         await WatchConsole(core);
-        core.ProcessFailed += (_, e) => { Log.Write($"[{theme}] web process failed ({e.ProcessFailedKind}); reloading"); Ready = false; core.Reload(); };
+        core.ProcessFailed += (_, e) =>
+        {
+            // as on the Mac: failing over and over (three times in a minute), give the system 10 s before trying again
+            var now = DateTime.UtcNow;
+            crashes.RemoveAll(t => (now - t).TotalSeconds > 60); crashes.Add(now);
+            int wait = crashes.Count > 2 ? 10000 : 0;
+            Log.Write($"[{theme}] web process failed ({e.ProcessFailedKind}); reloading{(wait > 0 ? " in 10 s" : "")}");
+            Ready = false;
+            _ = Task.Delay(wait).ContinueWith(_ => BeginInvoke(() => { if (!IsDisposed && web.CoreWebView2 != null) web.CoreWebView2.Reload(); }));
+        };
 
         LoadedVariant = Config.Variant(theme);
         var variant = LoadedVariant is { } v ? "&v=" + Uri.EscapeDataString(v) : "";
@@ -121,7 +139,8 @@ internal sealed class Wallpaper : Form
                 SendDesk();
                 Send($"{{\"t\":\"me\",\"seed\":{Config.Seed}}}");
                 if (Pace != 1) Send($"{{\"t\":\"pace\",\"k\":{Pace}}}");
-                if (Paused) Send("{\"t\":\"pause\",\"v\":true}");
+                Paused = false; LaidOut = false;                           // (it's told to rest after its first layout: Dispatch)
+                if (fadeIn) { fadeIn = false; FadeIn(); }
                 Log.Write($"[{theme}] ready on {Screen.Name} {Screen.Bounds} scale {PixelScale:0.##} in {(DateTime.UtcNow - started).TotalSeconds:0.0} s");
                 BecameReady?.Invoke(this);
                 break;
@@ -166,8 +185,12 @@ internal sealed class Wallpaper : Form
     }
 
     /// The windows over this display (screen pixels in), as the page wants them: its own device pixels.
+    /// It has been told the windows at least once since its page came up.
+    public bool LaidOut { get; private set; }
+
     public void SendWindows(IReadOnlyList<TrackedWindow> windows, bool live)
     {
+        LaidOut = true;
         var f = Frame;
         var mine = windows.Where(w => w.Bounds.IntersectsWith(f)).ToList();
         string Box(Rectangle r) => $"[{r.Left - f.Left},{r.Top - f.Top},{r.Right - f.Left},{r.Bottom - f.Top}]";
@@ -230,6 +253,31 @@ internal sealed class Wallpaper : Form
     /// A still picture of the wall: the page let go (all of its memory with it) while nobody would see it move (away
     /// from the PC a while, or behind a maximised window). Made again when it's wanted.
     public bool Frozen { get; private set; }
+    void ShowDesktopPicture()
+    {
+        try
+        {
+            var path = new System.Text.StringBuilder(520);
+            if (Native.SystemParametersInfo(0x73, path.Capacity, path, 0) && File.Exists(path.ToString()))   // SPI_GETDESKWALLPAPER
+            {
+                using var f = File.OpenRead(path.ToString());
+                BackgroundImage = Image.FromStream(new MemoryStream(ReadAll(f)));
+                BackgroundImageLayout = ImageLayout.Zoom;
+            }
+            BackColor = ColorTranslator.FromWin32(Native.GetSysColor(1));                 // COLOR_DESKTOP: a plain-colour desktop, and round the picture
+            web.DefaultBackgroundColor = Color.Transparent;
+        }
+        catch (Exception e) { Log.Write($"[{theme}] no desktop picture to fade from ({e.Message})"); }
+        static byte[] ReadAll(Stream s) { using var m = new MemoryStream(); s.CopyTo(m); return m.ToArray(); }
+    }
+
+    void FadeIn()
+    {
+        _ = web.CoreWebView2?.ExecuteScriptAsync("{const e=document.documentElement;e.animate([{opacity:0},{opacity:1}],{duration:700,easing:'ease-out'}).onfinish=()=>{e.style.opacity=''};e.style.opacity='1'}");
+        // once it shows, the picture beneath it isn't needed
+        _ = Task.Delay(1500).ContinueWith(_ => BeginInvoke(() => { if (IsDisposed || Frozen) return; var b = BackgroundImage; BackgroundImage = null; b?.Dispose(); web.DefaultBackgroundColor = BackColor = Paper; }));
+    }
+
     public async Task FreezeAsync()
     {
         if (Frozen || web.CoreWebView2 == null) return;
@@ -241,7 +289,13 @@ internal sealed class Wallpaper : Form
             BackgroundImage = Image.FromStream(new MemoryStream(png.ToArray()));
             BackgroundImageLayout = ImageLayout.Stretch;
         }
-        catch (Exception e) { Log.Write($"[{theme}] no still picture ({e.Message}): the wall's colour stands in"); }
+        catch (Exception e)
+        {
+            // as on the Mac: the theme's own thumbnail stands in (better than a flat colour)
+            var thumb = Path.Combine(Config.ThemesRoot, "ui", "thumbs", theme + ".jpg");
+            if (File.Exists(thumb)) { BackgroundImage = Image.FromStream(new MemoryStream(File.ReadAllBytes(thumb))); BackgroundImageLayout = ImageLayout.Zoom; }
+            Log.Write($"[{theme}] no still picture ({e.Message}): {(File.Exists(thumb) ? "its thumbnail" : "the wall's colour")} stands in");
+        }
         Ready = false;
         Controls.Remove(web);
         web.Dispose();

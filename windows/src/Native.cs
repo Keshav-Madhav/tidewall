@@ -56,6 +56,11 @@ internal static partial class Native
     [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder name, ref int size);
     public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    [DllImport("user32.dll")] public static extern IntPtr RegisterPowerSettingNotification(IntPtr recipient, ref Guid setting, int flags);
+    [DllImport("user32.dll")] public static extern bool UnregisterPowerSettingNotification(IntPtr handle);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool SystemParametersInfo(int action, int param, StringBuilder value, int flags);
+    [DllImport("user32.dll")] public static extern int GetSysColor(int index);
+    [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     public static string Title(IntPtr h) { var sb = new StringBuilder(256); GetWindowText(h, sb, sb.Capacity); return sb.ToString(); }
     /// A process's program file (also for one running as administrator, which Process.MainModule can't open).
     public static string? ImagePath(uint pid)

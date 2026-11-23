@@ -145,6 +145,12 @@ internal static class Config
     /// Each wall keeps your desktop icons clear (on by default: unlike Finder's, Explorer's need no permission).
     public static bool DeskIcons { get => Get("deskIcons", true); set => Set("deskIcons", value); }
     /// The window has been shown once (the first launch ever shows it, even at login).
+    /// Where the Settings window was last left.
+    public static Rectangle? WindowBounds
+    {
+        get { try { var p = data["windowBounds"]?.GetValue<string>()?.Split(',').Select(int.Parse).ToArray(); return p is { Length: 4 } ? new Rectangle(p[0], p[1], p[2], p[3]) : null; } catch (FormatException) { return null; } }
+        set { if (value is { } r) Set("windowBounds", $"{r.X},{r.Y},{r.Width},{r.Height}"); }
+    }
     public static bool Welcomed { get => Get("welcomed", false); set => Set("welcomed", value); }
     public static bool AutoUpdate { get => Get("autoUpdate", true); set => Set("autoUpdate", value); }
     public static bool SpanWorlds { get => Get("spanWorlds", true); set => Set("spanWorlds", value); }

@@ -58,6 +58,10 @@ internal sealed class WindowTracker : IDisposable
         set { if (value == !slow.Enabled) return; slow.Enabled = !value; if (!value) Look(); }
     }
 
+    const int OBJID_CLIENT = -4;
+    /// An item moved inside some window's list (the desktop's icon list among them: an icon dragged or arranged).
+    public event Action<IntPtr>? ItemMoved;
+
     void Hook(uint min, uint max) =>
         hooks.Add(Native.SetWinEventHook(min, max, IntPtr.Zero, onEvent, 0, 0, Native.WINEVENT_OUTOFCONTEXT));
 
@@ -65,6 +69,7 @@ internal sealed class WindowTracker : IDisposable
     {
         if (evt == Native.EVENT_SYSTEM_MOVESIZESTART) moving = true;
         else if (evt == Native.EVENT_SYSTEM_MOVESIZEEND) moving = false;
+        else if (idObject == OBJID_CLIENT && idChild > 0 && evt == Native.EVENT_OBJECT_LOCATIONCHANGE) { ItemMoved?.Invoke(hwnd); return; }   // (an item in a list: the desktop's icons)
         else if (idObject != Native.OBJID_WINDOW || hwnd == IntPtr.Zero) return;
         if (evt == Native.EVENT_OBJECT_DESTROY) classes.Remove(hwnd);
         // a child window (a browser's page, a video, an Office pane) moving can't move a top-level window

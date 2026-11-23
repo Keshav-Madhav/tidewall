@@ -27,12 +27,32 @@ internal sealed class SettingsWindow : Form
         var work = Screen.FromPoint(Cursor.Position).WorkingArea;
         ClientSize = new Size(Math.Min(1180, work.Width - 40), Math.Min(780, work.Height - 60));
         MinimumSize = new Size(Math.Min(980, work.Width), Math.Min(680, work.Height));
-        BackColor = web.DefaultBackgroundColor;
+        // where you left it, as on the Mac (if that's still on a connected screen)
+        if (Config.WindowBounds is { } b && Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(b) && Rectangle.Intersect(s.WorkingArea, b).Width > 200))
+        { StartPosition = FormStartPosition.Manual; Bounds = b; }
+        FormClosing += (_, _) => { if (WindowState == FormWindowState.Normal) Config.WindowBounds = Bounds; };
+        Theme();
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += ThemeChanged;
+        FormClosed += (_, _) => Microsoft.Win32.SystemEvents.UserPreferenceChanged -= ThemeChanged;
         Icon = TidewallApp.AppIcon();
         Controls.Add(web);
         usageTimer.Tick += (_, _) => PushUsage();
         FormClosed += (_, _) => { usageTimer.Dispose(); web.Dispose(); };
         _ = Start();
+    }
+
+    void ThemeChanged(object? _, Microsoft.Win32.UserPreferenceChangedEventArgs e) { if (e.Category == Microsoft.Win32.UserPreferenceCategory.General) BeginInvoke(Theme); }
+
+    /// Light or dark as Windows is (the page follows by itself; the frame and the moment before the page paints, here).
+    void Theme()
+    {
+        bool dark = false;
+        try { dark = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")?.GetValue("AppsUseLightTheme") is 0; }
+        catch (Exception) { }
+        web.DefaultBackgroundColor = BackColor = dark ? Color.FromArgb(28, 28, 30) : Color.FromArgb(245, 245, 243);
+        int on = dark ? 1 : 0;
+        if (IsHandleCreated) Native.DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int));   // DWMWA_USE_IMMERSIVE_DARK_MODE
+        else HandleCreated += (_, _) => Native.DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int));
     }
 
     async Task Start()
@@ -86,7 +106,7 @@ internal sealed class SettingsWindow : Form
             ["spanThemes"] = new JsonArray(Config.SpanThemes.Select(t => (JsonNode)t).ToArray()),
             ["settings"] = new JsonObject
             {
-                ["spanWorlds"] = Config.SpanWorlds, ["login"] = LoginItem.Enabled, ["loginBlocked"] = false,
+                ["spanWorlds"] = Config.SpanWorlds, ["login"] = LoginItem.Enabled, ["loginBlocked"] = LoginItem.Blocked,
                 ["restWhenIdle"] = Config.IdleMinutes > 0, ["paused"] = Config.Paused, ["fps"] = Config.Fps, ["margin"] = Config.Margin,
                 ["autoUpdate"] = Config.AutoUpdate, ["deskIcons"] = Config.DeskIcons, ["deskIconsState"] = "ok",
                 ["reactWindows"] = Config.ReactWindows, ["reactStage"] = true, ["reactWidgets"] = true, ["reactCursor"] = Config.ReactCursor,
@@ -246,7 +266,12 @@ internal sealed class SettingsWindow : Form
     {
         switch (key)
         {
-            case "login": LoginItem.Enabled = On(v, false); break;
+            case "login":
+                // switched off in Windows' Startup apps: only the user can turn it back on there, so that's where it opens
+                if (On(v, false) && LoginItem.Blocked) Process.Start(new ProcessStartInfo("ms-settings:startupapps") { UseShellExecute = true });
+                else LoginItem.Enabled = On(v, false);
+                PushState();
+                break;
             case "restWhenIdle": Config.IdleMinutes = On(v, true) ? Config.IdleLast : 0; break;
             case "idleMinutes": Config.IdleMinutes = Num(v, 3); break;
             case "spanWorlds": Config.SpanWorlds = On(v, true); app.Dispatch(false); app.RefreshMenu(); break;   // the walls are told their new world: none starts again
