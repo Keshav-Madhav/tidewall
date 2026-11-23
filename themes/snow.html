@@ -87,7 +87,16 @@ function paintBackdrop() {
 
 /* ---------- 2. windows: eased slots, each carrying its own drift ---------- */
 const COL = 4;                                 // a depth sample every 4 px along the top edge
+// windows have rounded corners: the snow's floor follows the curve down at each end rather than overhanging it
+const RAD = /Windows/.test(navigator.userAgent) ? 8 : 14;
+function floor(c, i) {                         // how far below the top edge column i's floor is
+  if (c.owner === '__icon') return 0;
+  const dx = Math.min(i * COL, c.w - i * COL); if (dx >= RAD) return 0;
+  const t = RAD - Math.max(0, dx); return RAD - Math.sqrt(Math.max(0, RAD * RAD - t * t));
+}
 let cur = [], liveUntil = 0, orphans = [], settled = false;
+// a window that goes (Show Desktop, minimised, another Space) and comes back gets its snow back, not a bare top
+const away = [];
 function makeCols(w, from) { const n = Math.max(2, Math.ceil(w / COL) + 1), c = new Float32Array(n);
   if (from) for (let i = 0; i < n; i++) c[i] = from[Math.min(from.length - 1, Math.round(i * (from.length - 1) / (n - 1)))];   // resample on resize
   return c; }
@@ -98,17 +107,21 @@ function setTargets(list) {
     for (const c of cur) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
     if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
     else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, cap: t.cap, alive: true, cols: makeCols(t.w), vx: 0, vy: 0, px: t.x, py: t.y };
-      if (!settled || performance.now() < 8000) for (let i = 0; i < c.cols.length; i++) c.cols[i] = 11 + 10 * vnoise(i * .06 + t.x, 2) + 5 * vnoise(i * .25 + t.y, 5);   // it's been snowing a while (icons arrive a moment after the first windows)
+      const back = away.findIndex(a => a.owner === t.owner && Math.abs(a.w - t.w) < 12 && now - a.at < 120000);
+      if (back >= 0) { c.cols = makeCols(t.w, away[back].cols); away.splice(back, 1); }
+      else if (!settled || performance.now() < 8000) for (let i = 0; i < c.cols.length; i++) c.cols[i] = 11 + 10 * vnoise(i * .06 + t.x, 2) + 5 * vnoise(i * .25 + t.y, 5);   // it's been snowing a while (icons arrive a moment after the first windows)
       cur.push(c); used.add(c); }
   }
   settled = true;
   for (const c of cur) if (!used.has(c) && c.alive) {           // closed: its drift stays behind and melts
-    c.alive = false; orphans.push({ x: c.x, y: c.y, w: c.w, cols: c.cols, melt: 0 });
+    c.alive = false; orphans.push({ x: c.x, y: c.y, w: c.w, cols: c.cols, melt: 0, owner: c.owner });
+    if (c.owner !== '__icon') { away.push({ owner: c.owner, w: c.w, cols: Float32Array.from(c.cols), at: now }); if (away.length > 24) away.shift(); }
   }
   cur = cur.filter(c => c.alive);
 }
 function stepWins(dt) {
-  const live = performance.now() < liveUntil, k = 1 - Math.exp(-dt * (live ? 40 : 8));
+  // a window in your hand: its snow sits right on it, every frame (eased, it trailed the window by a hand's width)
+  const live = performance.now() < liveUntil, k = live ? 1 : 1 - Math.exp(-dt * 8);
   for (const c of cur) {
     const ox = c.x, oy = c.y, ow = c.w;
     for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = c[b] - c[a]; if (Math.abs(d) > .2) c[a] += d * k; else c[a] = c[b]; }
@@ -162,7 +175,7 @@ function stepSnow(dt, now) {
     const ny = f.y + vy * dt, nx = f.x + vx * dt;
     if (f.layer > 0) {                               // near flakes settle on whatever is below them
       let landed = false;
-      for (const c of cur) { if (nx < c.x || nx > c.x + c.w) continue; const i = Math.round((nx - c.x) / COL), top = c.y - c.cols[i];
+      for (const c of cur) { if (nx < c.x || nx > c.x + c.w) continue; const i = Math.round((nx - c.x) / COL), top = c.y + floor(c, i) - c.cols[i];
         if (f.y <= top && ny >= top) { deposit(c.cols, i, f.size * .16); landed = true; break; } }
       if (!landed) { const gi = Math.round(nx / COL); if (gi >= 0 && gi < ground.length && ny >= H - 6 - ground[gi]) { deposit(ground, gi, f.size * .05); landed = true; } }
       if (landed) { respawn(f); continue; }
@@ -172,7 +185,7 @@ function stepSnow(dt, now) {
   // clumps from shaken drifts: tumble, and land on drifts below
   for (const c of clumps) {
     c.vy += 520 * dt; c.vx *= .99; const ny = c.y + c.vy * dt, nx = c.x + c.vx * dt;
-    for (const w of cur) { if (nx < w.x || nx > w.x + w.w || c.y > w.y) continue; const i = Math.round((nx - w.x) / COL), top = w.y - w.cols[i];
+    for (const w of cur) { if (nx < w.x || nx > w.x + w.w || c.y > w.y + RAD) continue; const i = Math.round((nx - w.x) / COL), top = w.y + floor(w, i) - w.cols[i];
       if (c.y <= top && ny >= top && c.vy > 0) { deposit(w.cols, i, c.s * 1.2); c.life = 0; break; } }
     const gi = Math.round(nx / COL); if (c.life > 0 && gi >= 0 && gi < ground.length && ny >= H - 6 - ground[gi]) { deposit(ground, gi, c.s * .6); c.life = 0; }
     c.x = nx; c.y = ny; if (c.y > H + 20) c.life = 0;
@@ -180,14 +193,20 @@ function stepSnow(dt, now) {
   for (let i = clumps.length - 1; i >= 0; i--) if (clumps[i].life <= 0) clumps.splice(i, 1);
   // drifts settle; warmth melts grooves; orphans melt away
   const settle = Math.exp(-dt / 600);
-  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, c.cap || 42); if (warm) melt(c.cols, c.x, c.y, dt); }   // c.cap: a desktop icon wears only a little cap
+  // (the cursor melts only snow it's in: on a window's title bar, dragging it, it's below the snow, not in it)
+  const dragging = now < liveUntil;
+  // it's been snowing all along: besides the flakes you see land, every top gathers a light, uneven layer at a steady
+  // rate (a cap within half a minute, up to a natural depth; the heaps above that come from flakes and clumps)
+  for (const c of cur) { const deep = c.cap ? c.cap * .8 : 16, g = dt * (c.cap ? .35 : .6);
+    for (let i = 0; i < c.cols.length; i++) { const want = deep * (.6 + .7 * vnoise(i * .05 + c.x * .013, 2)); if (c.cols[i] < want) c.cols[i] = Math.min(want, c.cols[i] + g * (.5 + vnoise(i * .2 + c.y * .01, 5))); } }
+  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, c.cap || 42); if (warm && !dragging && cursor.y < c.y) melt(c.cols, c.x, c.y, dt, c); }   // c.cap: a desktop icon wears only a little cap
   for (let i = 0; i < ground.length; i++) ground[i] *= Math.exp(-dt / 1500);
   relax(ground, 70); if (warm) melt(ground, 0, H - 6, dt);
   for (const o of orphans) { o.melt += dt; for (let i = 0; i < o.cols.length; i++) o.cols[i] *= Math.exp(-dt / 14); relax(o.cols, 34); }
   orphans = orphans.filter(o => o.cols.some(v => v > .3));
 }
-function melt(cols, x0, y0, dt) {
-  for (let i = 0; i < cols.length; i++) { const px = x0 + i * COL, py = y0 - cols[i], d = Math.hypot(px - cursor.x, py - cursor.y);
+function melt(cols, x0, y0, dt, c) {
+  for (let i = 0; i < cols.length; i++) { const px = x0 + i * COL, py = y0 + (c ? floor(c, i) : 0) - cols[i], d = Math.hypot(px - cursor.x, py - cursor.y);
     if (d < 45) cols[i] = Math.max(0, cols[i] - (45 - d) / 45 * 26 * dt); }
 }
 
@@ -251,12 +270,12 @@ function render() {
   drawPts(pts(true));
   // drifts: a triangle strip per profile (base at the edge, crest at the surface)
   let m = 0; const strips = [];
-  const add = (cols, x0, y0) => { const start = m;
-    for (let i = 0; i < cols.length; i++) { const px = x0 + i * COL, d = cols[i]; if (m * 3 + 6 > dArr.length) { const g = new Float32Array(dArr.length * 2); g.set(dArr); dArr = g; }
-      const o = m * 3; dArr[o] = px; dArr[o + 1] = y0 + .5; dArr[o + 2] = 0; dArr[o + 3] = px; dArr[o + 4] = y0 - d - 1.2; dArr[o + 5] = d > .3 ? 1 : 0; m += 2; }   /* 1 at the crest: the shader feathers it */
+  const add = (cols, x0, y0, c) => { const start = m;
+    for (let i = 0; i < cols.length; i++) { const px = x0 + i * COL, d = cols[i], fy = y0 + (c ? floor(c, i) : 0); if (m * 3 + 6 > dArr.length) { const g = new Float32Array(dArr.length * 2); g.set(dArr); dArr = g; }
+      const o = m * 3; dArr[o] = px; dArr[o + 1] = fy + .5; dArr[o + 2] = 0; dArr[o + 3] = px; dArr[o + 4] = fy - d - 1.2; dArr[o + 5] = d > .3 ? 1 : 0; m += 2; }   /* 1 at the crest: the shader feathers it */
     strips.push([start, m - start]); };
-  for (const c of cur) if (c.cols.some(v => v > .2)) add(c.cols, c.x, c.y);
-  for (const o of orphans) add(o.cols, o.x, o.y);
+  for (const c of cur) if (c.cols.some(v => v > .2)) add(c.cols, c.x, c.y, c);
+  for (const o of orphans) add(o.cols, o.x, o.y, o);
   add(ground, 0, H - 6);
   if (m) { gl.useProgram(DRIFT); gl.uniform2f(U(DRIFT, 'uRes'), W, H); gl.bindVertexArray(dVao); gl.bindBuffer(gl.ARRAY_BUFFER, dBuf); gl.bufferData(gl.ARRAY_BUFFER, dArr.subarray(0, m * 3), gl.DYNAMIC_DRAW);
     for (const [s, n] of strips) gl.drawArrays(gl.TRIANGLE_STRIP, s, n); }

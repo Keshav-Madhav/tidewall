@@ -50,14 +50,15 @@ desktop icons and the pointer on or off.
 
 ### macOS
 
-1. Download `Tidewall-<version>.zip` from [Releases](../../releases/latest) and double-click it to unzip.
-2. Open **Tidewall.app**. The first time, macOS says it can't check the app for malicious software, because Tidewall
+1. Download **[Tidewall.dmg](https://github.com/Keshav-Madhav/tidewall/releases/latest/download/Tidewall.dmg)**, open it and
+   drag **Tidewall** onto **Applications** (or let an app-install automation take it from there).
+2. Open **Tidewall** from Applications. The first time, macOS says it can't check the app for malicious software, because Tidewall
    isn't signed with a paid Apple developer certificate. Open **System Settings ▸ Privacy & Security**, scroll down,
    click **Open Anyway** and confirm. (On macOS 14 you can instead right-click the app and choose **Open**; macOS 15
    and later removed that shortcut.)
-3. Tidewall offers to move itself to your Applications folder: choose **Move to Applications**. That's it.
+3. That's it. (Opened from somewhere else, Tidewall offers to move itself to Applications.)
 
-You only see steps 2 and 3 once. After that, updates install themselves.
+You only see step 2 once. After that, updates install themselves.
 
 Requires macOS 14 Sonoma or later, on Apple silicon or Intel.
 

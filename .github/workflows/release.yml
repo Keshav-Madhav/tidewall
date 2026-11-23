@@ -64,6 +64,15 @@ jobs:
           codesign --verify -R="identifier \"app.tidewall\" and certificate root = H\"$sha1\"" "$a" || { echo "::error::not signed with Tidewall's certificate (macOS would ask everyone for its permissions again)"; exit 1; }
           lipo -archs $a/Contents/MacOS/Tidewall | grep -q arm64 && lipo -archs $a/Contents/MacOS/Tidewall | grep -q x86_64 || { echo "::error::not universal"; exit 1; }
           awk -v v="$v" '$0 ~ "^## \\[?"v {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+      - name: Disk image (what the website hands out; the zip stays for the app's own updates)
+        run: |
+          # the very app checked above, beside a link to Applications: drag one onto the other, or let an install
+          # automation that watches Downloads for disk images take it from there
+          mkdir dmg && ditto check/Tidewall.app dmg/Tidewall.app && ln -s /Applications dmg/Applications
+          hdiutil create -volname Tidewall -srcfolder dmg -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov Tidewall.dmg
+          hdiutil attach -nobrowse -readonly -mountpoint mnt Tidewall.dmg >/dev/null
+          codesign --verify --deep --strict mnt/Tidewall.app || { hdiutil detach mnt >/dev/null; echo "::error::the app in the disk image doesn't verify"; exit 1; }
+          hdiutil detach mnt >/dev/null
       - name: Make patches from the last few releases (only what changed; each checked the way the updater applies it)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -92,6 +101,7 @@ jobs:
           path: |
             Tidewall-${{ github.ref_name }}.zip
             Tidewall-${{ github.ref_name }}-patch-from-*.zip
+            Tidewall.dmg
             patch-from.txt
             notes.md
           if-no-files-found: warn
@@ -177,6 +187,6 @@ jobs:
           files=("Tidewall-${GITHUB_REF_NAME}.zip" update.json)
           for f in Tidewall-${GITHUB_REF_NAME}-patch-from-*.zip; do if [ -f "$f" ]; then files+=("$f"); fi; done   # (a release may have no patch)
           for f in windows/*; do files+=("$f"); done                    # Windows: the two installers and their update feed
-          cp "Tidewall-${GITHUB_REF_NAME}.zip" Tidewall-mac.zip; files+=(Tidewall-mac.zip)   # the same app under a fixed name: the website links releases/latest/download/Tidewall-mac.zip
+          files+=(Tidewall.dmg)                                          # the website's Mac download (releases/latest/download/Tidewall.dmg)
           gh release create "$GITHUB_REF_NAME" "${files[@]}" -R "$GITHUB_REPOSITORY" \
             --title "Tidewall ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag
