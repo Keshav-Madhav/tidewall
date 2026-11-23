@@ -177,5 +177,6 @@ jobs:
           files=("Tidewall-${GITHUB_REF_NAME}.zip" update.json)
           for f in Tidewall-${GITHUB_REF_NAME}-patch-from-*.zip; do if [ -f "$f" ]; then files+=("$f"); fi; done   # (a release may have no patch)
           for f in windows/*; do files+=("$f"); done                    # Windows: the two installers and their update feed
+          cp "Tidewall-${GITHUB_REF_NAME}.zip" Tidewall-mac.zip; files+=(Tidewall-mac.zip)   # the same app under a fixed name: the website links releases/latest/download/Tidewall-mac.zip
           gh release create "$GITHUB_REF_NAME" "${files[@]}" -R "$GITHUB_REPOSITORY" \
             --title "Tidewall ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag

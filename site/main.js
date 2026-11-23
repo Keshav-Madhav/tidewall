@@ -56,3 +56,14 @@ wall.update(false);   // the page has laid out: tell the map where its panels ar
 // the film plays only while you can see it
 const video = document.getElementById('video');
 if (!reduce) new IntersectionObserver(([e]) => { if (e.isIntersecting) video.play().catch(() => {}); else video.pause(); }, { threshold: 0.4 }).observe(video);
+
+// the Download button in the corner hands over the file for this computer: the Mac app by default, the Windows
+// installer on Windows (the Arm one where the browser says so; the x64 one runs on Arm too, emulated)
+{
+  const get = document.getElementById('get'), base = 'https://github.com/Keshav-Madhav/tidewall/releases/latest/download/';
+  const ua = navigator.userAgentData, win = ua ? ua.platform === 'Windows' : /Windows/.test(navigator.userAgent);
+  if (get && win) {
+    get.href = base + 'Tidewall-win-x64-Setup.exe';
+    if (ua && ua.getHighEntropyValues) ua.getHighEntropyValues(['architecture']).then(v => { if (v.architecture === 'arm') get.href = base + 'Tidewall-win-arm64-Setup.exe'; }).catch(() => {});
+  }
+}
