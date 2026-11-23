@@ -422,9 +422,13 @@ const BALL_R = 20, BALL_VMAX = .14;
 const ball = { x: -100, y: -100, r: 0, vx: 0, vy: 0 };
 function stepBall() {
   const cx = FLIP ? W - cur.x : cur.x, on = cur.on && cx > 0 && cx < W && cur.y > 0 && cur.y < H, R = BALL_R / CELL;
-  if (ball.r <= 0 && on) { ball.x = cx / CELL; ball.y = cur.y / CELL; }   // appears where the pointer is
-  ball.r = Math.max(0, ball.r + clamp((on ? R : 0) - ball.r, -.02, .02));
+  if (ball.r <= 0 && on) { ball.x = cx / CELL; ball.y = cur.y / CELL; ball.vx = ball.vy = 0; }   // appears where the pointer is
+  // the pointer came back far from the ball (it crossed a window, or another screen, or flew across the sky): rather than a long slow glide
+  // across the screen (half a minute, mostly unseen behind your windows), the ball shrinks away and grows in under it
   const dx = cx / CELL - ball.x, dy = cur.y / CELL - ball.y, d = Math.hypot(dx, dy);
+  if (!on) ball.lost = true; else if (ball.r <= 0 || d * CELL < 40) ball.lost = false;
+  const far = on && d * CELL > (ball.lost ? 160 : 360), want = on && !far ? R : 0;
+  ball.r = Math.max(0, ball.r + clamp(want - ball.r, want ? -.02 : -.05, .02));
   let tvx = 0, tvy = 0; if (on && d > .05) { const sp = Math.min(BALL_VMAX, d * .02); tvx = dx / d * sp; tvy = dy / d * sp; }
   ball.vx += (tvx - ball.vx) * .02; ball.vy += (tvy - ball.vy) * .02;   // eases into and out of motion
   ball.x += ball.vx; ball.y += ball.vy;
@@ -513,6 +517,7 @@ const handle = m => {
   if (m.t === 'pause') { paused = !!m.v;
     if (!paused && ready && simT > 6 * 3600) { buildRetrying(); }      // a fresh sim clock while nobody was watching
     if (!paused) wake(); return; }
+  if (m.t === 'cursor' && m.w) { cur.on = false; return; }             // over one of your windows (dragging it by its title bar, say): the ball shrinks out of the air rather than stirring it unseen behind the window
   if (m.t === 'cursor') { cur.x = m.x / K; cur.y = m.y / K; cur.on = true; return; }
   if (m.t === 'cursorOff') { cur.on = false; return; }
   if (m.t === 'dicons') { const k = [m.r].join('|'); if (k === iconKey) return; iconKey = k;   // your desktop icons: obstacles in the stream

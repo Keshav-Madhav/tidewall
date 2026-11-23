@@ -15,7 +15,7 @@
   .sprite { position: fixed; left: 0; top: 0; will-change: transform; pointer-events: none; }
   #compass { transition: opacity 1.2s ease; }
   .step { position: fixed; left: 0; top: 0; pointer-events: none; animation: stepfade 5s ease-in forwards; }
-  .labels { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; transition: opacity 1.4s cubic-bezier(.4, 0, .2, 1); }
+  .labels { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; transition: opacity .9s cubic-bezier(.4, 0, .2, 1); }
   .wake { position: fixed; left: 0; top: 0; pointer-events: none; animation: wakefade 2.2s ease-out forwards; will-change: opacity, transform; }
   @keyframes wakefade { 0% { opacity: .75; } 100% { opacity: 0; } }
   @keyframes stepfade { 0% { opacity: 0; } 6% { opacity: .85; } 55% { opacity: .7; } 100% { opacity: 0; } }
@@ -34,7 +34,7 @@ window.__twCalm = 12;                                    // frames a second whil
 // move about a point a step; the boat under way asks for more (its wake is laid frame by frame). (A CSS transition to
 // glide them between steps was tried: the compositor then animates at the display's full rate, which cost more.)
 const P = { quality: 2, sigma: 70, warp: 30 };            // P.quality only for bench compatibility
-const STEP = 6, MORPH_MS = 1500;
+const STEP = 6, MORPH_MS = 1600;
 const cv = document.getElementById('map');
 let W = innerWidth, H = innerHeight, Gw = 1, Gh = 1;
 // one world across displays (span.js): W×H is the whole world, OX/OY where this display sits in it, SW×SH its size
@@ -408,7 +408,10 @@ function commit(fromEmpty = false) {
   fromI = toI; toI = target; morphT0 = now; landMoved();
   layoutChanged(); wake();
 }
-function mixAt(t) { const e = Math.min(Math.max((t - morphT0) / morphDur, 0), 1); return chase ? 1 - (1 - e) * (1 - e) : e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2; }
+// a window dropped, opened or closed: the coast sets off at once and is most of the way there within a second, then
+// settles organically (it used to ease in: for the first half second after a change the map hardly moved); only the
+// land's first rise keeps its slow ease in and out
+function mixAt(t) { const e = Math.min(Math.max((t - morphT0) / morphDur, 0), 1); return chase ? 1 - (1 - e) * (1 - e) : growing ? (e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2) : 1 - (1 - e) ** 3; }
 function landMoved() { layoutDirty = true; lastLandChange = performance.now(); }
 function refresh() {
   FA = FB = computeField(laid = iconRects());
@@ -645,7 +648,7 @@ function whale(x, cx, cy, dir) {
 }
 function stepTowns(dt) {
   let changed = false;
-  for (const t of towns) { const d = t.target - t.a; if (Math.abs(d) > .004) { t.a += d * Math.min(1, dt * 2.4); changed = true; } else t.a = t.target; }
+  for (const t of towns) { const d = t.target - t.a; if (Math.abs(d) > .004) { t.a += d * Math.min(1, dt * 3.2); changed = true; } else t.a = t.target; }
   towns = towns.filter(t => t.target > 0 || t.a > .004);
   return changed;
 }
@@ -795,7 +798,9 @@ function frame0(now) {
   if (stepTowns(dt)) { draw = true; if (window.__twSettle) window.__twSettle(150); }
   else if (settling && window.__twSettle) window.__twSettle(150);
   if (draw) { renderMap(); needMap = false; }
-  if (layoutDirty && !morphing && now - lastLandChange > 600) layoutOverlay();
+  // names and towns are laid out for the land's new shape as soon as it has nearly arrived (they waited for the morph to
+  // end and 0.6 s more: two to three seconds after a drop), but never while a window is still under your hand
+  if (layoutDirty && now - lastLandChange > 450 && now - liveAt > 300 && (!morphing || mixNow > .85)) layoutOverlay();
   requestAnimationFrame(frame);            // sprites keep sailing; the map only re-renders when the land changes
 }
 function renderMap() {
@@ -824,7 +829,7 @@ resize(); drawCompass();
 addEventListener('resize', () => { resize(); commit(true); });
 
 /* ---------- host protocol (Deskland-compatible + 'cursor') ---------- */
-let deskKey = '', lastIcons = null, lastWinsMsg = null, curFrom = -1, deskIc = [];
+let liveAt = -1e9, deskKey = '', lastIcons = null, lastWinsMsg = null, curFrom = -1, deskIc = [];
 Span.on('cur', m => { cursor = { x: m.x, y: m.y }; curFrom = m.from; });
 Span.on('curoff', m => { if (curFrom === m.from) cursor = null; });
 const handle = m => {
@@ -839,7 +844,7 @@ const handle = m => {
   if (m.t === 'dicons') { const k = devicePixelRatio, P = 18;          // your desktop icons: a small island under each cluster
     deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX - P, y: t / k + OY - P, w: (r - l) / k + 2 * P, h: (b - t) / k + 2 * P }));
     layoutDirty = true; if (lastIcons) handle(lastIcons); return; }
-  if (m.t === 'windows') { lastWinsMsg = m; const k = devicePixelRatio; wins = m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k })); return; }
+  if (m.t === 'windows') { lastWinsMsg = m; if (m.live) liveAt = performance.now(); const k = devicePixelRatio; wins = m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k })); return; }
   if (m.t !== 'icons') return;
   lastIcons = m;
   const k = devicePixelRatio;

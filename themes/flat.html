@@ -156,7 +156,7 @@
    ====================================================================== */
 const CELL_W = 76, CELL_H = 100, GRID_X0 = 4, GRID_Y0 = 6, TASKBAR = 48;
 const STEP = 5;
-const MORPH_MS = 1800;
+const MORPH_MS = 1150;   // (quick, still eased: a window opening, closing or coming back re-forms in about a second)
 
 const QS = new URLSearchParams(location.search);
 const WALL = QS.has('wallpaper');      // 壁纸模式：桌面宿主加载，消息来自宿主
@@ -539,12 +539,12 @@ void main() {
     float shadow = 0.0;
     for (int i = 0; i < 4; i++) {
       if (float(i) >= uKayN) break;
-      vec4 k = uKay[i];
+      vec4 k = uKay[i]; float kf = floor(k.w / 6.2832 + 0.001) / 100.0; k.w = k.w - floor(k.w / 6.2832 + 0.001) * 6.2832;   // (fade, paddle phase)
       vec2 q2 = rot(-k.z) * (p - k.xy - vec2(8.0, 13.0));
       if (dot(q2, q2) > 900.0) continue;                // Tidewall: past the hull and the paddle, as the kayak itself
       float sd = hullSD(q2);
       vec2 pd = paddleSD(q2, k.w);
-      shadow = max(shadow, ss(1.6, -1.6, min(sd, min(pd.x, pd.y))));
+      shadow = max(shadow, ss(1.6, -1.6, min(sd, min(pd.x, pd.y))) * kf);
     }
     col = mix(col, col * vec3(0.62, 0.78, 0.84), shadow * 0.7);
 
@@ -641,7 +641,7 @@ void main() {
   // ---------- 皮划艇 ----------
   for (int i = 0; i < 4; i++) {
     if (float(i) >= uKayN) break;
-    vec4 k = uKay[i];
+    vec4 k = uKay[i]; float kf = floor(k.w / 6.2832 + 0.001) / 100.0; k.w = k.w - floor(k.w / 6.2832 + 0.001) * 6.2832;
     vec2 q = rot(-k.z) * (p - k.xy);
     if (dot(q, q) > 900.0) continue;
     float sd = hullSD(q);
@@ -671,7 +671,7 @@ void main() {
     float sh = ss(0.5, -0.5, pd.x), bl = ss(0.5, -0.5, pd.y);
     kc = mix(kc, vec3(0.28, 0.24, 0.26), sh);
     kc = mix(kc, vec3(0.90, 0.28, 0.22), bl);
-    col = kc;
+    col = mix(col, kc, kf);
   }
 
   // ---------- 海鸟：白身子、浅灰翅膀、黑翅尖的海鸥，飞得高，影子落得远 ----------
@@ -780,6 +780,7 @@ const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h 
 // Tidewall: a window update recomputes only the part of this display it reaches (the rest of the world, which the
 // kayaks read, follows once things settle); and a new shape mid-morph carries on from where the coast is, at speed,
 // so the sand follows a dragged window instead of snapping to the last shape on every update
+let iconsLive = null;
 let laid = null, staleWorld = false, worldT = null, chase = false, pendingCommit = false, growing = false;
 const rectKey = r => `${Math.round(r.cx)},${Math.round(r.cy)},${Math.round(r.hw)},${Math.round(r.hh)}`;
 const reachOf = r => 5.5 * P.sigma + Math.max(r.hw, r.hh) + P.warp * 1.1 + STEP;   // as computeField's loops
@@ -854,7 +855,10 @@ function syncKayaks() {
   while (kayaks.length > want) kayaks.pop();
   while (kayaks.length < want) { const k = spawnKayak(); if (!k) break; kayaks.push(k); }
 }
+let kayakTopUp = 0;
 function stepKayaks(dt, now) {
+  // one swallowed where no open water was left (a full-screen window, many windows) paddles back in once there is again
+  if (now > kayakTopUp) { kayakTopUp = now + 2000; if (kayaks.length < Math.min(4, Math.round(P.kayaks * Span.n))) syncKayaks(); }
   const clearance = 64; // 船身长 44px，连同划桨留出安全间距。
   const plans = [];
   for (let i = 0; i < kayaks.length; i++) {
@@ -922,7 +926,9 @@ function stepKayaks(dt, now) {
   for (let i = kayaks.length - 1; i >= 0; i--) {
     const k = kayaks[i], plan = plans[i];
     k.h = plan.h; k.x += plan.dx; k.y += plan.dy;
-    if (curS(k.x, k.y) < 40) { const n = spawnKayak(); if (n) kayaks[i] = n; else kayaks.splice(i, 1); }   // 被陆地"吞掉"就换个地方出现
+    // 被陆地"吞掉"就换个地方出现 — fading out where the sand caught it and in again where it reappears (never a pop)
+    if (k.out) { k.fade -= dt * 2.5; if (k.fade <= 0) { const n = spawnKayak(); if (n) kayaks[i] = n; else kayaks.splice(i, 1); } }
+    else { k.fade = Math.min(1, (k.fade ?? 1) + dt * 1.5); if (curS(k.x, k.y) < 40) k.out = true; }
   }
 }
 
@@ -1127,18 +1133,18 @@ let remoteSea = null, seaSent = 0;
 Span.on('sea', m => { remoteSea = m; });
 function sendSea(now) {
   if (!Span.world || now - seaSent < 30) return; seaSent = now;
-  Span.post('sea', { k: kayaks.map(k => [k.x, k.y, k.h, k.ph]), b: birds.map(b => [b.x, b.y, b.h, b.ph]) });
+  Span.post('sea', { k: kayaks.map(k => [k.x, k.y, k.h, k.ph, k.fade ?? 1]), b: birds.map(b => [b.x, b.y, b.h, b.ph]) });
 }
 function applySea() {
   const m = remoteSea; if (!m) return;
-  kayaks.length = m.k.length; m.k.forEach((a, i) => { kayaks[i] = Object.assign(kayaks[i] || { v: 8, wander: 0, fade: 1 }, { x: a[0], y: a[1], h: a[2], ph: a[3] }); });
+  kayaks.length = m.k.length; m.k.forEach((a, i) => { kayaks[i] = Object.assign(kayaks[i] || { v: 8, wander: 0, fade: 1 }, { x: a[0], y: a[1], h: a[2], ph: a[3], fade: a[4] ?? 1 }); });
   birds.length = m.b.length; m.b.forEach((a, i) => { birds[i] = Object.assign(birds[i] || { v: 40, mode: 0, modeT: 3, flap: false, flapT: 2, wander: 0 }, { x: a[0], y: a[1], h: a[2], ph: a[3] }); });
 }
 function draw(now) {
   ripBuf.fill(0);
   ripples.forEach((r, i) => { const age = (now - r.t0) / 1000; if (age < 3) ripBuf.set([r.x, r.y, age, r.str], i * 4); });
   kayBuf.fill(0);
-  kayaks.forEach((k, i) => kayBuf.set([k.x, k.y, k.h, k.ph], i * 4));
+  kayaks.forEach((k, i) => kayBuf.set([k.x, k.y, k.h, (k.ph % 6.2832 + 6.2832) % 6.2832 + 6.2832 * Math.round(Math.max(0, Math.min(1, k.fade ?? 1)) * 100)], i * 4));   // (w: paddle phase + 2π·fade%)
   birdBuf.fill(0);
   birds.forEach((b, i) => birdBuf.set([b.x, b.y, b.h, 0.68 + 0.32 * Math.cos(b.ph)], i * 4));
 
@@ -1349,7 +1355,7 @@ function startHostedMode() {
       return; }
     if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
     if (m.t !== 'icons') return;
-    lastIconsMsg = m;
+    lastIconsMsg = m; iconsLive = typeof m.live === 'boolean' ? m.live : null;   // (a window in someone's hand; null: an older host that doesn't say)
     const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
     icons = (m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k })) : []).concat(deskIc);   // (your desktop icons: a sandy island each)
     if (PREVIEW) drawGhosts();

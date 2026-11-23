@@ -13,13 +13,15 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #e9d8b4; }
   canvas.layer { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-  .decor { transition: opacity 3.2s cubic-bezier(.4, 0, .2, 1); }
-  .step { position: fixed; left: 0; top: 0; pointer-events: none; opacity: 0; will-change: opacity;
+  .decor { transition: opacity 1.6s cubic-bezier(.4, 0, .2, 1); }
+  /* the decor sheets are opaque parchment stacked at z 1–2 (the ink above at 3): every sprite goes above them all, or it
+     is drawn but never seen (the shoeprints, the walkers' names and the halls' scrolls all were) */
+  .step { position: fixed; left: 0; top: 0; z-index: 4; pointer-events: none; opacity: 0; will-change: opacity;
           animation: step 5.2s cubic-bezier(.33, 0, .25, 1) forwards; }
   .step.mine { animation-duration: 3.4s; }
   @keyframes step { 0% { opacity: 0; } 12% { opacity: .8; } 45% { opacity: .64; } 100% { opacity: 0; } }
   @keyframes gone { from { opacity: var(--from, .55); } to { opacity: 0; } }
-  .tag { position: fixed; left: 0; top: 0; pointer-events: none; opacity: 0; will-change: transform, opacity;
+  .tag { position: fixed; left: 0; top: 0; z-index: 5; pointer-events: none; opacity: 0; will-change: transform, opacity;
          transition: opacity 1.2s ease, transform 1.1s cubic-bezier(.25, .1, .25, 1); }
 </style>
 </head>
@@ -90,7 +92,7 @@ function compassRose(x, cx, cy, R) {
 
 /* ---------- the town: shape field lives in a worker; walls come back as letters every frame ---------- */
 const worker = new Worker('estate-worker.js');
-let deskI = 0, roads = [], citySeed = 1, generation = 0, building = false, townSeed = 1, morphStart = -1e9, MORPH_MS = 4200;
+let deskI = 0, roads = [], citySeed = 1, generation = 0, building = false, townSeed = 1, morphStart = -1e9, MORPH_MS = 2400;
 let inflight = false, frameMs = 0, needFrame = true, inflightT0 = 0;
 worker.onerror = e => { try { webkit.messageHandlers.host.postMessage('JSERR worker ' + e.message + ' :' + e.lineno); } catch (_) {} };
 worker.onmessage = e => {
@@ -106,13 +108,13 @@ worker.onmessage = e => {
     const apply = () => {
     const back = decorFront === $('decorA') ? $('decorB') : $('decorA');
     back.width = d.bitmap.width; back.height = d.bitmap.height;
-    const x = back.getContext('2d'); x.drawImage(d.bitmap, 0, 0); d.bitmap.close(); decorate(x, d.rings, d.spots);   // the worker's picture comes on its parchment
+    const x = back.getContext('2d'); x.drawImage(d.bitmap, 0, 0); d.bitmap.close(); decorate(x, d.rings, d.spots); drawHalls();   // the worker's picture comes on its parchment
     // the new sheet fades in on top of the old one (both opaque: nothing shows through mid-fade), then the old one goes
     const old = decorFront; old.style.zIndex = 1; back.style.zIndex = 2; back.style.transition = 'none'; back.style.opacity = 0; void back.offsetWidth;
     back.style.transition = ''; back.style.opacity = 1; decorFront = back;
-    clearTimeout(old._free); old._free = setTimeout(() => { if (old !== decorFront) { old.style.transition = 'none'; old.style.opacity = 0; old.width = old.height = 1; } }, 3400);   // free ~24 MB
+    clearTimeout(old._free); old._free = setTimeout(() => { if (old !== decorFront) { old.style.transition = 'none'; old.style.opacity = 0; old.width = old.height = 1; } }, 1800);   // free ~24 MB
     };
-    const nowD = performance.now(), at = Math.max(nowD, decorNext); decorNext = at + 3300;   // one cross-fade at a time, in order
+    const nowD = performance.now(), at = Math.max(nowD, decorNext); decorNext = at + 1700;   // one cross-fade at a time, in order
     if (at > nowD) setTimeout(apply, at - nowD); else apply();
     roads = d.roads; for (const s of strangers) s.route = null;
     morphStart = performance.now(); needFrame = true; wake();
@@ -126,7 +128,7 @@ let decorFront = $("decorB"), pending = null, decorNext = 0;
 function grow(seed) {
   if (building) { growQueued = { seed }; return; } building = true; buildT0 = performance.now();
   townSeed = seed ?? hash(`${citySeed}:${generation++}`);
-  const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS); tFrozen = ease3(tm);
+  const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS); tFrozen = easeMorph(tm);
   worker.postMessage(Object.assign({ town: true, W, H, K, seed: townSeed, t: tFrozen, paperSeed: citySeed, icons: deskIc.map(d => ({ x: d.x, y: d.y, w: d.w, h: d.h })) }, worldArgs()));
 }
 let growQueued = null, tFrozen = 0, townGen = 0, buildT0 = 0;
@@ -155,7 +157,9 @@ function decorate(x, rings, spots = []) {
     if (!b) continue; boxes.push(b); banner(x, name, px, py, 11.5); placed++;
   }
   if (mine) compassRose(x, cpx, cpy, 44);
+  decorBoxes = boxes.map(b => [b[0] + OX, b[1] + OY, b[2] + OX, b[3] + OY]);   // (the halls' scrolls keep off them: one sat on the compass rose)
 }
+let decorBoxes = [];
 
 /* ---------- GPU lettering: one instanced quad per letter, from a glyph atlas ---------- */
 const GLYPHS = 'ABCDEFGHILMNOPQRSTVX', AC = 8, AR = 3, CELL = 48, FONT_PX = 34;
@@ -237,7 +241,7 @@ function setTargets(list) {
   for (const c of cur) if (!used.has(c)) c.alive = false;
   needFrame = true; wake();
 }
-let liveUntil = 0, animating = false, morphTick = 0;
+let liveUntil = 0, heldAt = 0, animating = false, morphTick = 0;   // heldAt: the last update said a window is under your hand (0: let go)
 function stepWins(dt) {
   // while you drag, the town keeps right up with the window; settling moves are softer
   const live = performance.now() < liveUntil;
@@ -269,14 +273,14 @@ function drawHalls() {   // a red scroll naming each app's hall: a small sprite 
   }
   // each tag takes the first spot that's clear of every window, every other tag and the screen edge; it keeps its last spot while that stays clear
   const taken = [], rects = cur.filter(c => c.alive).map(c => [c.x - 4, c.y - 4, c.x + c.w + 4, c.y + c.h + 4]);
-  const clear = b => onOneW(b, 6) && !rects.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]) && !taken.some(o => b[0] < o[2] + 26 && b[2] > o[0] - 26 && b[1] < o[3] + 4 && b[3] > o[1] - 4);
+  const clear = b => onOneW(b, 6) && !decorBoxes.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]) && !rects.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]) && !taken.some(o => b[0] < o[2] + 26 && b[2] > o[0] - 26 && b[1] < o[3] + 4 && b[3] > o[1] - 4);
   for (const c of [...best.values()].sort((a, b) => b.w * b.h - a.w * a.h)) {
     seen.add(c.owner);
     let el = hallTags.get(c.owner);
     if (!el) {
       const name = placeName(rng(hash('hall:' + c.owner))), m = document.createElement('canvas').getContext('2d'); m.font = `14px ${SCRIPT}`;
       const tw = Math.ceil(m.measureText(name).width) + 52, th = 34; el = document.createElement('canvas');
-      el.width = tw * K; el.height = th * K; el.style.cssText = `position:fixed;left:0;top:0;width:${tw}px;height:${th}px;pointer-events:none;will-change:transform,opacity`;
+      el.width = tw * K; el.height = th * K; el.style.cssText = `position:fixed;left:0;top:0;z-index:5;width:${tw}px;height:${th}px;pointer-events:none;will-change:transform,opacity`;
       const x = el.getContext('2d'); x.scale(K, K); banner(x, name, tw / 2, th / 2, 14, RED); el._w = tw; el._h = th;
       document.body.appendChild(el); hallTags.set(c.owner, el);
     }
@@ -284,10 +288,14 @@ function drawHalls() {   // a red scroll naming each app's hall: a small sprite 
                    [c.x + c.w - 20 - el._w / 2, c.y - 26], [c.x + 20 + el._w / 2, c.y + c.h + 28]];
     const box = ([x, y]) => [x - el._w / 2 + 14, y - el._h / 2 + 6, x + el._w / 2 - 14, y + el._h / 2 - 6];   // the scroll's ends may tuck in
     let k = el._spot != null && clear(box(spots[el._spot])) ? el._spot : spots.findIndex(sp => clear(box(sp)));
-    const hide = k < 0; if (hide) k = el._spot ?? 0; el._spot = hide ? el._spot : k;
+    const hide = k < 0; if (hide) k = el._spot ?? 0;
+    // a scroll that has to change sides (its spot is no longer clear) slides there instead of jumping
+    const now = performance.now(); if (!hide && el._spot != null && k !== el._spot && el.style.opacity !== '0') el._slideUntil = now + 400;
+    el._spot = hide ? el._spot : k;
     const [cx, cy] = spots[k]; if (!hide) taken.push(box(spots[k]));
     if (el._leaving) { clearTimeout(el._leaving); el._leaving = 0; el.style.transition = ''; }
-    el.style.transform = `translate3d(${(cx - el._w / 2 - OX).toFixed(1)}px,${(cy - el._h / 2 - OY).toFixed(1)}px,0)`; el.style.transition = 'opacity .4s ease'; el.style.opacity = hide ? 0 : c.life.toFixed(3);
+    el.style.transition = el._slideUntil > now ? 'opacity .4s ease, transform .38s cubic-bezier(.2, .7, .3, 1)' : 'opacity .4s ease';
+    el.style.transform = `translate3d(${(cx - el._w / 2 - OX).toFixed(1)}px,${(cy - el._h / 2 - OY).toFixed(1)}px,0)`; el.style.opacity = hide ? 0 : c.life.toFixed(3);
   }
   for (const [k, el] of hallTags) if (!seen.has(k) && !el._leaving) {
     el.style.transition = 'opacity .6s ease'; el.style.opacity = 0;
@@ -301,6 +309,9 @@ let running = false, lastT = 0, settledAt = 0, layoutKey = '';
 function maybeNewTown() {
   if (building && performance.now() - buildT0 > 10000) building = false;          // lost town: allow a new one
   if (!booted || building) return;
+  // never while a window is still under your hand (held still mid-drag, the town used to regrow beneath it); a hand
+  // that never says it let go counts as gone after 3 s
+  const nw = performance.now(); if (heldAt && nw - heldAt < 3000 || nw - settledAt < 450) { if (!maybeNewTown.t) maybeNewTown.t = setTimeout(() => { maybeNewTown.t = 0; maybeNewTown(); }, 700); return; }
   const key = cur.filter(c => c.alive && c.w * c.h >= 60000 && c.owner !== '__icons').map(c => `${c.owner}@${Math.round((c.x + c.w / 2) / 260)},${Math.round((c.y + c.h / 2) / 260)}:${Math.round(c.w / 300)}x${Math.round(c.h / 300)}`).sort().join('|');
   if (key === layoutKey) return;
   if (Span.world && !Span.leader()) return;                         // one world: the leader decides when the town changes
@@ -311,7 +322,7 @@ function maybeNewTown() {
 Span.on('town', m => { if (Span.leader() && m.from > Span.i) return;    // two leaders for a moment: the lower one's town wins
   if (booted && m.seed !== townSeed && !(growQueued && growQueued.seed === m.seed)) grow(m.seed); });
 setInterval(() => { if (Span.world && booted && Span.leader() && !paused) Span.post('town', { seed: townSeed }); }, 2000);
-const ease3 = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const easeMorph = t => 1 - (1 - t) ** 3;                            // the new town starts spreading at once and slows as it lands
 function wake() { if (!running && !paused) { running = true; lastT = 0; requestAnimationFrame(loop); } }
 const ST = { msgs: 0, draws: 0, lat: 0, latN: 0, rafs: 0 };
 setInterval(() => { if (ST.msgs || ST.draws) { try { webkit.messageHandlers.host.postMessage(`STAT winMsgs/s=${ST.msgs} draws/s=${ST.draws} rafs/s=${ST.rafs} worker+trip=${(ST.lat / Math.max(1, ST.latN)).toFixed(1)}ms frame=${frameMs}ms msgGap=${(ST.gap || 0) | 0}ms busy=${(ST.busy || 0) | 0}ms/s lives=${cur.map(c => c.life.toFixed(2)).join(',')} paused=${paused} run=${running} inflight=${inflight} pend=${!!pending} drawGap=${(ST.dgap || 0) | 0}ms [${ST.split}]`); } catch (_) {} }
@@ -333,8 +344,10 @@ function loop0(now) {
   morphTick ^= 1;
   if (moving || needFrame || (morphing && morphTick)) { needFrame = false; requestFrame(); }
   if (moving) drawHalls();
-  if (moving) settledAt = now; else if (now - settledAt > 1200) maybeNewTown();
-  if (animating || inflight || pending) requestAnimationFrame(loop); else { drawHalls(); running = false; setTimeout(maybeNewTown, 1300); }
+  // a new arrangement grows its town half a second after the windows come to rest (it waited 1.2 s, then took 4.2 s to
+  // spread and 3.2 s to cross-fade its names: a dropped window left the old town standing for about six seconds)
+  if (moving) settledAt = now; else if (now - settledAt > 500) maybeNewTown();
+  if (animating || inflight || pending) requestAnimationFrame(loop); else { drawHalls(); running = false; setTimeout(maybeNewTown, 600); }
 }
 // one frame in flight at a time; the next is asked for the moment the last one lands (no idle gap)
 function requestFrame() {
@@ -342,7 +355,7 @@ function requestFrame() {
   if (inflight) { needFrame = true; return; }
   inflight = true; inflightT0 = performance.now();
   const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS);
-  worker.postMessage({ frame: true, sent: performance.now(), t: building ? tFrozen : ease3(tm), gen: townGen, wins: cur.map(c => ({ x: c.x, y: c.y, w: c.w, h: c.h, life: c.life })) });
+  worker.postMessage({ frame: true, sent: performance.now(), t: building ? tFrozen : easeMorph(tm), gen: townGen, wins: cur.map(c => ({ x: c.x, y: c.y, w: c.w, h: c.h, life: c.life })) });
 }
 
 /* ---------- shoeprints, walkers ---------- */
@@ -493,8 +506,9 @@ const handle0 = m => {
     if (!me) { me = new Walker(personName(rng(citySeed)), RED, { stride: 30, trail: 9, mine: true }); startStrangers(citySeed + 7); }
     return;
   }
+  if (m.t === 'cursor' && m.w) return;                                // over one of your windows (dragging it by its title bar, say): you're working there, not walking the map; your prints wait where you left it
   if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; Span.post('cur', { x, y }); cursorAt(x, y); return; }
-  if (m.t === 'windows') { ST.msgs++; const nw = performance.now(); if (ST.lastMsg) ST.gap = Math.max(ST.gap || 0, nw - ST.lastMsg); ST.lastMsg = nw; liveUntil = m.live ? nw + 250 : 0; }
+  if (m.t === 'windows') { ST.msgs++; const nw = performance.now(); if (ST.lastMsg) ST.gap = Math.max(ST.gap || 0, nw - ST.lastMsg); ST.lastMsg = nw; liveUntil = m.live ? nw + 250 : 0; heldAt = m.live ? nw : 0; }
   if (m.t === 'dicons') { deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: Math.round(l / K + OX), y: Math.round(t / K + OY), w: Math.round((r - l) / K), h: Math.round((b - t) / K), owner: '__icons' }));   // (whole points: every display's worker sees the same numbers)   // your desktop icons: a courtyard each
     const ik = deskIc.map(d => [d.x, d.y, d.w, d.h].map(Math.round).join(',')).join(';');
     if (ik !== iconsKey) { iconsKey = ik; if (booted) grow(townSeed); }            // the same town, its names and towers redrawn clear of them

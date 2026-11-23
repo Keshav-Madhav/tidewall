@@ -510,7 +510,8 @@ function paintHalo() {
 }
 const onIcon = (l, t, r, b) => deskIc.some(o => l < o[2] && r > o[0] && t < o[3] && b > o[1]);
 // the caption sits bottom left, or bottom right if your icons are there
-function placeCaption() { const left = !onIcon(0, H - 96, 420, H) || onIcon(W - 420, H - 96, W, H); capCv.style.inset = left ? 'auto auto 0 0' : 'auto 0 0 auto'; }
+let capLeft = true;
+function placeCaption() { const left = capLeft = !onIcon(0, H - 96, 420, H) || onIcon(W - 420, H - 96, W, H); capCv.style.inset = left ? 'auto auto 0 0' : 'auto 0 0 auto'; }
 function drawCaption() {
   if (!PAL) palette();
   const k = K, w = 420, h = 96; capCv.width = w * k; capCv.height = h * k;
@@ -543,7 +544,9 @@ function setTargets(list) {
 const uR = new Float32Array(32 * 4), uRV = new Float32Array(32 * 2);
 let nR = 0;
 function stepWins(dt) {
-  const live = performance.now() < liveUntil, k = 1 - Math.exp(-dt * (live ? 40 : 9));
+  // while you drag, everything attached to a window sits exactly on it (eased at 40/s, a card trailed a fast drag by
+  // ~15 px); jumps you didn't make by hand (minimise, Stage Manager) still glide
+  const live = performance.now() < liveUntil, k = live ? 1 : 1 - Math.exp(-dt * 9);
   nR = 0;
   for (const c of wins) {
     const ox = c.x, oy = c.y;
@@ -653,7 +656,7 @@ function icon(x, kind, cx, cy, s, ink, day) {
 const CW = 330, CH = 104;
 function makeCard() {
   const c = document.createElement('canvas');
-  c.style.cssText = `position:fixed;left:0;top:0;width:${CW}px;height:${CH}px;pointer-events:none;will-change:transform,opacity;opacity:0;transition:opacity .6s ease`;
+  c.style.cssText = `position:fixed;left:0;top:0;width:${CW}px;height:${CH}px;pointer-events:none;will-change:transform,opacity;opacity:0;transition:opacity .3s ease`;
   c.width = CW * K; c.height = CH * K; document.body.appendChild(c); c._key = ''; return c;
 }
 const rgbOf = a => `rgb(${a.map(v => Math.round(v * 255)).join(',')})`;
@@ -661,7 +664,12 @@ const rgbOf = a => `rgb(${a.map(v => Math.round(v * 255)).join(',')})`;
 function paintCard(c, lat, lon) {
   const pk = lat.toFixed(4) + ',' + lon.toFixed(4); if (c._pk !== pk || !c._place) { c._pk = pk; c._place = placeName(lat, lon); }   // the nearest of 1,251 places: only when the card moves
   const e = wxFor(lat, lon), d = e.d, place = c._place, t = localTime(Date.now(), d && d.w ? { off: d.w.utc_offset_seconds || 0, name: d.w.timezone || '' } : (DATA && DATA.tz));
-  const key = `${place}|${t}|${e.v || 0}|${dayF.toFixed(2)}|${inkF.toFixed(2)}`; if (key === c._key) return; c._key = key;
+  const key = `${place}|${t}|${e.v || 0}|${dayF.toFixed(2)}|${inkF.toFixed(2)}`; if (key === c._key) return;
+  // a new place or a new report: the old words fade, the new ones come up (rewritten in place, they popped)
+  const major = `${place}|${e.v || 0}`;
+  if (c._key && c._major !== major && !c._dipAt) { c._dipAt = performance.now() + 280; return; }
+  if (c._dipAt && performance.now() < c._dipAt) return;
+  c._dipAt = 0; c._major = major; c._key = key;
   const x = c.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); x.clearRect(0, 0, CW, CH);
   const ink = rgbOf(PAL.ink), soft = `rgba(${PAL.ink.map(v => Math.round(v * 255)).join(',')},.68)`;
   x.textBaseline = 'alphabetic'; x.fillStyle = ink;
@@ -686,20 +694,39 @@ function paintCard(c, lat, lon) {
   x.fillText(parts.join('   '), 0, y2);
 }
 const cards = new Map();
+// where a window's report may sit, relative to the window: above or below it, at its left or its right edge
+const CARD_SPOTS = [[0, 0], [0, 1], [1, 0], [1, 1]];
+const hitR = (a, b, m = 0) => a[0] < b[2] + m && a[2] > b[0] - m && a[1] < b[3] + m && a[3] > b[1] - m;
 function stepCards(now) {
-  const seen = new Set();
-  for (const w of wins) {
-    if (w.w < 260 || w.h < 200) continue;                 // by size alone: Stage Manager also lists the active window as one of its own
+  const seen = new Set(), R = wins.map(w => [w.tx, w.ty, w.tx + w.tw, w.ty + w.th]);
+  const placed = DESK.n > 1 && DESK.i !== 0 ? [] : [capLeft ? [0, H - 72, 420, H] : [W - 420, H - 72, W, H]];   // (clear of the caption's words too)
+  // the biggest windows choose first; each report keeps its spot while that stays clear, else takes the first clear one,
+  // and when none is clear (no room above or below, another window or report in the way) it fades rather than sitting
+  // on top of another report or half under a window (both happened)
+  for (const w of wins.filter(w => w.tw >= 260 && w.th >= 200).sort((a, b) => b.tw * b.th - a.tw * a.th)) {
     seen.add(w);
-    let c = cards.get(w); if (!c) { c = makeCard(); c._still = now; cards.set(w, c); requestAnimationFrame(() => c.style.opacity = 1); }
-    const moving = Math.abs(w.x - w.tx) + Math.abs(w.y - w.ty) > .5;
+    let c = cards.get(w); if (!c) { c = makeCard(); c._still = now; c._new = true; cards.set(w, c); }
+    // (still easing, or the window itself moving: under the hand it's drawn exactly where it is, so it never lags)
+    const moving = Math.abs(w.x - w.tx) + Math.abs(w.y - w.ty) > .5 || c._was !== `${w.tx},${w.ty}`; c._was = `${w.tx},${w.ty}`;
     if (moving) c._still = now;
     // the report is for the place under the window; asked for once the window has settled
-    if (now - c._still > 500 || !c._key) { if (!c._polled || now - c._polled > 5000) { c._polled = now; c._key += '~'; } paintCard(c, LAT(w.y + w.h / 2), LON(w.x + w.w / 2)); }
-    const tx = clamp(w.x + 4, 8, W - CW - 8), up = w.y - CH - 6, down = clamp(w.y + w.h + 12, 8, H - CH - 8);
-    let above = w.y > CH + 12; if (onIcon(tx, above ? up : down, tx + CW, (above ? up : down) + CH) && (above || w.y > CH + 12) && !onIcon(tx, above ? down : up, tx + CW, (above ? down : up) + CH)) above = !above;   // not over your icons
-    const ty = above ? up : down;
-    c.style.transform = `translate3d(${tx.toFixed(1)}px,${ty.toFixed(1)}px,0)`;
+    if (now - c._still > 500 || !c._key || c._dipAt) { if (!c._polled || now - c._polled > 5000) { c._polled = now; c._key += '~'; } paintCard(c, LAT(w.y + w.h / 2), LON(w.x + w.w / 2)); }
+    const at = (k, x0, y0, ww, hh) => { const [r, b] = CARD_SPOTS[k], x = clamp(r ? x0 + ww - CW - 4 : x0 + 4, 8, W - CW - 8), y = b ? y0 + hh + 12 : y0 - CH - 6; return [x, y]; };
+    const fits = k => { const [x, y] = at(k, w.tx, w.ty, w.tw, w.th), box = [x, y, x + CW, y + CH];
+      return y >= 8 && y + CH <= H - 8 && !R.some(o => hitR(box, o, 4)) && !placed.some(o => hitR(box, o, 6)) && !onIcon(x, y, x + CW, y + CH); };
+    let k = c._spot != null && fits(c._spot) ? c._spot : CARD_SPOTS.findIndex((_, i) => fits(i));
+    const show = k >= 0; if (!show) k = c._spot ?? 0;
+    const [tx, ty] = at(k, w.x, w.y, w.w, w.h);
+    if (show) { const [px, py] = at(k, w.tx, w.ty, w.tw, w.th); placed.push([px, py, px + CW, py + CH]); }
+    // a new spot is reached by a short glide from where the report was, not a jump
+    if (c._spot != null && k !== c._spot && c._at) c._glide = { t0: now, x: c._at[0], y: c._at[1] };
+    c._spot = k;
+    let x = tx, y = ty;
+    if (c._glide) { const u = Math.min(1, (now - c._glide.t0) / 380), e = 1 - (1 - u) ** 3; x = c._glide.x + (tx - c._glide.x) * e; y = c._glide.y + (ty - c._glide.y) * e; if (u >= 1) c._glide = null; else window.__twSettle && window.__twSettle(150); }
+    c._at = [x, y];
+    c.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0)`;
+    const want = show && !c._dipAt ? '1' : '0';
+    if (c._new) c._new = false; else if (c.style.opacity !== want) c.style.opacity = want;   // (a new card shows from its second frame: it fades in)
   }
   for (const [w, c] of cards) if (!seen.has(w)) { cards.delete(w); c.style.opacity = 0; setTimeout(() => c.remove(), 700); }
 }
@@ -709,7 +736,7 @@ const cur = { x: -1e4, y: -1e4, vx: 0, vy: 0, on: false, t: 0 };
 let curRead = null;
 function stepCursor(now) {
   if (!curRead) curRead = makeReadout();
-  const over = cur.on && !wins.some(w => cur.x > w.x && cur.x < w.x + w.w && cur.y > w.y && cur.y < w.y + w.h) && !onIcon(cur.x - 4, cur.y - 4, cur.x + 4, cur.y + 4);
+  const over = cur.on && !wins.some(w => cur.x > w.tx && cur.x < w.tx + w.tw && cur.y > w.ty && cur.y < w.ty + w.th) && !onIcon(cur.x - 4, cur.y - 4, cur.x + 4, cur.y + 4);
   if (over) {
     const flip = cur.x > W - 240;                                       // near the right edge the words go to the left; the barb stays on the pointer
     const tx = flip ? cur.x - 207 : cur.x - 23, ty = clamp(cur.y - 23, -23, H - 23);
@@ -775,6 +802,7 @@ function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; projec
 const handle = m => {
   if (m.t === 'desk') { DESK = m; deskSeen(); if (booted) build(); return; }
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'cursor' && m.w) { cur.on = false; return; }            // over one of your windows (dragging it by its title bar, say): no reading of the air behind it
   if (m.t === 'cursor') { const x = m.x / K, y = m.y / K, t = performance.now(), dt = Math.max(8, t - cur.t) / 1000;
     if (cur.on) { cur.vx = cur.vx * .5 + (x - cur.x) / dt * .5; cur.vy = cur.vy * .5 + (y - cur.y) / dt * .5; }
     cur.x = x; cur.y = y; cur.t = t; cur.on = true; return; }

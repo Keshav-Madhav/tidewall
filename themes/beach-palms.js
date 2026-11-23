@@ -129,8 +129,12 @@ function drawMaldivesPalms(now, pass, configurePass, context) {
   if (!beachPalmsScene) beachPalmsScene = {atlas: makeMaldivesPalmAtlas(), palms: [], previous: now};
   const scene = beachPalmsScene, dt = Math.max(0, Math.min(.1, (now - scene.previous) / 1000));scene.previous = now;
   const count = Math.max(0, Math.min(10, Math.round((Number.isFinite(P.palms) ? P.palms : 4) * (window.Span ? Span.n : 1))));
-  const layoutChanged = scene.field !== FB || scene.seed !== seed || scene.width !== W || scene.height !== H;
-  if (layoutChanged || scene.count !== count) {
+  // While windows are moving (a new coast every frame of a drag) the palms stay where they stand, fading only where their
+  // sand goes; they're placed again once the coast has stopped changing, not re-dealt each frame as ghosts
+  const held = typeof iconsLive === 'boolean' ? iconsLive : typeof morphT0 === 'number' && performance.now() - morphT0 < 250;   // (the host says so; older hosts: by timing)
+  const moving = held && scene.placements && scene.seed === seed;
+  const layoutChanged = !moving && (scene.field !== FB || scene.seed !== seed || scene.width !== W || scene.height !== H);
+  if (layoutChanged || (!moving && scene.count !== count)) {
     if (layoutChanged || !scene.placements) scene.placements = count ? chooseMaldivesPalms() : null;
     if (count && !scene.placements) scene.placements = chooseMaldivesPalms();
     const next = (scene.placements || []).slice(0, count);
@@ -148,7 +152,7 @@ function drawMaldivesPalms(now, pass, configurePass, context) {
   for (const palm of scene.palms) {
     const onSand = Math.max(0, Math.min(1, -curS(palm.x, palm.y) / 4));
     const target = palm.retiring ? 0 : onSand;
-    palm.opacity += (target - palm.opacity) * (1 - Math.exp(-dt * 4));
+    palm.opacity += (target - palm.opacity) * (1 - Math.exp(-dt * (target < palm.opacity ? 9 : 4)));   // (gone quickly once its sand has left: no palm standing in the sea)
     if (palm.opacity < .003) continue;
     gl.uniform4f(pass.U.uPalm, palm.x - (typeof OX !== 'undefined' ? OX : 0), palm.y - (typeof OY !== 'undefined' ? OY : 0), palm.scale, palm.variant);gl.uniform1f(pass.U.uPalmOpacity, palm.opacity);
     gl.uniform1f(pass.U.uPalmMirror, palm.mirror);

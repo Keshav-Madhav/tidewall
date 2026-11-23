@@ -155,6 +155,18 @@ function meadowBoyPose(time,tug={active:false,reach:0,pull:0}) {
     reelHand
   };
 }
+// Is he (and his kite) clear of every window and desktop icon there? 0 = clear, 1 = only the kite overlaps, 2 = he does.
+// (the cloud bank around the windows counts as theirs: under it he'd be hidden just the same)
+function meadowCloudOver(x,y) {
+  return typeof FB!=='undefined'&&FB&&P.adaptive&&sampleArr(FB.s,x,y)-P.edge<36;
+}
+function meadowBoyBlocked(x,y,s,pad=10) {
+  if(typeof icons==='undefined'||!icons.length)return 0;
+  const hit=(l,t,r,b)=>icons.some(ic=>l<ic.x+ic.w+pad&&r>ic.x-pad&&t<ic.y+ic.h+pad&&b>ic.y-pad)||
+    meadowCloudOver((l+r)/2,(t+b)/2)||meadowCloudOver(l,t)||meadowCloudOver(r,t)||meadowCloudOver(l,b)||meadowCloudOver(r,b);
+  if(hit(x-60*s,y-110*s,x+60*s,y+90*s))return 2;
+  return hit(x+160*s,y+135*s,x+270*s,y+380*s)?1:0;
+}
 function drawMeadowBoy(now) {
   return prepareMeadowBoy(now);
 }
@@ -381,15 +393,20 @@ void main() {
   }
   loadSprite('assets/meadow-kite-boy-level-face.png',gl.TEXTURE4,texture);
   loadSprite('assets/meadow-kite-boy-diagonal-run.png',gl.TEXTURE7,runTexture,768);
-  const choosePosition=(s)=>{
+  // a spot in the open: never under a window or on the desktop icons (his kite clear of them too, where it can be),
+  // as near as possible to where he is (or `pref`), and up and to the left of him if he has to run (the way he faces)
+  const choosePosition=(s,pref=null)=>{
     let best=null,bestScore=Infinity;
     const candidates=[];
     if(position)candidates.push({...position});
-    for(const fy of [.48,.38,.58,.28])for(const fx of [.50,.62,.38,.70,.28])candidates.push({x:W*fx,y:(H-TASKBAR)*fy});
-    const preferred=position||{x:W*.5,y:(H-TASKBAR)*.48};
+    if(pref)candidates.push({...pref});
+    for(const fy of [.48,.38,.58,.28,.18,.68,.43,.33,.53,.23])for(const fx of [.50,.62,.38,.70,.28,.20,.80,.44,.56,.33,.66])candidates.push({x:W*fx,y:(H-TASKBAR)*fy});
+    const preferred=pref||position||{x:W*.5,y:(H-TASKBAR)*.48};
     for(const candidate of candidates){
       if(candidate.x-96*s<12||candidate.x+612*s>W-12||candidate.y-116*s<12||candidate.y+610*s>H-TASKBAR-12)continue;
-      const score=Math.hypot(candidate.x-preferred.x,candidate.y-preferred.y)*.01;
+      const blocked=meadowBoyBlocked(candidate.x,candidate.y,s);
+      let score=Math.hypot(candidate.x-preferred.x,candidate.y-preferred.y)*.01+[0,6,1e4][blocked];
+      if(position&&!pref&&(candidate.x>position.x+4||candidate.y>position.y+4))score+=1.5;
       if(score<bestScore){best=candidate;bestScore=score;}
     }
     return best||{x:W*.48,y:(H-TASKBAR)*.40};
@@ -407,6 +424,19 @@ void main() {
         if(trip)trip={start:time-(meadowBoyTurnDuration+meadowBoyRunDuration),from:{...position},to:{...position},after:target};
         nextRunAt=time+7;
       }
+      // a window came over where he stands or is running to: he runs clear (no blink, no slide), as soon as he can
+      if(position&&returnAt===null&&!(trip&&trip.exit)){
+        const goal=trip?trip.to:target;
+        if(goal&&meadowBoyBlocked(goal.x,goal.y,s)===2){
+          const to=choosePosition(s,goal);
+          if(Math.hypot(to.x-goal.x,to.y-goal.y)>4){
+            if(trip){const pose=meadowBoyTripPose(time-trip.start,trip.cycles,trip.duration,trip);
+              trip=startTrip(position,to,s,{enter:pose.running||pose.back});}
+            else trip=startTrip(position,to,s);
+            target={...to};pullStarted=-Infinity;
+          }
+        }
+      }
     }
     if(returnAt!==null){
       if(time<returnAt)return null;
@@ -422,9 +452,12 @@ void main() {
     if(!trip){
       const move=1-Math.exp(-dt*.7);position.x+=(target.x-position.x)*move;position.y+=(target.y-position.y)*move;
       if(time>=nextRunAt&&Math.hypot(position.x-target.x,position.y-target.y)<2){
-        const destination=meadowBoyRunDestination(position,s,W,H,TASKBAR);
-        trip=startTrip(position,destination,s,{exit:destination.exit});
-        pullStarted=-Infinity;
+        let destination=meadowBoyRunDestination(position,s,W,H,TASKBAR);
+        // (not to a spot under a window: the nearest open one instead, or he stays put a while longer)
+        if(!destination.exit&&meadowBoyBlocked(destination.x,destination.y,s)===2){const to=choosePosition(s,destination);destination={x:to.x,y:to.y,exit:false};}
+        if(Math.hypot(destination.x-position.x,destination.y-position.y)<20)nextRunAt=time+7;
+        else{trip=startTrip(position,destination,s,{exit:destination.exit});
+        pullStarted=-Infinity;}
       }
     }
     const activity=trip?meadowBoyTripPose(time-trip.start,trip.cycles,trip.duration,trip):meadowBoyTripPose(6);
@@ -469,6 +502,7 @@ void main() {
     }else{
       pose.hand[0]*=activity.squeeze;pose.reelHand[0]*=activity.squeeze;
     }
+    window.__meadowBoy={x:position.x,y:position.y,s,trip:!!trip};
     const state={time,position:{...position},layout:signature,routeTarget:trip?trip.to:target,kite:{x:position.x+kx*s,y:position.y+ky*s},...activity,wind:runWind,runner:rig,ground,tug,linePull,kiteReaction:{...kiteReaction}};
     if(!visible)return {state};
     const k=cv._scale,left=Math.floor((position.x-96*s)*k)-1,top=Math.floor((position.y-116*s)*k)-1;

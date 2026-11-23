@@ -45,6 +45,7 @@
   .plate.sm .m, .plate.rail .m { display: none; }
   .plate.rail .a { font-size: 7px; } .plate.rail .t { font-size: 9px; margin-top: 0; -webkit-line-clamp: 1; }
   .soft { position: absolute; border-radius: 22px; box-shadow: 0 2px 4px rgba(0,0,0,.18), 4px 12px 26px rgba(35,20,8,.26); transition: all .6s ease; }
+  .frame.win { transition: opacity .35s ease; }                        /* your windows' frames come and go with the window, never pop */
   .hung { transition: left 1.6s cubic-bezier(.45,0,.25,1), top 1.6s cubic-bezier(.45,0,.25,1), opacity 1.2s ease, transform 1.2s ease; }
 </style>
 </head>
@@ -133,21 +134,30 @@ function makePiece(kind) {
   const p = { kind, shadow: $('div', 'shadow', L.shadow), frame: $('div', 'frame', L.frame), light: $('div', 'light', L.light), plate: $('div', 'plate', L.plate), style: null };
   p.plate.innerHTML = '<div class="a"></div><div class="t"></div><div class="m"></div>';
   if (kind === 'art') { for (const e of [p.shadow, p.frame, p.light, p.plate]) e.classList.add('hung'); }
+  else p.frame.classList.add('win');
   return p;
 }
+// a window's piece arrives faded out and fades in (what it's laid out to show is its target)
+function fadeIn(p) {
+  const els = [p.shadow, p.frame, p.light, p.plate], want = els.map(e => e.style.opacity);
+  for (const e of els) e.style.opacity = 0;
+  requestAnimationFrame(() => requestAnimationFrame(() => { if (p.gone) return; els.forEach((e, i) => { if (e.style.opacity === '0') e.style.opacity = want[i]; }); p.plate.style.opacity = p.plateBox ? 1 : 0; }));
+}
 function removePiece(p, lift) {
-  const els = [p.shadow, p.frame, p.light, p.plate];
+  const els = [p.shadow, p.frame, p.light, p.plate]; p.gone = true;
   if (lift) { for (const e of els) { e.style.opacity = 0; e.style.transform = 'translateY(-14px)'; } setTimeout(() => els.forEach(e => e.remove()), 1300); }
-  else els.forEach(e => e.remove());
+  else { p.frame.style.background = 'none'; for (const e of els) e.style.opacity = 0; setTimeout(() => els.forEach(e => e.remove()), 850); }   // the window's gone: its frame fades with it (an empty frame, not a dark slab)
 }
 // geometry: the inner rect is what shows (a window, or a painting); the frame wraps it; the plate hangs beside it
 function frameWidth(w, h, kind) { return Math.round(clamp(Math.min(w, h) * (kind === 'art' ? .075 : .05), 16, 58)); }
 const hit = (a, bs) => bs.some(b => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1]);
 const FLOOR = F => floorOf(F);                                        // the skirting: nothing is hung below it
 function setFrame(p, x, y, w, h, opt) {
-  const F = opt.F, tuck = opt.kind === 'win' ? 3 : 0;                  // the frame's lip tucks under the window's edge
+  // the frame's lip tucks under the window's edge, far enough that its rounded corners (14 pt on a Mac, more on macOS 26)
+  // show gilt in the corner, not the frame's dark back; the frame is made wider by as much, so as much of it shows as before
+  const tuck = opt.kind === 'win' ? 8 : 0, F = opt.F + (opt.kind === 'win' ? 5 : 0);
   const fx = x - F + tuck, fy = y - F + tuck, fw = w + 2 * (F - tuck), fh = h + 2 * (F - tuck);
-  if (p.style !== opt.style || p.F !== F) { styleFrame(p.frame, opt.style, F); p.style = opt.style; p.F = F; }
+  if (p.style !== opt.style || p.F !== F) { styleFrame(p.frame, opt.style, F); p.style = opt.style; p.F = F; } p.Fv = F - tuck;   // (Fv: how much of it shows)
   Object.assign(p.frame.style, { left: fx + 'px', top: fy + 'px', width: fw + 'px', height: fh + 'px' });
   Object.assign(p.shadow.style, { left: fx + 'px', top: fy + 'px', width: fw + 'px', height: fh + 'px' });
   const lw = fw * 1.35 + 140, lh = fh * 1.4 + 160;                     // the spotlight: brightest just above the frame's top, where the light lands
@@ -167,23 +177,35 @@ function setPlate(p, label, claimed) {
     for (const [px, py] of cands) {
       const b = [px, py, px + pw, py + ph];
       if (px < X0 + 8 || px + pw > X1 - 8 || py < Y0 + 8 || py + ph > FLOOR(PF) || hit(b, claimed)) continue;
+      glide(p, sc + ':' + cands.findIndex(c => c[0] === px && c[1] === py));
       Object.assign(p.plate.style, { left: px + 'px', top: py + 'px', width: pw + 'px', height: ph + 'px', opacity: 1, fontSize: '' });
       p.plate.classList.toggle('sm', sc < .8); p.plate.classList.remove('rail');
       p.plateBox = b; claimed.push([b[0] - 6, b[1] - 6, b[2] + 6, b[3] + 6]); return;
     }
   }
   // no room on the wall: a small plaque screwed to the frame's own bottom rail (or top rail), as museums do
-  const F = p.F || 0, rh = Math.min(F - 8, 30);
+  const F = p.Fv || 0, rh = Math.min(F - 8, 30);
   if (rh >= 24) {
     const rw = rh * 6.4, px = (fx + fx1) / 2 - rw / 2;
     for (const py of [fy1 - F / 2 - rh / 2, fy + F / 2 - rh / 2]) {
       const b = [px, py, px + rw, py + rh];
       if (px < X0 + 8 || px + rw > X1 - 8 || py < Y0 + 4 || py + rh > Y1 - 4 || hit(b, claimed.filter(c => !(c[0] >= fx - 6 && c[1] >= fy - 6 && c[2] <= fx1 + 6 && c[3] <= fy1 + 6))))   /* its own window and frame don't count */ continue;
+      glide(p, 'rail:' + py);
       Object.assign(p.plate.style, { left: px + 'px', top: py + 'px', width: rw + 'px', height: rh + 'px', opacity: 1 });
       p.plate.classList.add('rail'); p.plateBox = b; claimed.push(b); return;
     }
   }
   p.plate.style.opacity = 0;                                           // nowhere it can hang without covering something: no label
+}
+// a window's label that has to move to another side of its frame (no room where it was) glides there, rather than
+// jumping; while it stays on the same side it sits exactly where the frame is, drag or not
+function glide(p, cand) {
+  if (p.kind !== 'win') return;
+  const now = performance.now();
+  if (p.cand != null && p.cand !== cand && p.plate.style.opacity === '1') p.glideUntil = now + 450;
+  p.cand = cand;
+  const g = now < (p.glideUntil || 0);
+  if (g !== !!p.gliding) { p.gliding = g; p.plate.style.transition = g ? 'opacity .8s ease, left .4s cubic-bezier(.45,0,.25,1), top .4s cubic-bezier(.45,0,.25,1), width .4s ease, height .4s ease' : ''; }
 }
 function place(p, x, y, w, h, opt) { setFrame(p, x, y, w, h, opt); setPlate(p, opt.label, opt.claimed || []); }
 
@@ -261,9 +283,11 @@ function setWindows(all) {
   const items = list.map((t, i) => {
     let best = null, bd = 1e9;
     for (const c of wins) { if (used.has(c) || c.app !== t.app) continue; const d = Math.hypot(c.x - t.x, c.y - t.y) + Math.abs(c.w - t.w) + Math.abs(c.h - t.h); if (d < bd) { bd = d; best = c; } }
-    if (!best) { best = makePiece('win'); best.app = t.app; wins.push(best); }
+    if (!best) { best = makePiece('win'); best.app = t.app; best.fresh = true; wins.push(best); }
     used.add(best); Object.assign(best, t);
-    const nth = seen[t.app] = (seen[t.app] ?? -1) + 1, small = t.w < 220 || t.h < 160;
+    // its number in the collection is its own: closing another window of the same app doesn't relabel this one
+    if (best.nth == null) { const taken = new Set(wins.filter(c => c !== best && c.app === t.app).map(c => c.nth)); let k = 0; while (taken.has(k)) k++; best.nth = k; }
+    const nth = best.nth, small = t.w < 220 || t.h < 160;
     return { t, p: best, i, small, nth };
   });
   // frames first (each knowing its neighbours), then labels, front window first
@@ -274,6 +298,10 @@ function setWindows(all) {
   }
   const claimed = [...all.map(t => [t.x - 4, t.y - 4, t.x + t.w + 4, t.y + t.h + 4]), ...items.map(it => it.p.box), ...niches.map(n => n.box), ...stands.map(s => s.box)];
   for (const it of items) setPlate(it.p, it.small ? null : labelFor(it.t.app, it.nth), claimed);
+  // the front window's frame and label over those behind it, and every window's over the paintings (the paintings hung
+  // after a window used to cover its frame and label: the newest element won)
+  for (const it of items) { const z = String(100 + items.length - it.i); for (const e of [it.p.shadow, it.p.frame, it.p.plate]) if (e.style.zIndex !== z) e.style.zIndex = z;
+    if (it.p.fresh) { it.p.fresh = false; fadeIn(it.p); } }
   // the Stage Manager label last: below its niche, else above, else not at all
   for (const n of niches) {
     const pw = clamp(n.box[2] - n.box[0] + 10, 130, 200), ph = pw * .38, px = clamp((n.box[0] + n.box[2]) / 2 - pw / 2, 8, W - pw - 8);
@@ -360,8 +388,9 @@ function hangCollection() {
       label: { artist: art.artist, title: `${art.title}, ${art.date}`, medium: `${art.medium} · ${art.credit}` } });   // the full credit lines are in THIRD_PARTY_NOTICES
     // it's hung: lowered gently onto its hook
     for (const e of [p.shadow, p.frame, p.light, p.plate]) { e.style.opacity = 0; e.style.transform = 'translateY(-14px)'; }
-    requestAnimationFrame(() => requestAnimationFrame(() => { for (const e of [p.shadow, p.frame, p.plate]) { e.style.opacity = ''; e.style.transform = ''; } p.light.style.opacity = .8; p.light.style.transform = ''; }));
-    p.plate.style.opacity = p.plateBox ? 1 : 0;
+    // lowered once its picture is ready (an empty frame used to come down first, and its label ahead of it)
+    const lower = () => requestAnimationFrame(() => requestAnimationFrame(() => { if (p.gone) return; for (const e of [p.shadow, p.frame, p.plate]) { e.style.opacity = ''; e.style.transform = ''; } p.plate.style.opacity = p.plateBox ? 1 : 0; p.light.style.opacity = .8; p.light.style.transform = ''; }));
+    if (img.decode) img.decode().then(lower, lower); else lower();
     const h = { art, p, box: fp.box.map((v, i) => v + (i % 2 ? 0 : 0)) }; h.box = [s.box[0], s.box[1], s.box[2], s.box[3]];
     hung.push(h); obstacles.push(pad(h.box));
   }
@@ -390,7 +419,7 @@ const handle = m => {
   if (m.t === 'windows') {
     lastRaw = m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, app: (m.n || [])[i] || '', sm: (m.sm || [])[i] === 1 }));
     lastAll = lastRaw.map(toWorld); setWindows(lastAll);
-    clearTimeout(settle); settle = setTimeout(hangCollection, m.live ? 900 : 350);   // re-hang once you've stopped moving things
+    clearTimeout(settle); settle = setTimeout(hangCollection, m.live ? 900 : 200);   // re-hang once you've stopped moving things
   }
 };
 function setTargets() { }

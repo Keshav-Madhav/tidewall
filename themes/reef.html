@@ -573,7 +573,7 @@ void main() {
   sd += (fbm3(p * .018) - .5) * 44.;
   vec2 tgt = vec2(1. - smoothstep(-6., 6., sd), 1. - smoothstep(-30., 260., sd));
   vec2 prev = texture(uPrev, vUV).rg;
-  vec2 up = 1. - exp(-uDt * vec2(.75, .55)), dn = 1. - exp(-uDt * vec2(1.1, .45));
+  vec2 up = 1. - exp(-uDt * vec2(2.2, 1.6)), dn = 1. - exp(-uDt * vec2(2.4, 1.3));   // (settled ~1.5 s after a drop)
   o = vec4(mix(prev, tgt, mix(dn, up, step(prev, tgt))), 0., 1.);
 }`, 'grow');
 const BED = prog(VS_FULL, `#version 300 es
@@ -865,10 +865,11 @@ function stepSites(dt) {
       } }
     }
   }
+  const regrow = performance.now() < regrowUntil ? 2.5 : 1;
   for (const c of sites) {
     if (c.vis === c.tgt) continue;
     if (instant) c.vis = c.tgt;
-    else { c.vis += (c.tgt - c.vis) * Math.min(1, dt * c.rate * (c.tgt > c.vis ? .65 : 1.5)); if (Math.abs(c.tgt - c.vis) < .003) c.vis = c.tgt; }
+    else { c.vis += (c.tgt - c.vis) * Math.min(1, dt * (c.rate + .5) * (c.tgt > c.vis ? 1.6 * regrow : 3)); if (Math.abs(c.tgt - c.vis) < .003) c.vis = c.tgt; }
     if (c.t === 4 && c.f < .6) {
       if (c.vis > .45 && !c.clown) { c.clown = true; clownPair(c, null); }
       else if (c.vis === 0 && c.clown) { c.clown = false; clowns = clowns.filter(f => f.coral !== c); }
@@ -879,25 +880,31 @@ function stepSites(dt) {
 
 /* ---------- windows: eased, each owning a reef ---------- */
 let wins = [], liveUntil = 0, settled = false;
+// windows that went away (Show Desktop, minimised, another Space): one that comes back where it was regrows its reef
+// in about a second instead of starting over as if it had just opened
+let gone = [], regrowUntil = 0;
 function setTargets(list) {
-  const used = new Set();
+  const used = new Set(), now = performance.now();
+  gone = gone.filter(g => now - g.t < 600000).slice(-64);
   for (const t of list) {
     let best = null, bd = 1e9;
     for (const c of wins) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
     if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, sm: t.sm }); }
     else {
       const n = wins.filter(c => c.owner === t.owner).length;
-      const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, sm: t.sm, alive: true, life: settled ? 0 : 1,
+      const gi = gone.findIndex(g => g.owner === t.owner && Math.abs(g.x - t.x) < 6 && Math.abs(g.y - t.y) < 6 && Math.abs(g.w - t.w) < 6 && Math.abs(g.h - t.h) < 6);
+      if (gi >= 0) { gone.splice(gi, 1); regrowUntil = now + 3000; }
+      const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, sm: t.sm, alive: true, life: settled && gi < 0 ? 0 : 1,
         vx: 0, vy: 0, sh: hashStr(t.owner + n) % 997 / 37 };
       wins.push(c); used.add(c);
     }
   }
   if (!settled) { instant = true; growReset = true; }
   settled = true;
-  for (const c of wins) if (!used.has(c)) c.alive = false;          // closed: its reef recedes, then it is dropped
+  for (const c of wins) if (!used.has(c) && c.alive) { c.alive = false; gone.push({ x: c.tx, y: c.ty, w: c.tw, h: c.th, owner: c.owner, t: now }); }   // closed: its reef recedes, then it is dropped
 }
 function stepWins(dt) {
-  const live = performance.now() < liveUntil, k = 1 - Math.exp(-dt * (live ? 40 : 8));
+  const live = performance.now() < liveUntil, k = live ? 1 : 1 - Math.exp(-dt * 8);   // a window in your hand: exactly where it is
   for (const c of wins) {
     const ox = c.x, oy = c.y;
     const ease = (v, t) => Math.abs(t - v) > .1 ? v + (t - v) * k : t;
@@ -914,6 +921,26 @@ function stepWins(dt) {
     }
   }
   wins = wins.filter(c => c.alive || c.life > .01);
+}
+// A window in your hand pushed through the water: fish near its path startle and dart out of its way (sideways from
+// its course, or out over the nearest edge if it has caught them), then calm down over a second or two
+const SCARE_R = 110;
+function dragScare(x, y) {
+  if (performance.now() >= liveUntil) return null;
+  let best = null;
+  for (const c of wins) {
+    if (!c.alive || c.sm) continue;
+    const sp = Math.hypot(c.vx, c.vy); if (sp < 40) continue;
+    const [gx, gy, d] = boxGrad(x, y, c, 0); if (d > SCARE_R) continue;
+    const nx = c.vx / sp, ny = c.vy / sp, cx = c.x + c.w / 2, cy = c.y + c.h / 2;
+    const side = (x - cx) * -ny + (y - cy) * nx >= 0 ? 1 : -1, ahead = (x - cx) * nx + (y - cy) * ny;
+    // ahead of it: off to the side it's nearer to (and a little forward); caught: out the nearest edge; behind it: just away
+    // (a fish can't outswim a window: it gets out sideways, holding back a little so the window passes it by)
+    let ax, ay; if (ahead > -c.w * .2 * Math.abs(nx) - c.h * .2 * Math.abs(ny)) { ax = -ny * side - nx * .35; ay = nx * side - ny * .35; } else { ax = gx; ay = gy; }
+    const l = Math.hypot(ax, ay) || 1, k = d < 0 ? 1.4 : (1 - d / SCARE_R) * Math.min(1.4, sp / 300);
+    if (!best || k > best[2]) best = [ax / l, ay / l, k];
+  }
+  return best;
 }
 function inWindow(x, y, pad) { for (const c of wins) if (c.alive && !c.sm && x > c.x - pad && x < c.x + c.w + pad && y > c.y - pad && y < c.y + c.h + pad) return c; return null; }
 
@@ -934,7 +961,7 @@ function makeFish() {
   for (let i = 0; i < n; i++) {
     const L = 80 + R() * 38, [x, y] = openSpot(rng(4321 + i * 977)), ang = R() * 6.283;   // (the spot's own dice: every display gives each koi the same looks)
     koi.push({ L, kind: kinds[Math.floor(R() * kinds.length)], seed: R() * 50, x, y, ang, av: 0, v: 20, cruise: 18 + R() * 14, ph: R() * 6.28, fin: R() * 6.28, wob: R() * 100,
-      sp: makeSpine(KOI_NS, x, y, ang, L * KOI_U), feed: false, nib: R() * 2, wake: 0 });
+      sp: makeSpine(KOI_NS, x, y, ang, L * KOI_U), feed: false, nib: R() * 2, wake: 0, scare: 0, flee: [0, 0] });
   }
   schools = [];
   for (const [kind, cnt, lo, hi] of [[0, 14, 12, 16], [1, 6, 20, 25], [2, 6, 21, 27], [3, 4, 17, 21], [5, 9, 11, 14]]) {
@@ -963,12 +990,12 @@ let food = null;
 const cur = { x: -1e4, y: -1e4, on: false, moveT: 0, px: 0, py: 0, sp: 0, ax: -1e4, ay: -1e4 };
 // one cursor across the world: whichever display has it tells the others
 let curFrom = -1;
-function curAt(x, y, from) { if (!cur.on) { cur.px = x; cur.py = y; } if (Math.hypot(x - cur.ax, y - cur.ay) > 1.5) { cur.moveT = performance.now(); cur.ax = x; cur.ay = y; } cur.x = x; cur.y = y; cur.on = true; curFrom = from; }
-Span.on('cur', m => curAt(m.x, m.y, m.from));
+function curAt(x, y, from, w) { cur.inWin = !!w; if (!cur.on) { cur.px = x; cur.py = y; } if (Math.hypot(x - cur.ax, y - cur.ay) > 1.5) { cur.moveT = performance.now(); cur.ax = x; cur.ay = y; } cur.x = x; cur.y = y; cur.on = true; curFrom = from; }
+Span.on('cur', m => curAt(m.x, m.y, m.from, m.w));
 Span.on('curoff', m => { if (curFrom === m.from) cur.on = false; });
 function stepKoi(dt, now) {
   // food: a still hand in open water
-  const still = cur.on && now - cur.moveT > 450 && !inWindow(cur.x, cur.y, 6);
+  const still = cur.on && !cur.inWin && now - cur.moveT > 450 && !inWindow(cur.x, cur.y, 6);
   if (still && (!food || Math.hypot(food.x - cur.x, food.y - cur.y) > 30) && !(food && food.bored)) {
     food = { x: cur.x, y: cur.y, t0: now, bored: false };
     const near = koi.map(k => [Math.hypot(k.x - food.x, k.y - food.y), k]).filter(a => a[0] < 720).sort((a, b) => a[0] - b[0]).slice(0, 4);
@@ -990,6 +1017,10 @@ function stepKoi(dt, now) {
     const m = 50; if (k.x < m) sx += (m - k.x) / m * 3; if (k.x > W - m) sx -= (k.x - W + m) / m * 3; if (k.y < m) sy += (m - k.y) / m * 3; if (k.y > H - m) sy -= (k.y - H + m) / m * 3;
     for (const o of koi) { if (o === k) continue; const dx = k.x - o.x, dy = k.y - o.y, d = Math.hypot(dx, dy); if (d < k.L * .8 && d > 0) { sx += dx / d * (1 - d / (k.L * .8)) * 2; sy += dy / d * (1 - d / (k.L * .8)) * 2; } }
     let want = k.cruise * (.75 + .5 * vnoise(T * .1, k.wob + 9)), turnMax = 1.1;
+    const sc = dragScare(k.x, k.y);
+    if (sc && sc[2] > .05) { if (k.scare < .3) k.flee = [sc[0], sc[1]]; else { k.flee[0] += (sc[0] - k.flee[0]) * .2; k.flee[1] += (sc[1] - k.flee[1]) * .2; } k.scare = Math.min(1, Math.max(k.scare, sc[2])); }
+    else k.scare = Math.max(0, k.scare - dt * .7);          // calms down over a second or two
+    if (k.scare > 0) { sx += k.flee[0] * 9 * k.scare; sy += k.flee[1] * 9 * k.scare; want = Math.max(want, 30 + 150 * k.scare); turnMax = 1.1 + 3.4 * k.scare; }
     if (k.feed && food) {
       const dx = food.x - k.x, dy = food.y - k.y, d = Math.hypot(dx, dy) || 1, arrive = k.L * .1;
       sx += dx / d * (d > arrive ? 3.2 : .4); sy += dy / d * (d > arrive ? 3.2 : .4);
@@ -997,10 +1028,10 @@ function stepKoi(dt, now) {
       if (d < k.L * .3) { k.nib -= dt; if (k.nib < 0) { k.nib = .6 + Math.random() * 1.1; drop(k.x + dirx * 2, k.y + diry * 2, 1.6, -.5); } }
     }
     let da = Math.atan2(sy, sx) - k.ang; da = Math.atan2(Math.sin(da), Math.cos(da));
-    if (Math.abs(da) > 2.2 && !k.feed) want = Math.max(want * .6, 12);
-    turnMax = Math.min(turnMax, k.feed ? .3 + k.v / (k.L * .4) : .12 + k.v / (k.L * .62));   // a koi can't pivot: it turns in arcs of at least ~half its length
+    if (Math.abs(da) > 2.2 && !k.feed && !(k.scare > .2)) want = Math.max(want * .6, 12);
+    turnMax = Math.min(turnMax, k.feed || k.scare > .2 ? .3 + k.v / (k.L * .3) : .12 + k.v / (k.L * .62));   // (startled: a sharp flick of a turn)   // a koi can't pivot: it turns in arcs of at least ~half its length
     k.av += (clamp(da * 2.4, -turnMax, turnMax) - k.av) * Math.min(1, dt * 2.5);
-    k.ang += k.av * dt; k.v += (want - k.v) * Math.min(1, dt * 1.2);
+    k.ang += k.av * dt; k.v += (want - k.v) * Math.min(1, dt * (k.scare > .2 && want > k.v ? 5 : 1.2));   // (a burst of speed)
     k.x += Math.cos(k.ang) * k.v * dt; k.y += Math.sin(k.ang) * k.v * dt;
     k.ph += dt * 6.283 * (.7 + k.v / k.L * 1.7); k.fin += dt * (2.2 + (k.feed ? 2 : 0));
     k.sp[0] = k.x; k.sp[1] = k.y; follow(k.sp, KOI_NS, k.L * KOI_U);
@@ -1019,7 +1050,10 @@ function perimPoint(c, o, t) {     // a point on the rounded rect around window 
 }
 function steerFish(f, tx, ty, dt, maxV, now) {
   let dvx = (tx - f.x) * 1.3, dvy = (ty - f.y) * 1.3;
-  const fleeing = cur.on && now - cur.moveT < 350;
+  const fleeing = cur.on && !cur.inWin && now - cur.moveT < 350;
+  const sc = dragScare(f.x, f.y);
+  if (sc && sc[2] > .05) { f.scare = Math.max(f.scare || 0, Math.min(1, sc[2])); f.fx = sc[0]; f.fy = sc[1]; } else if (f.scare) f.scare = Math.max(0, f.scare - DT * .8);
+  if (f.scare > 0) { const s = f.scare * 700, h = 1 - f.scare; dvx = dvx * h + f.fx * s; dvy = dvy * h + f.fy * s; maxV = Math.max(maxV, 60 + 180 * f.scare); }   // (its usual pull home forgotten while it darts)
   if (fleeing) { const dx = f.x - cur.x, dy = f.y - cur.y, d = Math.hypot(dx, dy); if (d < 110 && d > 0) { const s = (1 - d / 110) * 900; dvx += dx / d * s; dvy += dy / d * s; maxV = 170; } }
   for (const c of wins) { if (!c.alive) continue; const [gx, gy, d] = boxGrad(f.x, f.y, c, 2); if (d < 8) { dvx += gx * (8 - d) * 12; dvy += gy * (8 - d) * 12; } }
   for (const g of walls) { const [gx, gy, d] = boxGrad(f.x, f.y, g, 10); if (d < 20) { dvx += gx * (20 - d) * 12; dvy += gy * (20 - d) * 12; } }
@@ -1072,7 +1106,7 @@ let nextRain = 3;
 function stepWater(dt) {
   // the hand in the water
   const moved = Math.hypot(cur.x - cur.px, cur.y - cur.py);
-  if (cur.on && moved > .8 && !inWindow(cur.x, cur.y, 0)) {
+  if (cur.on && !cur.inWin && moved > .8 && !inWindow(cur.x, cur.y, 0)) {
     const n = Math.min(3, Math.ceil(moved / 8)), a = -clamp(moved / dt / 2400, .04, .32);
     for (let i = 1; i <= n; i++) drop(cur.px + (cur.x - cur.px) * i / n, cur.py + (cur.y - cur.py) * i / n, 2.6, a / n * 1.6);
   }
@@ -1177,9 +1211,9 @@ function render() {
   const dw = cv.width, dh = cv.height;
   gl.disable(gl.BLEND);
   // the reefs grow towards where the windows are now
-  if (growTargetChanged() || growReset || performance.now() - growSince < 30000) {   // grown in: after 30 s still the rest is under a half-float step
+  if (growTargetChanged() || growReset || performance.now() - growSince < 12000) {   // grown in: after 12 s still the rest is under a half-float step
   gl.bindFramebuffer(gl.FRAMEBUFFER, growF[1 - gi]); gl.viewport(0, 0, gw, gh); gl.useProgram(GROW);
-  bindTex(GROW, [['uPrev', grow[gi]]]); gl.uniform2f(GROW.u.uRes, SW, SH); worldU(GROW); gl.uniform1f(GROW.u.uDt, growReset ? 100 : DT); growReset = false;
+  bindTex(GROW, [['uPrev', grow[gi]]]); gl.uniform2f(GROW.u.uRes, SW, SH); worldU(GROW); gl.uniform1f(GROW.u.uDt, growReset ? 100 : performance.now() < regrowUntil ? DT * 2.5 : DT); growReset = false;
   gl.uniform4fv(GROW.u.uR, uR); gl.uniform4fv(GROW.u.uB, uB); gl.uniform1i(GROW.u.uN, nR);
   gl.uniform4fv(GROW.u.uBm, uBm); gl.uniform1i(GROW.u.uNB, bommies.length); full(); gi = 1 - gi; }
   // ripples: 60 steps a second whatever the frame rate (the wave travels and dies away at the same pace at 30 fps)
@@ -1330,7 +1364,7 @@ function setPads(list) {
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
   if (m.t === 'desk') { const k = JSON.stringify([m.x, m.y, m.uw, m.uh, m.fr]); if (k === deskKey) return; deskKey = k; Span.desk(m); rebuildWorld(); return; }
-  if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; curAt(x, y, -1); Span.post('cur', { x, y }); return; }
+  if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; curAt(x, y, -1, m.w); Span.post('cur', { x, y, w: m.w ? 1 : 0 }); return; }   // (w: the pointer is over a window)
   if (m.t === 'cursorOff') { if (curFrom === -1) { cur.on = false; Span.post('curoff', {}); } return; }
   if (m.t === 'dicons') { setPads(m.r || []); return; }
   if (m.t === 'windows') { lastWinMsg = m; if (m.live) liveUntil = performance.now() + 250;

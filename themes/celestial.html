@@ -309,14 +309,20 @@ function paintSky(date = new Date()) {
   return c;
 }
 
-// the cartouche hangs in whichever corner no black hole is near (it would be lensed to pieces)
+// the cartouche hangs in whichever corner no black hole is near (it would be lensed to pieces), and where your windows
+// leave it in sight: half a cartouche peeking out from under a window reads as a mistake. It stays put unless another
+// corner is clearly better, so it doesn't hop about as windows come and go.
 function cartoucheSpot(list = cur.filter(c => c.alive)) {
   const spots = [[W - 175, H - 68], [175, H - 68], [W - 175, 92]];   // the top spot clears the menu bar
   const near = ([tx, ty]) => list.some(c => tx + 150 + 150 > c.tx && tx - 150 - 150 < c.tx + c.tw && ty + 40 + 150 > c.ty && ty - 40 - 150 < c.ty + c.th)
     || deskIc.some(([l, t, r, b]) => tx + 150 + 20 > l && tx - 150 - 20 < r && ty + 40 + 20 > t && ty - 40 - 20 < b);   // nor over your icons
-  return spots.find(sp => !near(sp)) || spots[0];
+  const hidden = ([tx, ty]) => Math.min(24000, allWins.reduce((s, [l, t, r, b]) => s + Math.max(0, Math.min(r, tx + 158) - Math.max(l, tx - 158)) * Math.max(0, Math.min(b, ty + 48) - Math.max(t, ty - 48)), 0));
+  const score = sp => (near(sp) ? 1e6 : 0) + hidden(sp);
+  let best = spots[0], bs = Infinity; for (const sp of spots) { const v = score(sp); if (v < bs) { bs = v; best = sp; } }
+  const here = cartAt && spots.find(sp => sp[0] === cartAt[0] && sp[1] === cartAt[1]);
+  return here && score(here) <= bs + 2500 ? here : best;
 }
-let cartAt = null, cartT = null, deskIc = [], iconKey = '';
+let cartAt = null, cartT = null, deskIc = [], iconKey = '', allWins = [];
 /* ---------- windows → black holes (eased like everything else) ---------- */
 let cur = [], liveUntil = 0;
 function setTargets(list) {
@@ -329,11 +335,11 @@ function setTargets(list) {
   }
   for (const c of cur) if (!used.has(c)) c.alive = false;
   // the cartouche moves only once the layout has settled (Show Desktop, Mission Control and the like shuffle windows for a moment)
-  clearTimeout(cartT); cartT = setTimeout(() => { const sp = cartoucheSpot(); if (SKY && cartAt && (sp[0] !== cartAt[0] || sp[1] !== cartAt[1])) uploadSky(paintSky(), true); }, 3000);
+  clearTimeout(cartT); cartT = setTimeout(() => { const sp = cartoucheSpot(); if (SKY && cartAt && (sp[0] !== cartAt[0] || sp[1] !== cartAt[1])) newSky(1200); }, performance.now() < liveUntil ? 1500 : 1000);
   wake();
 }
 function stepWins(dt) {
-  const live = performance.now() < liveUntil, k = 1 - Math.exp(-dt * (live ? 40 : 7)), kl = 1 - Math.exp(-dt * 2.5);
+  const live = performance.now() < liveUntil, k = live ? 1 : 1 - Math.exp(-dt * 7), kl = 1 - Math.exp(-dt * 2.5);
   let moving = false;
   for (const c of cur) {
     for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = c[b] - c[a]; if (Math.abs(d) > .2) { c[a] += d * k; moving = true; } else c[a] = c[b]; }
@@ -343,7 +349,7 @@ function stepWins(dt) {
   return moving;
 }
 // the cursor's own little black hole: exactly at the pointer, fading in and out with it
-let curs = { x: -999, y: -999, a: 0, target: 0, lastMove: 0 };
+let curs = { x: -999, y: -999, a: 0, target: 0, lastMove: 0, away: false, hop: null };
 
 /* ---------- the lensing pass ---------- */
 const gl = cv.getContext('webgl2', { antialias: false });
@@ -399,7 +405,9 @@ gl.useProgram(LENS);
 const U = {}; for (const k of ['uSky', 'uSkyB', 'uSkyMix', 'uWin', 'uLife', 'uN', 'uRes', 'uK', 'uCur']) U[k] = gl.getUniformLocation(LENS, k);
 gl.bindVertexArray(gl.createVertexArray());
 let skyTex = gl.createTexture(), skyTexB = gl.createTexture(), skyMix = 0, skyFadeT0 = -1e9;
-const SKY_FADE_MS = 2500;
+let SKY_FADE_MS = 2500, skyPending = 0;
+// a new sky while one is still fading in waits for it: starting over would cut the running fade short (a visible jump)
+function newSky(ms = 2500) { if (performance.now() - skyFadeT0 < SKY_FADE_MS) { skyPending = ms; return; } SKY_FADE_MS = ms; uploadSky(paintSky(), true); }
 // a new sky (the minute moved on): upload it as B and cross-fade A → B, then B becomes A
 function uploadSky(canvas, fade) {
   if (fade) { if (skyMix > 0) [skyTex, skyTexB] = [skyTexB, skyTex]; [skyTex, skyTexB] = [skyTex, skyTexB]; }
@@ -432,6 +440,7 @@ function shootingStar() {
   for (let tries = 0; tries < 20; tries++) {
     const x = Math.random() * W * .8 + W * .1, y = Math.random() * H * .5 + 30, a = .35 + Math.random() * .5, len = 160 + Math.random() * 160;
     if (cur.some(w => x > w.x - 200 && x < w.x + w.w + 200 && y > w.y - 200 && y < w.y + w.h + 200)) continue;
+    { const ex = x + Math.cos(a) * (260 + len), ey = y + Math.sin(a) * (260 + len); if (allWins.some(([l, t, r, b]) => Math.max(x, ex) > l && Math.min(x, ex) < r && Math.max(y, ey) > t && Math.min(y, ey) < b)) continue; }   // nor behind your windows, where nobody would see it
     const el = document.createElement('div'); el.className = 'shoot'; el.style.width = `${len}px`; document.body.appendChild(el);
     const anim = el.animate([{ transform: `translate(${x}px,${y}px) rotate(${a}rad) scaleX(.2)`, opacity: 0 }, { opacity: 1, offset: .25 },
       { transform: `translate(${x + Math.cos(a) * 260}px,${y + Math.sin(a) * 260}px) rotate(${a}rad) scaleX(1)`, opacity: 0 }], { duration: 1100, easing: 'cubic-bezier(.3,0,.4,1)' });
@@ -448,38 +457,45 @@ function loop0(now) {
   const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now;
   const moving = stepWins(dt);
   // the cursor hole fades in while the pointer is over the sky and out a few seconds after it stops
-  curs.target = curs.here ? 1 : 0;                   // stays while the pointer is on this screen, even when still
+  // back on the sky far from where its hole was left (after crossing a window, or another screen): the old one fades
+  // out quickly and the new one grows in at the pointer, never a hole jumping across the screen
+  if (curs.hop && curs.a < .02) { curs.x = curs.hop[0]; curs.y = curs.hop[1]; curs.hop = null; }
+  curs.target = curs.here && !curs.hop ? 1 : 0;      // stays while the pointer is on this screen, even when still
   const da = curs.target - curs.a, fading = Math.abs(da) > .002;
-  if (fading) curs.a += da * (1 - Math.exp(-dt * (curs.target ? 6 : 1.5))); else curs.a = curs.target;
+  if (fading) curs.a += da * (1 - Math.exp(-dt * (curs.target ? 6 : curs.hop ? 12 : 1.5))); else curs.a = curs.target;
   const skyFading = now - skyFadeT0 < SKY_FADE_MS;
   if (skyFading) { const u = (now - skyFadeT0) / SKY_FADE_MS; skyMix = u * u * (3 - 2 * u); }
   else if (skyMix > 0) { [skyTex, skyTexB] = [skyTexB, skyTex]; skyMix = 0; dirty = true;
     gl.bindTexture(gl.TEXTURE_2D, skyTexB); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); }   // the old sky goes (~32 MB)
   if (moving || fading || dirty || skyFading) render();
   dirty = false;
-  if (moving || fading || skyFading) requestAnimationFrame(loop); else running = false;
+  if (!skyFading && skyPending) { const ms = skyPending; skyPending = 0; newSky(ms); }
+  if (moving || fading || skyFading || performance.now() - skyFadeT0 < SKY_FADE_MS) requestAnimationFrame(loop); else running = false;
 }
 
 /* ---------- boot + host protocol ---------- */
 function build() { W = innerWidth; H = innerHeight; cv.width = Math.round(W * K); cv.height = Math.round(H * K); uploadSky(paintSky(), false); render(); }
 loadSky().then(() => { const t0 = performance.now(); const c = paintSky(); fieldMs = Math.round(performance.now() - t0); uploadSky(c, true); }).catch(e => { try { webkit.messageHandlers.host.postMessage('JSERR sky data ' + e); } catch (_) {} });
 // the sky turns: repaint for the new minute and cross-fade (≈0.25° of rotation per minute)
-setTimeout(function tickMinute() { if (!paused && SKY) uploadSky(paintSky(), true); setTimeout(tickMinute, 60000 - Date.now() % 60000 + 50); }, 60000 - Date.now() % 60000 + 50);
+setTimeout(function tickMinute() { if (!paused && SKY) newSky(); setTimeout(tickMinute, 60000 - Date.now() % 60000 + 50); }, 60000 - Date.now() % 60000 + 50);
 let FB = null; function commit() { } function refresh() { }
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v;
-    if (!paused) { if (SKY && Math.floor(Date.now() / 60000) !== paintedMin) uploadSky(paintSky(), true); wake(); }
+    if (!paused) { if (SKY && Math.floor(Date.now() / 60000) !== paintedMin) newSky(); wake(); }
     return; }
   if (m.t === 'me') return;
   if (m.t === 'desk') { const k = [m.x, m.y, m.w, m.h, m.uw, m.uh, m.i, m.n].join('|'); if (k === deskKey) return; deskKey = k;
     DESK = m; if (SKY) { uploadSky(paintSky(), false); dirty = true; wake(); } return; }
-  if (m.t === 'cursor' && m.w) { if (curs.here) { curs.here = false; wake(); } return; }   // over a window: its little black hole can't be seen; let it fade, and redraw nothing for it
-  if (m.t === 'cursor') { curs.x = m.x / K; curs.y = m.y / K; curs.here = true; curs.lastMove = performance.now(); dirty = true; wake(); return; }
-  if (m.t === 'cursorOff') { curs.here = false; wake(); return; }        // the pointer went to another screen
+  if (m.t === 'cursor' && m.w) { curs.away = true; if (curs.here) { curs.here = false; wake(); } return; }   // over a window: its little black hole can't be seen; let it fade, and redraw nothing for it
+  if (m.t === 'cursor') { const x = m.x / K, y = m.y / K;
+    if (curs.hop || (curs.away && curs.a > .02 && Math.hypot(x - curs.x, y - curs.y) > 24)) curs.hop = [x, y]; else { curs.x = x; curs.y = y; }
+    curs.away = false; curs.here = true; curs.lastMove = performance.now(); dirty = true; wake(); return; }
+  if (m.t === 'cursorOff') { curs.here = false; curs.away = true; wake(); return; }        // the pointer went to another screen
   if (m.t === 'dicons') { const k = [m.r].join('|'); if (k === iconKey) return; iconKey = k;   // your desktop icons: the chart is repainted round them
-    deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]); if (SKY) uploadSky(paintSky(), true); return; }
+    deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]); if (SKY) newSky(1200); return; }
   // black holes only for the small things: Stage Manager thumbnails and desktop widgets (and the cursor); not your main windows
   if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
+    allWins = m.r.map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]);
     setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i], sm: !!(m.sm && m.sm[i]) }))
       .filter(w => w.sm || w.owner === 'Notification Centre')); }
 };

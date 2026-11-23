@@ -25,7 +25,7 @@ function meadowCatRunLanes(state,width,height,taskbar) {
   add(bottom,entry);finish(entry);
   return {lanes,scale};
 }
-function meadowCatChoosePlace(state,width,height,taskbar,sceneSeed,desktopIcons,cloudSize) {
+function meadowCatChoosePlace(state,width,height,taskbar,sceneSeed,desktopIcons,cloudSize,near=null) {
   const {lanes,scale}=meadowCatRunLanes(state,width,height,taskbar);
   const size=Math.max(28,Math.min(90,Math.min(width/1379,(height-taskbar)/1141)*78))*.578;
   const radius=size*.58,pad=radius+12,clearance=radius+96*scale+14;
@@ -50,8 +50,9 @@ function meadowCatChoosePlace(state,width,height,taskbar,sceneSeed,desktopIcons,
       const dy=Math.max(icon.y-p.y,0,p.y-icon.y-icon.h);
       score+=Math.max(0,radius+cloudSize+25-Math.hypot(dx,dy));
     }
+    if(near)score=score*1000+Math.hypot(p.x-near.x,p.y-near.y)+(typeof meadowCloudOver==='function'&&meadowCloudOver(p.x,p.y)?5e5:0);   // (moving: the nearest clear spot)
     if(score<bestScore){best={...p,size,clearance,routeDistance,lanes};bestScore=score;}
-    if(score===0)break;
+    if(score===0&&!near)break;
   }
   return best;
 }
@@ -68,7 +69,10 @@ function prepareMeadowCat(boy,now=0) {
 }
 function createMeadowCatScene() {
   const texture=gl.createTexture();let ready=false,layout='',signature='',routeState=null,place=null;
-  let time=0,previousTime=null;
+  let time=0,previousTime=null,at=null,walk=null,coveredFor=0,lastLook=-1;
+  // under a window (or on the icons)?
+  const covered=(x,y,r)=>typeof icons!=='undefined'&&icons.some(ic=>x+r>ic.x-4&&x-r<ic.x+ic.w+4&&y+r>ic.y-4&&y-r<ic.y+ic.h+4)||
+    (typeof meadowCloudOver==='function'&&meadowCloudOver(x,y)&&typeof FB!=='undefined'&&sampleArr(FB.s,x,y)-P.edge<0);   // (or deep in its cloud)
   const image=new Image();
   image.onload=()=>{
     const sprite=document.createElement('canvas');sprite.width=sprite.height=384;
@@ -89,13 +93,36 @@ function createMeadowCatScene() {
     const nextLayout=[W,H,TASKBAR].join(',');
     if(layout!==nextLayout){layout=nextLayout;routeState=null;place=null;signature='';}
     if(boy&&boy.state.layout===layout)routeState=boy.state;
-    if(!ready||!routeState)return null;
+    // 等知道窗口在哪了再选位置（wallpaper: the first windows message), not on an empty desktop it then gets crowded on
+    if(!ready||!routeState||(typeof iconsSeen!=='undefined'&&!iconsSeen))return null;
     const next=[layout,seed].join(',');
     if(next!==signature){
-      signature=next;place=meadowCatChoosePlace(routeState,W,H,TASKBAR,seed,icons,P.sigma);
+      signature=next;place=meadowCatChoosePlace(routeState,W,H,TASKBAR,seed,icons,P.sigma);at=place&&{x:place.x,y:place.y};walk=null;coveredFor=0;
     }
     if(!place)return null;
-    const size=place.size,rect=[place.x-size/2,place.y-size/2,size,size],shadow=[size*.045,size*.06];
-    return {texture,rect,shadow,tail:meadowCatTailAngle(time,seed),bounds:[rect[0]-2,rect[1]-2,size+shadow[0]+4,size+shadow[1]+4],state:place};
+    const dt=lastLook<0?0:Math.max(0,Math.min(.05,time-lastLook));lastLook=time;
+    // a window settled over her: after a moment she gets up and pads off to the nearest clear spot (never a jump)
+    if(!walk){
+      coveredFor=covered(at.x,at.y,place.size*.45)?coveredFor+dt:0;
+      if(coveredFor>.6){
+        coveredFor=0;
+        const to=meadowCatChoosePlace(routeState,W,H,TASKBAR,seed,icons,P.sigma,at);
+        if(to&&Math.hypot(to.x-at.x,to.y-at.y)>6){
+          const d=Math.hypot(to.x-at.x,to.y-at.y);
+          walk={from:{...at},to:{x:to.x,y:to.y},t:0,T:Math.max(1,Math.min(4,d/90))};place={...place,...to,size:place.size};
+        }
+      }
+    }
+    let hop=0;
+    if(walk){
+      walk.t+=dt;const u=Math.min(1,walk.t/walk.T),e=u*u*(3-2*u),d=Math.hypot(walk.to.x-walk.from.x,walk.to.y-walk.from.y);
+      at={x:walk.from.x+(walk.to.x-walk.from.x)*e,y:walk.from.y+(walk.to.y-walk.from.y)*e};
+      hop=Math.abs(Math.sin(e*d/9*Math.PI))*Math.min(1,u*6,(1-u)*6)*place.size*.06;   // a little trot
+      if(window.__twSettle)window.__twSettle(150);
+      if(u>=1)walk=null;
+    }
+    window.__meadowCat={x:at.x,y:at.y,walking:!!walk};
+    const size=place.size,rect=[at.x-size/2,at.y-size/2-hop,size,size],shadow=[size*.045,size*.06+hop];
+    return {texture,rect,shadow,tail:walk?.18*Math.sin(time*9):meadowCatTailAngle(time,seed),bounds:[rect[0]-2,rect[1]-2,size+shadow[0]+4,size+shadow[1]+4],state:place};
   }};
 }

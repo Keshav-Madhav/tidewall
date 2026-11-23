@@ -67,7 +67,8 @@ const gate = { x: 0, ly: 0, ry: 0 };
 
 /* ======================= windows → beds (eased, so the plan morphs) ======================= */
 const slotSig = () => slots.map(c => `${c.id}:${c.tx},${c.ty},${c.tw},${c.th},${c.alive}`).join('|');
-function setTargets(list) {
+let gone = [], snapped = false;                                                         // windows that went (minimised, Show Desktop, another Space): their beds, remembered
+function setTargets(list, live) {
   const was = slotSig();
   // Stage Manager's thumbnails make one long bed, not a row of tiny ones
   const sm = list.filter(t => t.sm), rest = list.filter(t => !t.sm && t.w >= 50 && t.h >= 40);
@@ -77,12 +78,26 @@ function setTargets(list) {
   for (const t of rest.slice(0, MAXR)) {
     let best = null, bd = 1e9;
     for (const c of slots) { if (used.has(c) || !c.alive || c.owner !== t.owner) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
-    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
-    else { const id = nextId++, c = { id, style: t.owner === '__icons' ? 4 : Math.floor(h1(id * 3.17 + SEED * 1.3) * 4), owner: t.owner, x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, life: 0, alive: true }; slots.push(c); used.add(c); }
+    // a bed still shrinking away where this window comes back (Show Desktop and back): it grows again from where it is
+    if (!best) { for (const c of slots) { if (used.has(c) || c.alive || c.owner !== t.owner) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2) + Math.abs(c.tw - t.w) + Math.abs(c.th - t.h); if (d < 160 && d < bd) { bd = d; best = c; } }
+      if (best) best.alive = true; }
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h });
+      if (live) { Object.assign(best, { x: t.x, y: t.y, w: t.w, h: t.h }); snapped = true; } }    // your hand is on it: the bed sits exactly round the window (easing, it trailed a drag by tens of points)
+    else { const id = reviveId(t), c = { id, style: t.owner === '__icons' ? 4 : Math.floor(h1(id * 3.17 + SEED * 1.3) * 4), owner: t.owner, x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, life: 0, alive: true }; slots.push(c); used.add(c); }
   }
+  for (const c of slots) if (!used.has(c) && c.alive && c.owner !== '__icons') { gone.push({ id: c.id, owner: c.owner, x: c.tx + c.tw / 2, y: c.ty + c.th / 2, w: c.tw, h: c.th, t: performance.now() }); if (gone.length > 24) gone.shift(); }
   for (const c of slots) if (!used.has(c)) c.alive = false;
-  if (slotSig() === was) return;                                       // the same beds (a drag's last message, the icons resent): nothing to redraw
+  if (live) dirty = true;                                              // (snapped: drawn this frame even if nothing else moved)
+  if (slotSig() === was) { if (live) wake(); return; }                                       // the same beds (a drag's last message, the icons resent): nothing to redraw
   plan(); wake();
+}
+// a window back after a while (its bed long gone): the same id, so the same planting as before, not a new one
+function reviveId(t) {
+  const now = performance.now(), cx = t.x + t.w / 2, cy = t.y + t.h / 2; gone = gone.filter(g => now - g.t < 30 * 60e3);
+  let bi = -1, bd = 1e9;
+  gone.forEach((g, i) => { if (g.owner !== t.owner || slots.some(s => s.id === g.id)) return; const d = Math.hypot(g.x - cx, g.y - cy) + Math.abs(g.w - t.w) + Math.abs(g.h - t.h); if (d < bd) { bd = d; bi = i; } });
+  if (bi < 0 || bd > 160) return nextId++;
+  return gone.splice(bi, 1)[0].id;
 }
 // the layout's bones, recomputed from where things are going: the pond's spot, the walks between beds, the gate
 function plan() {
@@ -136,8 +151,8 @@ function plan() {
   for (const k of want) if (!segs.some(g => g.key === k)) { const [a, b] = k.split('|'); segs.push({ key: k, a: isNaN(+a) ? a : +a, b: isNaN(+b) ? b : +b, life: 0, alive: true }); }
 }
 function stepLayout(dt) {
-  const k = 1 - Math.exp(-dt * 4.5), kl = 1 - Math.exp(-dt * 2.2);
-  let moving = false;
+  const k = 1 - Math.exp(-dt * 4.5), kl = 1 - Math.exp(-dt * 3.2);   // (beds, walks and the pond grow in within about a second of a window settling)
+  let moving = snapped; snapped = false;            // a bed snapped to a dragged window counts as the plan moving (the gardeners keep to the gravel)
   for (const c of slots) {
     for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = c[b] - c[a]; if (Math.abs(d) > .15) { c[a] += d * k; moving = true; } else c[a] = c[b]; }
     const lt = c.alive ? 1 : 0, dl = lt - c.life; if (Math.abs(dl) > .003) { c.life += dl * kl; moving = true; } else c.life = lt;
@@ -146,7 +161,7 @@ function stepLayout(dt) {
   for (const g of segs) { const lt = g.alive && nodeAt(g.a) && nodeAt(g.b) ? 1 : 0, dl = lt - g.life; if (Math.abs(dl) > .003) { g.life += dl * kl; moving = true; } else g.life = lt; }
   segs = segs.filter(g => g.alive || g.life > 0);
   const pl = pond.want ? 1 : 0, dpl = pl - pond.life; if (Math.abs(dpl) > .003) { pond.life += dpl * kl; moving = true; } else pond.life = pl;
-  for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['r', 'tr']]) { const d = pond[b] - pond[a]; if (Math.abs(d) > .15) { pond[a] += d * k * .6; moving = true; } else pond[a] = pond[b]; }
+  for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['r', 'tr']]) { const d = pond[b] - pond[a]; if (Math.abs(d) > .15) { pond[a] += d * k * .8; moving = true; } else pond[a] = pond[b]; }
   return moving;
 }
 
@@ -560,7 +575,8 @@ const robin = () => sprite(16, 12, x => {
 const birds = [robin(), robin(), robin()].map((el, i) => ({ el, x: 0, y: 0, ang: Math.random() * 6.28, next: 1 + i * 1.3, away: 0, placed: false }));
 // the gardeners: each walks the gravel from bed to bed and stops to work; they keep out of each other's way
 const gardeners = GTYPES.map((t, i) => { const el = sprite(t.w, t.h, x => { x.translate(t.ox, t.oy); t.draw(x); });
-  return { el, t, i, x: -100, y: -100, ang: 0, path: null, k: 0, wait: 1 + i * 2.5, placed: false, bob: 0, lane: 0, stuck: 0, work: 0 }; });
+  el.style.transition = 'opacity .8s ease';
+  return { el, t, i, x: -100, y: -100, ang: 0, away: 0, path: null, k: 0, wait: 1 + i * 2.5, placed: false, bob: 0, lane: 0, stuck: 0, work: 0 }; });
 let cur = { x: -1e4, y: -1e4, on: false, t: 0 };
 function onLawn(x, y) { return eWin(x, y) > BED + GAP + PW + 8 && ePond(x, y) > 7 + GAP + PW + 6 && eSeg(x, y) > 6 && rim(x, y) > 40; }
 function underTree(x, y) { const i = Math.floor(x / CELL), j = Math.floor(y / CELL);
@@ -578,9 +594,10 @@ function stepGardeners(dt, layoutMoving) {
   // the gardener nearest a resting cursor is the one who comes over; the others carry on
   let caller = -1; if (rest) { let bd = 1e9; for (const g of gardeners) if (g.placed) { const d = Math.hypot(g.x - cur.x, g.y - cur.y); if (d < bd) { bd = d; caller = g.i; } } }
   for (const g of gardeners) {
+    if (g.away > 0) { g.away -= dt; continue; }                       // stepped out of sight (see below): back once faded
     if (!g.placed) { if (!slots.some(s => s.alive) && pond.life < .5) { g.el.style.opacity = 0; continue; }   // wait until there's a walk to be on
       for (let k = 0; k < 10 && !g.placed; k++) { const goal = anyRing(); if (goal && !gardeners.some(o => o !== g && o.placed && Math.hypot(o.x - goal[0], o.y - goal[1]) < 60)) { g.x = goal[0]; g.y = goal[1]; g.placed = true; g.el.style.opacity = 1; } }
-      if (!g.placed) { g.el.style.opacity = 0; continue; } }
+      if (!g.placed) { g.el.style.opacity = 0; g.away = 1; continue; } }   // (no room yet: look again in a second, not every frame)
     if (layoutMoving) {                                                 // the garden rearranges itself: they stay on the gravel as it moves under them
       g.path = null; g.wait = Math.max(g.wait, .6);
       if (!onGravel(g.x, g.y) || hidden(g.x, g.y)) { let best = null;
@@ -600,7 +617,7 @@ function stepGardeners(dt, layoutMoving) {
     if (g.path) {
       // keep out of each other's way: a gardener with someone just ahead waits; the later one gives way, or finds another job
       const hx = Math.cos(g.ang), hy = Math.sin(g.ang);
-      const blocked = gardeners.some(o => o !== g && o.placed && Math.hypot(o.x - g.x, o.y - g.y) < 24 && ((o.x - g.x) * hx + (o.y - g.y) * hy) > 6 && o.i < g.i);   // right of way goes strictly by order, so nobody can deadlock
+      const blocked = gardeners.some(o => o !== g && o.placed && Math.hypot(o.x - g.x, o.y - g.y) < 24 && (((o.x - g.x) * hx + (o.y - g.y) * hy) > 6 || Math.hypot(o.x - g.x, o.y - g.y) < 8) && o.i < g.i);   // (or on top of each other: walking in step, they read as one)   // right of way goes strictly by order, so nobody can deadlock
       if (blocked) { if ((g.stuck += dt) > 2.5) { g.path = null; g.wait = .5; g.stuck = 0; } }
       else {
         g.stuck = 0;
@@ -615,6 +632,9 @@ function stepGardeners(dt, layoutMoving) {
         if (ahead) { let da = Math.atan2(ahead[1] - g.y, ahead[0] - g.x) - g.ang; da = Math.atan2(Math.sin(da), Math.cos(da)); g.ang += da * Math.min(1, dt * 4); }
       }
     }
+    // crowded onto one scrap of gravel (windows cover the rest): stacked sprites read as one blot, so all but one
+    // fade out where they stand and come back on a walk elsewhere once there's room
+    if (!g.path && !moving && gardeners.some(o => o !== g && o.placed && o.i < g.i && !(o.away > 0) && Math.hypot(o.x - g.x, o.y - g.y) < 14)) { g.placed = false; g.el.style.opacity = 0; g.away = 1.2; continue; }
     // passing on a walk: each steps a little to their own side while someone is close
     const near = gardeners.some(o => o !== g && o.placed && Math.hypot(o.x - g.x, o.y - g.y) < 40);
     g.lane += ((near ? (g.i % 2 ? -4.5 : 4.5) : 0) - g.lane) * Math.min(1, dt * 3);
@@ -737,7 +757,7 @@ const handle = m => {
     deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k, owner: '__icons' }));
     if (lastWinMsg) handle(lastWinMsg); return; }
   if (m.t === 'windows') { lastWinMsg = m; const K = devicePixelRatio;   // the scale as it is now
-    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) })).concat(deskIc));
+    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) })).concat(deskIc), !!m.live);
     clearTimeout(blockT); blockT = setTimeout(placeBlock, m.live ? 1500 : 600);
   }
 };

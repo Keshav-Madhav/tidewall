@@ -170,7 +170,9 @@ function step(dt) {
     const lx = dx * co + dy * sn, ly = -dx * sn + dy * co, dn = Math.hypot(lx / ea, ly / ec) || 1e-6, d = Math.hypot(dx, dy), gap = d - d / dn - rOf(small);
     // a piece that just pinched off is still drawing clear of the wax it came from: it can only rejoin it after they've parted
     const kin = a.from === c ? a : c.from === a ? c : null;
-    if (kin) { if (kin.freeUntil > simT || gap < 12) continue; kin.from = null; }
+    // (once both lie on the glass, or a while has passed, they can't draw any further apart: then they may join again —
+    // otherwise two halves that landed together overlapped for good and the pool's place flipped between them)
+    if (kin) { if (kin.freeUntil > simT || (gap < 12 && !(a.rest && c.rest) && simT < kin.freeUntil + 8)) continue; kin.from = null; }
     if (gap > .5) continue;
     small.into = big; small.cx = dx; small.cy = dy;
     const tot = a.V + c.V, vx = (a.V * a.vx + c.V * c.vx) / tot, vy = (a.V * a.vy + c.V * c.vy) / tot;
@@ -485,6 +487,7 @@ function loop0(now) {
 function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; buildTargets(); makeWax(); for (let t = 0; t < 70; t += STEP) step(STEP); makeSpecks(); bubbles = []; }
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'cursor' && m.w) { cur.on = false; return; }             // over one of your windows (dragging it by its title bar, say): you're working, not warming the wax hidden behind it
   if (m.t === 'cursor') { const x = m.x / K, y = m.y / K; if (Math.hypot(x - cur.x, y - cur.y) > 1) cur.t = performance.now(); cur.x = x; cur.y = y; cur.on = true; return; }
   if (m.t === 'cursorOff') { cur.on = false; return; }
   if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250; }

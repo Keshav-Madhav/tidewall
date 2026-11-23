@@ -1,14 +1,28 @@
 // Runs in every wallpaper page before the page's own scripts. The app calls it with
-// { fps, opaque, cap, maxHz, profile }: the frame rate picked in Settings (0 = Auto), whether the scene covers every
-// pixel, the theme's sharpness cap, the display's refresh rate, and whether to time each frame.
+// { fps, opaque, cap, maxHz, profile, tier, res }: the frame rate picked in Settings (0 = Auto), whether the scene covers
+// every pixel, the theme's sharpness cap, the display's refresh rate, whether to time each frame, and Settings ▸
+// Optimize for (0 Performance, 1 Balanced, 2 Quality) with its resolution factor (the host scales its messages the same).
 (HOST => {
   const post = m => webkit.messageHandlers.host.postMessage(m);
 
+  // Optimize for: every part of a wall a little leaner (Performance) or a little richer (Quality), rather than one part
+  // gone: resolution, frame rates at rest / moving / under the pointer, and factors each wall applies to its own
+  // particle counts (count), simulation detail (sim) and optional effects (fx: 0 lean, 1 normal, 2 extra).
+  const RES = HOST.res > 0 && HOST.res < 1 ? HOST.res : 1;
+  const Q = Object.freeze([
+    { tier: 0, res: RES, calm: 20, live: 45, hover: 30, count: .65, sim: .7, fx: 0 },
+    { tier: 1, res: 1, calm: 30, live: 0, hover: 60, count: 1, sim: 1, fx: 1 },
+    { tier: 2, res: 1, calm: 60, live: 0, hover: 0, count: 1, sim: 1, fx: 2 },
+  ][HOST.tier === 0 || HOST.tier === 2 ? HOST.tier : 1]);
+  window.__twQ = Q;
+
   // The theme's sharpness cap: the page sees a devicePixelRatio no higher than it (the host scales its messages the same).
-  if (HOST.cap < 8) {
+  // (and Performance's resolution factor on top: every wall sizes its canvases by this, so they all draw fewer pixels)
+  if (HOST.cap < 8 || RES < 1) {
     const pd = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio') || Object.getOwnPropertyDescriptor(Window.prototype, 'devicePixelRatio');
     const real = pd && pd.get ? () => pd.get.call(window) : () => 2;
-    try { Object.defineProperty(window, 'devicePixelRatio', { get: () => Math.min(real(), HOST.cap), configurable: true }); } catch (_) {}
+    const cap = HOST.cap < 8 ? HOST.cap : 8;
+    try { Object.defineProperty(window, 'devicePixelRatio', { get: () => Math.min(real(), cap) * RES, configurable: true }); } catch (_) {}
   }
 
   // A WebGL page whose context is lost (displays sleeping and waking, a monitor reconnecting, a GPU switch) would show
@@ -81,9 +95,9 @@
   // cost 3-5 points of CPU, and the pointer can wander for minutes). A rate picked in Settings replaces all of it:
   // 60 holds every scene at 60, 30/20/15 cap it. Between frames the page sleeps on a timer rather than every vsync.
   const pick = HOST.fps;
-  const CALM = pick > 0 ? pick : 30;
-  const LIVE = pick > 0 ? pick : Math.max(60, HOST.maxHz);
-  const HOVER = Math.min(LIVE, 60);
+  const CALM = pick > 0 ? pick : Q.calm;
+  const LIVE = pick > 0 ? pick : Q.live || Math.max(60, HOST.maxHz);
+  const HOVER = Math.min(LIVE, Q.hover || LIVE);
   const calmRate = () => pick >= 60 ? pick : Math.min(CALM, window.__twCalm || CALM);
   let boostUntil = 0, hoverUntil = 0, settleUntil = 0;
   let paceK = 1;   // 2 on battery when Settings says calmer

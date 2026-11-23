@@ -46,7 +46,7 @@ function paintBackdrop() {
     cv.width = Math.round(W * K); cv.height = Math.round(H * K);
     const x = cv.getContext('2d'), iw = PAINT.naturalWidth, ih = PAINT.naturalHeight, s = Math.max(cv.width / iw, cv.height / ih);
     x.imageSmoothingQuality = 'high'; x.drawImage(PAINT, (cv.width - iw * s) / 2, cv.height - ih * s, iw * s, ih * s);
-    x.setTransform(K, 0, 0, K, 0, 0); snowman(x); return;
+    x.setTransform(K, 0, 0, K, 0, 0); if (/snow\/backdrop\.jpg$/.test(PAINT.src)) snowman(x); return;   // (one snowman: in the valley panel only)
   }
   cv.width = Math.round(W * K); cv.height = Math.round(H * K);
   const x = cv.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); const R = rng(4);
