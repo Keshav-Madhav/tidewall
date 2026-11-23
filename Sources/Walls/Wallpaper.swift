@@ -230,7 +230,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     let k = scale, o = cgFrame.origin
     let local = rects.map { $0.offsetBy(dx: -o.x, dy: -o.y) }
-    send([windowsMessage(local, rects: rects, owners: owners, scale: k, live: live), roomMessage(local, scale: k)].compactMap { $0 }, live: live)
+    send([windowsMessage(local, rects: rects, owners: owners, scale: k, live: live), roomMessage(local, scale: k, live: live)].compactMap { $0 }, live: live)
   }
 
   /// The windows' own edges and app names, for themes that draw around the real window (Estate, say).
@@ -248,12 +248,13 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     return wins
   }
 
-  private func roomMessage(_ local: [CGRect], scale k: CGFloat) -> String? {
+  private func roomMessage(_ local: [CGRect], scale k: CGFloat, live: Bool = false) -> String? {
     let m = Cfg.margin
     let icons = local.map { boxJSON($0.insetBy(dx: -m, dy: -m), scale: k) }.joined(separator: ",")
     // compared whole: with no windows the list is empty, and an empty list compared bare matched "never sent", so a
     // page opened on an empty desk never heard it and drew nothing until the first window appeared
-    let message = "{\"t\":\"icons\",\"vis\":true,\"r\":[\(icons)]}"
+    // live: a window is in your hand (walls that only read this message can tell a drag from a settle)
+    let message = "{\"t\":\"icons\",\"vis\":true,\"live\":\(live),\"r\":[\(icons)]}"
     guard message != lastSent.icons else { return nil }
     lastSent.icons = message
     return message

@@ -43,7 +43,7 @@
       if (key === last) return;
       last = key;
       post({ t: 'windows', live, r: rs.map(q => [R(q.l), R(q.t), R(q.r), R(q.b)]), n: rs.map(() => ''), sm: rs.map(() => 0) });
-      post({ t: 'icons', vis: true, r: rs.map(q => [R(q.l - q.m), R(q.t - q.m), R(q.r + q.m), R(q.b + q.m)]) });
+      post({ t: 'icons', vis: true, live, r: rs.map(q => [R(q.l - q.m), R(q.t - q.m), R(q.r + q.m), R(q.b + q.m)]) });
     }
     // live while things move; one settled update shortly after they stop (that's what plays the wall's slow morph)
     function update(live) {

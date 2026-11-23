@@ -209,7 +209,7 @@ internal sealed class Wallpaper : Form
         var wins = $"{{\"t\":\"windows\",\"live\":{(live ? "true" : "false")},\"r\":[{string.Join(",", mine.Select(w => Box(w.Bounds)))}],\"n\":{names},\"sm\":[{string.Join(",", mine.Select(_ => "0"))}]}}";
         if (wins != lastWindows) { lastWindows = wins; Send(wins, live); }
         int m = (int)Math.Round(Config.Margin * PixelScale);   // the room the scene keeps around each window, in page pixels
-        var icons = $"{{\"t\":\"icons\",\"vis\":true,\"r\":[{string.Join(",", mine.Select(w => Box(Rectangle.Inflate(w.Bounds, m, m))))}]}}";
+        var icons = $"{{\"t\":\"icons\",\"vis\":true,\"live\":{(live ? "true" : "false")},\"r\":[{string.Join(",", mine.Select(w => Box(Rectangle.Inflate(w.Bounds, m, m))))}]}}";
         if (icons != lastIcons) { lastIcons = icons; Send(icons, live); }
     }
 
