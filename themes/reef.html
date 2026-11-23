@@ -1009,9 +1009,10 @@ function stepKoi(dt, now) {
     const wa = k.ang + (vnoise(T * .17, k.wob) - .5) * 2.6; sx += Math.cos(wa) * .9; sy += Math.sin(wa) * .9;
     // windows: steer around them; never linger underneath one
     const lx = k.x + dirx * k.L * .9, ly = k.y + diry * k.L * .9;
+    let hidden = k.x < -20 || k.y < -20 || k.x > W + 20 || k.y > H + 20;
     for (const c of wins) { if (!c.alive) continue;
       const [gx, gy, d] = boxGrad(lx, ly, c, 16); if (d < 50) { const f = (50 - d) / 50 * 3.2; sx += gx * f; sy += gy * f; }
-      const [hx, hy, hd] = boxGrad(k.x, k.y, c, 4); if (hd < 0) { sx += hx * 6; sy += hy * 6; } }
+      const [hx, hy, hd] = boxGrad(k.x, k.y, c, 4); if (hd < 0) { sx += hx * 6; sy += hy * 6; if (hd < -20 && !c.sm) hidden = true; } }
     for (const g of walls) { const [gx, gy, d] = boxGrad(lx, ly, g, 30); if (d < 60) { const f = (60 - d) / 60 * 4; sx += gx * f; sy += gy * f; } }   // the edge of the world's water
     // screen edges
     const m = 50; if (k.x < m) sx += (m - k.x) / m * 3; if (k.x > W - m) sx -= (k.x - W + m) / m * 3; if (k.y < m) sy += (m - k.y) / m * 3; if (k.y > H - m) sy -= (k.y - H + m) / m * 3;
@@ -1027,11 +1028,14 @@ function stepKoi(dt, now) {
       want = d > 160 ? 46 : d > arrive ? 10 + d * .2 : 4; turnMax = 2.2;
       if (d < k.L * .3) { k.nib -= dt; if (k.nib < 0) { k.nib = .6 + Math.random() * 1.1; drop(k.x + dirx * 2, k.y + diry * 2, 1.6, -.5); } }
     }
+    // out of sight (a window grown or dropped over it, or past the screen's edge): it swims briskly back into the open
+    // (at its cruising pace it took up to 8 s to come out from under a big window), easing back down once it's out
+    if (hidden && !k.feed) { want = Math.max(want, 75); turnMax = Math.max(turnMax, 2.2); }
     let da = Math.atan2(sy, sx) - k.ang; da = Math.atan2(Math.sin(da), Math.cos(da));
-    if (Math.abs(da) > 2.2 && !k.feed && !(k.scare > .2)) want = Math.max(want * .6, 12);
-    turnMax = Math.min(turnMax, k.feed || k.scare > .2 ? .3 + k.v / (k.L * .3) : .12 + k.v / (k.L * .62));   // (startled: a sharp flick of a turn)   // a koi can't pivot: it turns in arcs of at least ~half its length
+    if (Math.abs(da) > 2.2 && !k.feed && !(k.scare > .2) && !hidden) want = Math.max(want * .6, 12);
+    turnMax = Math.min(turnMax, k.feed || k.scare > .2 || hidden ? .3 + k.v / (k.L * .3) : .12 + k.v / (k.L * .62));   // (startled: a sharp flick of a turn)   // a koi can't pivot: it turns in arcs of at least ~half its length
     k.av += (clamp(da * 2.4, -turnMax, turnMax) - k.av) * Math.min(1, dt * 2.5);
-    k.ang += k.av * dt; k.v += (want - k.v) * Math.min(1, dt * (k.scare > .2 && want > k.v ? 5 : 1.2));   // (a burst of speed)
+    k.ang += k.av * dt; k.v += (want - k.v) * Math.min(1, dt * ((k.scare > .2 || hidden) && want > k.v ? 5 : 1.2));   // (a burst of speed)
     k.x += Math.cos(k.ang) * k.v * dt; k.y += Math.sin(k.ang) * k.v * dt;
     k.ph += dt * 6.283 * (.7 + k.v / k.L * 1.7); k.fin += dt * (2.2 + (k.feed ? 2 : 0));
     k.sp[0] = k.x; k.sp[1] = k.y; follow(k.sp, KOI_NS, k.L * KOI_U);
@@ -1055,8 +1059,18 @@ function steerFish(f, tx, ty, dt, maxV, now) {
   if (sc && sc[2] > .05) { f.scare = Math.max(f.scare || 0, Math.min(1, sc[2])); f.fx = sc[0]; f.fy = sc[1]; } else if (f.scare) f.scare = Math.max(0, f.scare - DT * .8);
   if (f.scare > 0) { const s = f.scare * 700, h = 1 - f.scare; dvx = dvx * h + f.fx * s; dvy = dvy * h + f.fy * s; maxV = Math.max(maxV, 60 + 180 * f.scare); }   // (its usual pull home forgotten while it darts)
   if (fleeing) { const dx = f.x - cur.x, dy = f.y - cur.y, d = Math.hypot(dx, dy); if (d < 110 && d > 0) { const s = (1 - d / 110) * 900; dvx += dx / d * s; dvy += dy / d * s; maxV = 170; } }
-  for (const c of wins) { if (!c.alive) continue; const [gx, gy, d] = boxGrad(f.x, f.y, c, 2); if (d < 8) { dvx += gx * (8 - d) * 12; dvy += gy * (8 - d) * 12; } }
-  for (const g of walls) { const [gx, gy, d] = boxGrad(f.x, f.y, g, 10); if (d < 20) { dvx += gx * (20 - d) * 12; dvy += gy * (20 - d) * 12; } }
+  // a window (or the world's edge) in the way: the part of its course that goes into it turns along its edge instead,
+  // the way it's going round, and it's eased out. (Added to its pull home, which grows with distance, a plain push
+  // out balanced it under the window's edge: a school whose home lay across a window sat under it for half a minute)
+  // (which way round: the shorter, chosen when it meets the obstacle and kept while it's in touch, or it swung back
+  // and forth along the edge as the target crossed its middle)
+  const around = (gx, gy, d, edge, c) => { if (d >= edge) return; const into = dvx * gx + dvy * gy;
+    if (into < 0) {
+      if (!(T - (f.touchT ?? -9) < 1.5)) { const cx = c.x + c.w / 2, cy = c.y + c.h / 2; f.side = (f.x - cx) * (ty - cy) - (f.y - cy) * (tx - cx) >= 0 ? 1 : -1; }
+      f.touchT = T; const k = -into * .8; dvx += -into * gx - gy * f.side * k; dvy += -into * gy + gx * f.side * k; }
+    dvx += gx * (edge - d) * 12; dvy += gy * (edge - d) * 12; };
+  for (const c of wins) { if (!c.alive) continue; const [gx, gy, d] = boxGrad(f.x, f.y, c, 2); around(gx, gy, d, 8, c); }
+  for (const g of walls) { const [gx, gy, d] = boxGrad(f.x, f.y, g, 10); around(gx, gy, d, 20, g); }
   const l = Math.hypot(dvx, dvy); if (l > maxV) { dvx *= maxV / l; dvy *= maxV / l; }
   f.vx += (dvx - f.vx) * Math.min(1, dt * 2.6); f.vy += (dvy - f.vy) * Math.min(1, dt * 2.6);
   f.x += f.vx * dt; f.y += f.vy * dt;
@@ -1070,16 +1084,35 @@ function stepReef(dt, now) {
   if (Span.leader()) stepSchools(dt, now);
   stepClowns(dt);
 }
+// where a school can't swim its round: under another window (they overlap all the time), past the screen's edge, or
+// beyond the world's water. A school circling a window whose round ran under its neighbour sat pressed against that
+// neighbour's edge, half hidden, for half a minute at a time.
+const blockedAt = (x, y) => x < 24 || y < 24 || x > W - 24 || y > H - 24 || !!inWindow(x, y, 12) || inWall(x, y, 12);
+function openRound(c) { let n = 0; for (let t = 0; t < 1; t += .05) { const [x, y] = perimPoint(c, BAND * .6, t); if (!blockedAt(x, y)) n++; } return n / 20; }
 function stepSchools(dt, now) {
   let homes = null;   // built only when a school needs a new home
   for (const sc of schools) {
+    // every second or so: is enough of its round still open water? (a window may have come over it)
+    if (sc.home && now > (sc.checkAt || 0)) { sc.checkAt = now + 1000 + Math.random() * 400; if (openRound(sc.home) < .25) sc.nextHome = 0; }
     if (!sc.home || !sc.home.alive || now > sc.nextHome) {
-      if (!homes) homes = wins.filter(c => c.alive && !c.sm && c.life > .5).concat(bommies, bommies);
-      sc.home = homes.length ? homes[Math.floor(Math.random() * homes.length)] : null; sc.nextHome = now + 25000 + Math.random() * 30000; if (Math.random() < .4) sc.dir *= -1;
-      if (sc.home) { let bt = 0, bd = 1e9; for (let t = 0; t < 1; t += .02) { const [x, y] = perimPoint(sc.home, BAND * .6, t), d = Math.hypot(x - sc.fish[0].x, y - sc.fish[0].y); if (d < bd) { bd = d; bt = t; } } sc.t = bt; }
+      if (!homes) { homes = wins.filter(c => c.alive && !c.sm && c.life > .5).concat(bommies, bommies); const ok = homes.filter(c => openRound(c) >= .4); if (ok.length) homes = ok; }
+      sc.home = homes.length ? homes[Math.floor(Math.random() * homes.length)] : null; sc.nextHome = now + 25000 + Math.random() * 30000; if (Math.random() < .4) sc.dir *= -1; sc.turns = [];
+      // (joining the round at its nearest open point)
+      if (sc.home) { let bt = 0, bd = 1e9; for (let t = 0; t < 1; t += .02) { const [x, y] = perimPoint(sc.home, BAND * .6, t), d = Math.hypot(x - sc.fish[0].x, y - sc.fish[0].y) + (blockedAt(x, y) ? 1e5 : 0); if (d < bd) { bd = d; bt = t; } } sc.t = bt; }
     }
     let tx, ty;
-    if (sc.home) { const [x, y, per] = perimPoint(sc.home, BAND * .6, sc.t); sc.t += sc.dir * sc.speed * dt / per; tx = x; ty = y; }
+    if (sc.home) {
+      const [x, y, per] = perimPoint(sc.home, BAND * .6, sc.t);
+      // the way ahead blocked: the school turns back along its open stretch, as fish do at a wall; turning back and forth
+      // over a short stretch, it goes off to find another home instead of shuttling
+      const ahead = sc.t + sc.dir * 40 / per, [ax, ay] = perimPoint(sc.home, BAND * .6, ahead);
+      if (blockedAt(ax, ay)) {
+        if (!blockedAt(x, y)) { sc.dir *= -1; sc.turns = (sc.turns || []).filter(t => now - t < 9000); sc.turns.push(now); if (sc.turns.length > 2) sc.nextHome = 0; }
+        else { let bt = -1; for (let k = 1; k <= 25 && bt < 0; k++) for (const s of [1, -1]) { const t = sc.t + s * k * .02, [qx, qy] = perimPoint(sc.home, BAND * .6, t); if (!blockedAt(qx, qy)) { bt = t; sc.dir = s; break; } }
+          if (bt >= 0) sc.t = bt; else if (sc.nextHome > now + 1500) sc.nextHome = now + 1500; }   // (its spot covered: on to the nearest open part of the round; none open: a new home soon)
+      }
+      sc.t += sc.dir * sc.speed * dt / per; tx = x; ty = y;
+    }
     else { tx = W * (.2 + .6 * vnoise(T * .02, sc.wx)); ty = H * (.2 + .6 * vnoise(T * .02, sc.wx + 40)); }
     const spread = 14 + sc.fish.length * 2.2;
     for (const f of sc.fish) {

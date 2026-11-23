@@ -439,9 +439,12 @@ function nearestOnRoads(p, skip) {
   return best ? { ...best, d: bd } : null;
 }
 function onScreen(q) { return onOneW([q[0], q[1], q[0], q[1]], 10); }
+// in sight: on the screen and not under one of your windows (the streets run on under them; a stranger who walked under
+// one or off the edge left no prints anyone could see)
+const inSight = q => onScreen(q) && !cur.some(c => c.alive && c.owner !== '__icons' && q[0] > c.x + 4 && q[0] < c.x + c.w - 4 && q[1] > c.y + 4 && q[1] < c.y + c.h - 4);
 function newRoute(s) {
   if (!roads.length) return;
-  if (!s.p) { const r = roads[Math.floor(s.R() * roads.length)], i = Math.floor(s.R() * r.length); if (!onScreen(r[i])) return; s.p = { x: r[i][0], y: r[i][1] }; s.w.place(s.p.x, s.p.y); }
+  if (!s.p) { const r = roads[Math.floor(s.R() * roads.length)], i = Math.floor(s.R() * r.length); if (!inSight(r[i])) return; s.p = { x: r[i][0], y: r[i][1] }; s.w.place(s.p.x, s.p.y); s.out = 0; }
   const near = nearestOnRoads(s.p, null); if (!near) return;
   s.route = near.r; s.i = near.i; s.dir = s.R() < .5 ? 1 : -1;
 }
@@ -459,7 +462,9 @@ function startStrangers(seed) {
         const n = s.route[s.i];
         if (!n) {                                        // end of this street: turn onto a nearby one, or turn back
           const next = nearestOnRoads(s.p, s.route);
-          if (next && next.d < 26) { s.route = next.r; s.i = next.i; s.dir = s.R() < .5 ? 1 : -1; }
+          // (onto the new street the way it runs on: joined at its end and sent off that end, a stranger flipped between
+          // the two streets' ends, tick after tick, and stood still)
+          if (next && next.d < 26) { s.route = next.r; s.i = next.i; s.dir = next.i < 2 ? 1 : next.i > next.r.length - 3 ? -1 : s.R() < .5 ? 1 : -1; }
           else { s.dir = -s.dir; s.i = Math.max(0, Math.min(s.route.length - 1, s.i + s.dir * 2)); }
           break;
         }
@@ -467,7 +472,19 @@ function startStrangers(seed) {
         if (d <= budget) { s.p.x = n[0]; s.p.y = n[1]; budget -= d; s.i += s.dir; }
         else { s.p.x += dx / d * budget; s.p.y += dy / d * budget; budget = 0; }
       }
-      if (!onScreen([s.p.x, s.p.y])) { s.dir = -s.dir; s.i += s.dir * 2; }
+      // out of sight: turn back once, and keep on back until in sight again (turned every tick while out, a stranger off
+      // the edge paced on the spot there for good); still out after 6 s (a street that only runs on out of sight), it
+      // starts again on a street in sight, its prints from there
+      if (!inSight([s.p.x, s.p.y])) {
+        if (!s.out) { s.out = now; s.dir = -s.dir; s.i += s.dir * 2; }
+        else if (now - s.out > 6000) { s.p = null; s.route = null; s.out = 0; continue; }
+      } else s.out = 0;
+      // two who've fallen into step on one street (both turned back at the same window, say) read as one pair of
+      // prints: the later one turns round
+      const hx = s.p.x - (s.lx ?? s.p.x), hy = s.p.y - (s.ly ?? s.p.y); s.lx = s.p.x; s.ly = s.p.y;
+      if (!(now < s.sepT) && strangers.some(o => o !== s && o.p && strangers.indexOf(o) < strangers.indexOf(s) && Math.hypot(o.p.x - s.p.x, o.p.y - s.p.y) < 12 && (o.hx || 0) * hx + (o.hy || 0) * hy > 0)) {
+        s.dir = -s.dir; s.i += s.dir * 2; s.sepT = now + 5000; }
+      s.hx = hx; s.hy = hy;
       s.w.move(s.p.x, s.p.y);
     }
     sendWalk();

@@ -406,6 +406,9 @@ void main() {
       if(candidate.x-96*s<12||candidate.x+612*s>W-12||candidate.y-116*s<12||candidate.y+610*s>H-TASKBAR-12)continue;
       const blocked=meadowBoyBlocked(candidate.x,candidate.y,s);
       let score=Math.hypot(candidate.x-preferred.x,candidate.y-preferred.y)*.01+[0,6,1e4][blocked];
+      // (not on top of his cat, sitting where she is)
+      const cat=window.__meadowCat;
+      if(cat&&Math.abs(cat.x-candidate.x)<60*s+24&&cat.y>candidate.y-110*s-24&&cat.y<candidate.y+90*s+24)score+=3;
       if(position&&!pref&&(candidate.x>position.x+4||candidate.y>position.y+4))score+=1.5;
       if(score<bestScore){best=candidate;bestScore=score;}
     }
@@ -449,6 +452,8 @@ void main() {
       Object.keys(kiteReaction).forEach(key=>kiteReaction[key]=0);
     }
     if(!position)position={...target};
+    // a new spot after the screen changed: he runs there (eased there, he glided across the grass standing still)
+    if(!trip&&Math.hypot(target.x-position.x,target.y-position.y)>12){trip=startTrip(position,target,s);pullStarted=-Infinity;}
     if(!trip){
       const move=1-Math.exp(-dt*.7);position.x+=(target.x-position.x)*move;position.y+=(target.y-position.y)*move;
       if(time>=nextRunAt&&Math.hypot(position.x-target.x,position.y-target.y)<2){

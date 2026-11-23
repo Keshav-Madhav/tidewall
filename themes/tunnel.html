@@ -366,8 +366,18 @@ function iconMask() {
   const g = document.createElement('canvas'); g.width = NX; g.height = NY; const x = g.getContext('2d');
   x.putImageData(baseMask, 0, 0); x.fillStyle = '#fff';
   for (const [l, t, r, b] of deskIc.map(simRect)) { x.beginPath(); x.roundRect(l / CELL, t / CELL, (r - l) / CELL, (b - t) / CELL, 12 / CELL); x.fill(); }
-  const tx = maskTex(g, false); g.width = g.height = 1; return tx;
+  const tx = maskTex(g, false); g.width = g.height = 1; solidCells(); return tx;
 }
+// the same solid cells on the CPU, for the cursor's ball: it rolls up against the model (and the icons) rather than
+// sinking into them (it used to glide straight in and sit inside the model, drawn over it)
+let solidG = null;
+function solidCells() {
+  const d = baseMask.data, s = new Uint8Array(NX * NY); for (let i = 0; i < s.length; i++) s[i] = d[i * 4 + 3] > 127 ? 1 : 0;
+  for (const [l, t, r, b] of deskIc.map(simRect)) { const i0 = Math.max(0, Math.floor(l / CELL)), i1 = Math.min(NX - 1, Math.ceil(r / CELL)), j0 = Math.max(0, Math.floor(t / CELL)), j1 = Math.min(NY - 1, Math.ceil(b / CELL));
+    for (let j = j0; j <= j1; j++) s.fill(1, j * NX + i0, j * NX + i1 + 1); }
+  solidG = s;
+}
+const solidAt = (x, y) => { const i = Math.floor(x), j = Math.floor(y); return !!solidG && i >= 0 && j >= 0 && i < NX && j < NY && solidG[j * NX + i] === 1; };
 async function build() {
   const gen = ++buildGen;                                              // a newer build (another resize) makes this one stop
   ready = false;
@@ -419,19 +429,35 @@ async function build() {
 // ball glides after your pointer at a capped speed rather than jumping to it; it grows in when the pointer arrives and
 // shrinks away when it leaves, never popping in or out of the air.
 const BALL_R = 20, BALL_VMAX = .14;
-const ball = { x: -100, y: -100, r: 0, vx: 0, vy: 0 };
+const ball = { x: -100, y: -100, r: 0, vx: 0, vy: 0, touch: 1e9 };
 function stepBall() {
   const cx = FLIP ? W - cur.x : cur.x, on = cur.on && cx > 0 && cx < W && cur.y > 0 && cur.y < H, R = BALL_R / CELL;
-  if (ball.r <= 0 && on) { ball.x = cx / CELL; ball.y = cur.y / CELL; ball.vx = ball.vy = 0; }   // appears where the pointer is
+  if (ball.r <= 0 && on) { ball.x = cx / CELL; ball.y = cur.y / CELL; ball.vx = ball.vy = 0; ball.stuck = false; ball.best = null; }   // appears where the pointer is
   // the pointer came back far from the ball (it crossed a window, or another screen, or flew across the sky): rather than a long slow glide
   // across the screen (half a minute, mostly unseen behind your windows), the ball shrinks away and grows in under it
   const dx = cx / CELL - ball.x, dy = cur.y / CELL - ball.y, d = Math.hypot(dx, dy);
   if (!on) ball.lost = true; else if (ball.r <= 0 || d * CELL < 40) ball.lost = false;
-  const far = on && d * CELL > (ball.lost ? 160 : 360), want = on && !far ? R : 0;
+  // (nor does it grow in inside the model, under a pointer resting on it: it waits for the pointer in open air)
+  const far = on && d * CELL > (ball.lost ? 160 : 360), want = on && !far && !solidAt(ball.x, ball.y) && !ball.stuck ? R : 0;
   ball.r = Math.max(0, ball.r + clamp(want - ball.r, want ? -.02 : -.05, .02));
   let tvx = 0, tvy = 0; if (on && d > .05) { const sp = Math.min(BALL_VMAX, d * .02); tvx = dx / d * sp; tvy = dy / d * sp; }
   ball.vx += (tvx - ball.vx) * .02; ball.vy += (tvy - ball.vy) * .02;   // eases into and out of motion
   ball.x += ball.vx; ball.y += ball.vy;
+  // touching the model: what of its motion goes into the surface is lost, and it's eased back out of it (never more
+  // than its own top speed a step: no pops), so it slides round the model after a pointer that's on the other side
+  if (solidG && ball.r > 0) {
+    let nx = 0, ny = 0, hit = 0; const rr = ball.r + 1;
+    for (let k = 0; k < 16; k++) { const a = k * .3927, c = Math.cos(a), s = Math.sin(a); if (solidAt(ball.x + c * rr, ball.y + s * rr)) { nx -= c; ny -= s; hit++; } }
+    const l = Math.hypot(nx, ny);
+    if (hit && l > .01) { nx /= l; ny /= l; const vn = ball.vx * nx + ball.vy * ny; if (vn < 0) { ball.vx -= vn * nx; ball.vy -= vn * ny; }
+      ball.vx *= .97; ball.vy *= .97;   // (a little friction against it: with a pointer resting on the model it swung to and fro over the top like a pendulum)
+      const push = Math.min(BALL_VMAX, .015 * hit); ball.x += nx * push; ball.y += ny * push; ball.touch = 0; }
+    // caught in a corner of it (between the fuselage and the fin, say) with the pointer out in the open air beyond: no
+    // headway for a second and a half while it keeps touching, and it shrinks away and grows in again under the pointer
+    if (++ball.touch < STEPS_PER_SEC * .4 && on && !solidAt(cx / CELL, cur.y / CELL) && d * CELL > 30) {
+      if (!ball.best || d < ball.best.d - 1) ball.best = { d, n: 0 }; else if (++ball.best.n > STEPS_PER_SEC * 1.5) ball.stuck = true;
+    } else ball.best = null;
+  }
 }
 function lbSteps(n) {
   gl.useProgram(LB_STEP); gl.viewport(0, 0, NX, NY); gl.bindVertexArray(vao);

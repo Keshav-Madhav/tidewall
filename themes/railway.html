@@ -1220,13 +1220,18 @@ function posOf(t, s) {
   return [x0, y0, Math.atan2(y1 - y0, x1 - x0)];
 }
 let swDirty = false;
+const XSTOP = 60;                                                       // where the express's engine stops: this far past the platform's middle
 function stepTrains(dt, layoutMoving) {
   const now = performance.now();
   for (const t of trains) {
     const L = t.L, spec = t.spec, len = trainLen(spec);
     if (spec.kind === 'shuttle') { stepShuttle(t, dt, now, layoutMoving); continue; }
     let limit = 1e9;
-    if (spec.kind === 'express') for (const st of stations) if (st.ok && st.L === L && st !== t.lastStop) limit = Math.min(limit, rel(L, st.s - t.s) >= 0 ? rel(L, st.s - t.s) : 1e9);
+    // (the express pulls up with its coaches along the platform and its tail clear of the loop's points: stopped with its
+    // engine at the platform's middle, its tail stood on the points, the freight waited behind it for the loop and the
+    // express waited for the freight to pass, both for good)
+    const SP = st => st.s + (st.kind === 'main' ? XSTOP : 0);
+    if (spec.kind === 'express') for (const st of stations) if (st.ok && st.L === L && st !== t.lastStop) limit = Math.min(limit, rel(L, SP(st) - t.s) >= 0 ? rel(L, SP(st) - t.s) : 1e9);
     if (signal && signal.L === L && signal.red) { const d = rel(L, signal.s - 16 - t.s); if (d >= 0 && d < 170) limit = Math.min(limit, d); }
     for (const o of trains) if (o !== t && o.L === L) {
       const zo = zoneOf(o.s), zt = zoneOf(o.s - trainLen(o.spec));
@@ -1238,9 +1243,9 @@ function stepTrains(dt, layoutMoving) {
     const acc = target > t.v ? 11 : 28; t.v += clamp(target - t.v, -acc * dt, acc * dt);
     t.s = (t.s + t.v * dt + L.len) % L.len;
     if (spec.kind === 'express') {
-      for (const st of stations) if (st.ok && st.L === L && st !== t.lastStop && Math.abs(rel(L, st.s - t.s)) < 3 && t.v < 4) { t.stopUntil = now + 3500 + Math.random() * 2500; t.lastStop = st; t.v = 0; t.puffT = 0; }
+      for (const st of stations) if (st.ok && st.L === L && st !== t.lastStop && Math.abs(rel(L, SP(st) - t.s)) < 3 && t.v < 4) { t.stopUntil = now + 3500 + Math.random() * 2500; t.lastStop = st; t.v = 0; t.puffT = 0; }
       // waiting at a station: hold the departure while the freight is coming up behind or still in the loop
-      if (t.lastStop && now >= t.stopUntil - 50 && Math.abs(rel(L, t.lastStop.s - t.s)) < 4) { const st = t.lastStop;
+      if (t.lastStop && now >= t.stopUntil - 50 && Math.abs(rel(L, SP(t.lastStop) - t.s)) < 4) { const st = t.lastStop;
         if (trains.some(o => o.spec.kind === 'freight' && o.L === L && (() => { const d = rel(L, st.s - o.s); return d > -LOOP_HALF - trainLen(o.spec) && d < 320; })())) t.stopUntil = now + 300; }
       if (t.lastStop && Math.abs(rel(L, t.lastStop.s - t.s)) > 150) t.lastStop = null;
     }
@@ -1287,24 +1292,36 @@ function rrAt(sl, off, d) {
   if (t < b) return [x0, y0 + h - r - t, -Math.PI / 2]; t -= b;
   const th = Math.PI + t / r; return [x0 + r + r * Math.cos(th), y0 + r + r * Math.sin(th), th + Math.PI / 2];
 }
+function rrLen(sl, off) { const w = sl.w + 2 * off, h = sl.h + 2 * off, r = Math.max(4, off + 4); return 2 * (w - 2 * r) + 2 * (h - 2 * r) + 2 * Math.PI * r; }   // (rrAt's perimeter)
 const CAR_COLORS = ['#e8483a', '#f2b632', '#3d8fd6', '#ffffff', '#47b37a', '#f07fb0', '#8a62d1', '#ff8c42'];
 const carPic = col => x => { x.scale(.8, .8); shade(x, 11, 6);
   x.fillStyle = col; rr(x, -5.5, -3, 11, 6, 2.4); x.fill();
   x.fillStyle = '#3b4656'; rr(x, 1, -2.4, 2.2, 4.8, 1); x.fill(); rr(x, -3.6, -2.2, 1.6, 4.4, .8); x.fill();
   x.fillStyle = 'rgba(255,255,255,.35)'; rr(x, -1.8, -2.2, 2.6, 4.4, 1); x.fill(); };
-const cars = new Map();                                                // slot id -> [{ el, d, dir, v }]
+const cars = new Map();                                                // slot id -> [{ el, u, dir, v, cv, fi }]
 function stepCars(dt) {
   for (const s of slots) {
     let list = cars.get(s.id); if (!s.k) continue;
-    const kf = s.kOld ? blendF(s.kGen, performance.now()) : 1, g = kf >= 1 ? s.k : { x: s.kOld.x + (s.k.x - s.kOld.x) * kf, y: s.kOld.y + (s.k.y - s.kOld.y) * kf, w: s.kOld.w + (s.k.w - s.kOld.w) * kf, h: s.kOld.h + (s.k.h - s.kOld.h) * kf };         // cars drive the road as it's drawn (the last presented picture)
+    let kf = s.kOld ? blendF(s.kGen, performance.now()) : 1, fo = 1;
+    // a town that moved a long way at once (its window swapped for another, or dropped far off) is a different road: its
+    // cars fade out where they were and back in on the new one, as the board's picture cross-fades (sliding with it, they
+    // shot across the map)
+    if (kf < 1 && !dragging() && Math.abs(s.k.x - s.kOld.x) + Math.abs(s.k.y - s.kOld.y) + Math.abs(s.k.w - s.kOld.w) + Math.abs(s.k.h - s.kOld.h) > 90) { fo = Math.abs(1 - 2 * kf); kf = kf < .5 ? 0 : 1; }
+    const g = kf >= 1 ? s.k : { x: s.kOld.x + (s.k.x - s.kOld.x) * kf, y: s.kOld.y + (s.k.y - s.kOld.y) * kf, w: s.kOld.w + (s.k.w - s.kOld.w) * kf, h: s.kOld.h + (s.k.h - s.kOld.h) * kf };         // cars drive the road as it's drawn (the last presented picture)
     const want = s.alive && s.life > .95 && s.town ? clamp(Math.floor((2 * s.w + 2 * s.h) / 380), 1, 5) : 0;
     if (!list) { list = []; cars.set(s.id, list); }
-    while (list.length < want) { const i = list.length, el = sprite(12, 8, carPic(CAR_COLORS[(s.id * 3 + i) % CAR_COLORS.length])); el.style.transition = 'opacity .6s'; el.style.opacity = 0; el._o = 0; requestAnimationFrame(() => { el.style.opacity = 1; el._o = 1; });
-      list.push({ el, d: h1(s.id + i * 7.3) * 4000, dir: i % 2 ? -1 : 1, v: 16 + 7 * h1(s.id * 3 + i) }); }
-    while (list.length > want) { const c = list.pop(); c.el.style.opacity = 0; setTimeout(() => c.el.remove(), 700); }
-    for (const c of list) { c.d += c.v * c.dir * dt; const off = VERGE + (c.dir > 0 ? ROAD * .72 : ROAD * .28), [x, y, a] = rrAt(g, off, c.d); place(c.el, x, y, a + (c.dir < 0 ? Math.PI : 0), c.el._o); }
+    while (list.length < want) { const i = list.length, el = sprite(12, 8, carPic(CAR_COLORS[(s.id * 3 + i) % CAR_COLORS.length])); el.style.opacity = 0; el._o = 0;
+      list.push({ el, u: h1(s.id + i * 7.3), dir: i % 2 ? -1 : 1, v: 16 + 7 * h1(s.id * 3 + i), cv: 0, fi: 0 }); }   // (fi: fading in, over .6 s)
+    while (list.length > want) { const c = list.pop(); c.el.style.transition = 'opacity .6s'; c.el.style.opacity = 0; setTimeout(() => c.el.remove(), 700); }
+    // where a car is: how far round its ring, as a share of the ring (kept as a distance, a ring that grew or shrank
+    // under it sent the car racing hundreds of points round in a blink); a car close behind another in its lane keeps
+    // its distance (they drove through each other)
+    for (const c of list) { const off = VERGE + (c.dir > 0 ? ROAD * .72 : ROAD * .28), Pm = rrLen(g, off);
+      let v = c.v; for (const o of list) if (o !== c && o.dir === c.dir) { const gap = ((((o.u - c.u) * c.dir) % 1) + 1) % 1 * Pm; if (gap < 24) v = Math.min(v, Math.max(0, (gap - 13) * 2)); }
+      c.cv += clamp(v - c.cv, -40 * dt, 12 * dt); c.u = (((c.u + c.cv * c.dir * dt / Pm) % 1) + 1) % 1;
+      const [x, y, a] = rrAt(g, off, c.u * Pm); c.fi = Math.min(1, c.fi + dt / .6); place(c.el, x, y, a + (c.dir < 0 ? Math.PI : 0), fo * c.fi); }
   }
-  for (const [id, list] of cars) if (!slots.some(s => s.id === id)) { for (const c of list) { c.el.style.opacity = 0; setTimeout(() => c.el.remove(), 700); } cars.delete(id); }
+  for (const [id, list] of cars) if (!slots.some(s => s.id === id)) { for (const c of list) { c.el.style.transition = 'opacity .6s'; c.el.style.opacity = 0; setTimeout(() => c.el.remove(), 700); } cars.delete(id); }
 }
 
 

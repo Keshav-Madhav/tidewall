@@ -494,7 +494,9 @@ function ringOf(id) {
   return pts;
 }
 // under a window: hidden, so never a place to walk or stand
-const hidden = (x, y) => inGap(x, y) || slots.some(s => s.alive && x > s.tx - 3 && x < s.tx + s.tw + 3 && y > s.ty - 3 && y < s.ty + s.th + 3);   // where the window really is, already
+// (and off the screen: a ring round a window half off the edge runs off it, and rim() measures to the edge either side,
+// so a gardener walked off the board and stayed there)
+const hidden = (x, y) => x < 6 || y < 6 || x > W - 6 || y > H - 6 || inGap(x, y) || slots.some(s => s.alive && x > s.tx - 3 && x < s.tx + s.tw + 3 && y > s.ty - 3 && y < s.ty + s.th + 3);   // where the window really is, already
 const onGravel = (x, y) => { const e = eWin(x, y), ep = ePond(x, y); return (Math.abs(e - RING) < PW / 2 + 2 || Math.abs(ep - (7 + GAP + PW / 2)) < PW / 2 + 2 || (eSeg(x, y) < 2 && e > BED + 2)) && rim(x, y) > 22; };
 // a route from (x, y) to the walk point nearest the goal: along rings and the joining walks of the spanning tree
 function route(fx, fy, gx, gy) {
@@ -602,7 +604,11 @@ function stepGardeners(dt, layoutMoving) {
       g.path = null; g.wait = Math.max(g.wait, .6);
       if (!onGravel(g.x, g.y) || hidden(g.x, g.y)) { let best = null;
         for (const id of [...slots.filter(s => s.alive).map(s => s.id), ...(pond.life > .5 ? ['pond'] : [])]) { const r = ringOf(id); if (r) for (const q of r) { const d = Math.hypot(q[0] - g.x, q[1] - g.y); if ((!best || d < best.d) && onGravel(q[0], q[1]) && !hidden(q[0], q[1])) best = { q, d }; } }
-        if (best) { const k = Math.min(1, dt * 10); g.x += (best.q[0] - g.x) * k; g.y += (best.q[1] - g.y) * k; } }
+        // a step or two away: they step back onto it, at a brisk walk (pulled there at ten times the gap a second, they
+        // skated hundreds of points across the lawn in a blink when a bed went); further: they slip away and come back
+        // on a walk elsewhere
+        if (best && best.d < 60) { const k = Math.min(1, 90 * dt / Math.max(best.d, 1e-3)); g.x += (best.q[0] - g.x) * k; g.y += (best.q[1] - g.y) * k; }
+        else { g.placed = false; g.el.style.opacity = 0; g.away = 1.2; continue; } }
     }
     if (!g.path && (g.wait -= dt) <= 0) {
       const goal = g.i === caller ? [cur.x, cur.y] : anyRing();

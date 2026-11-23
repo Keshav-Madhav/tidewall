@@ -23,10 +23,15 @@ function meadowCatRunLanes(state,width,height,taskbar) {
   const y=(height-taskbar)*.70;
   const entry={x:Math.max(96*scale+12,bottom.x-(bottom.y-y)*.65),y};
   add(bottom,entry);finish(entry);
-  return {lanes,scale};
+  // and his kite's string wherever he stands (it trails down and to the right of him): a cat placed clear of his path
+  // but under his kite line looked caught in it
+  const kites=[];const kite=p=>kites.push([{...p},{x:p.x+215*scale,y:p.y+205*scale}]);
+  if(state.kite)kites.push([{...state.position},{...state.kite}]);
+  for(const [,b] of lanes)if(b.y>0)kite(b);
+  return {lanes,kites,scale};
 }
 function meadowCatChoosePlace(state,width,height,taskbar,sceneSeed,desktopIcons,cloudSize,near=null) {
-  const {lanes,scale}=meadowCatRunLanes(state,width,height,taskbar);
+  const {lanes,kites,scale}=meadowCatRunLanes(state,width,height,taskbar);
   const size=Math.max(28,Math.min(90,Math.min(width/1379,(height-taskbar)/1141)*78))*.578;
   const radius=size*.58,pad=radius+12,clearance=radius+96*scale+14;
   if(width<=pad*2||height-taskbar<=pad*2)return null;
@@ -44,6 +49,7 @@ function meadowCatChoosePlace(state,width,height,taskbar,sceneSeed,desktopIcons,
     const p={x:pad+x*(width-pad*2),y:pad+y*(height-taskbar-pad*2)};
     const routeDistance=Math.min(...lanes.map(([a,b])=>meadowCatSegmentDistance(p,a,b)));
     if(routeDistance<clearance)continue;
+    if(kites.some(([a,b])=>meadowCatSegmentDistance(p,a,b)<radius+18))continue;
     let score=0;
     for(const icon of desktopIcons){
       const dx=Math.max(icon.x-p.x,0,p.x-icon.x-icon.w);

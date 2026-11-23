@@ -502,20 +502,35 @@ const movers = [
   { el: serpent, w: 96, h: 40, x: 0, y: 0, a: 2.6, v: 6, bob: 1, phase: 2, flip: 1 },
 ];
 function spawn(m) {
-  let best = -1e9;
+  let best = -1e9; m.prog = null; m.away = 0;
   for (let i = 0; i < 90; i++) { const x = 80 + Math.random() * (W - 160), y = 80 + Math.random() * (H - 160), s = seaS(x, y);
     if (s > best && Math.hypot(x - compassAt.x, y - compassAt.y) > 160) { best = s; m.x = x; m.y = y; } }
 }
+// slipping away into the mist (land grown deep over it, or wedged in a corner it can't steer out of): fades out where it
+// is and back in on open water (it was shoved through the land at 70 pt/s, or sat pinned against a shore or the screen's
+// edge, its heading into the coast and the shove out of it cancelling)
+function mist(m, now) { m.away = now + 1300; m.el.style.transition = 'opacity 1.1s ease'; m.el.style.opacity = 0; m.prog = null; }
 function stepMover(m, dt, t) {
+  const now = performance.now();
+  if (m.away) { if (now < m.away) return; m.away = 0; spawn(m); m.el.style.opacity = 1; }
+  const sNow = seaS(m.x, m.y);
+  if (sNow < -12) { mist(m, now); return; }
   const clear = (a, d) => seaS(m.x + Math.cos(a) * d, m.y + Math.sin(a) * d);
   const ahead = clear(m.a, 70);
-  if (ahead < 55 || m.x < 50 || m.y < 50 || m.x > W - 50 || m.y > H - 50) {
+  if (sNow < 20) {                                                      // land grew under us: turn for open water and drift out
+    const [gx, gy] = seaGrad(m.x, m.y), l = Math.hypot(gx, gy) || 1; let da = Math.atan2(gy, gx) - m.a; da = Math.atan2(Math.sin(da), Math.cos(da)); m.a += da * Math.min(1, dt * 2);
+    const k = Math.min(70 * dt, 3); m.x += gx / l * k; m.y += gy / l * k;
+  } else if (ahead < 55 || m.x < 50 || m.y < 50 || m.x > W - 50 || m.y > H - 50) {
     const l = clear(m.a - 0.6, 70), r = clear(m.a + 0.6, 70);
     m.a += (l > r ? -1 : 1) * 1.1 * dt;
-    if (m.x < 50) m.a = 0; if (m.x > W - 50) m.a = Math.PI; if (m.y < 50) m.a = Math.PI / 2; if (m.y > H - 50) m.a = -Math.PI / 2;
+    // off the edge: back towards the middle (when that way isn't land: turned straight into a coast, it stuck there)
+    const inA = m.x < 50 ? 0 : m.x > W - 50 ? Math.PI : m.y < 50 ? Math.PI / 2 : m.y > H - 50 ? -Math.PI / 2 : null;
+    if (inA != null && clear(inA, 40) > 20) m.a = inA;
   } else m.a += (vnoise(t * 0.05 + m.phase * 10, m.phase) - 0.5) * 0.25 * dt;
-  if (seaS(m.x, m.y) < 20) { const [gx, gy] = seaGrad(m.x, m.y), l = Math.hypot(gx, gy) || 1; m.x += gx / l * 70 * dt; m.y += gy / l * 70 * dt; }   // land grew under us: drift out to sea
   m.x += Math.cos(m.a) * m.v * dt; m.y += Math.sin(m.a) * m.v * dt;
+  // the last resort: no real headway in 8 s (it sails at 6-8 pt/s, so 64 pt) means it's going round in a pocket or pinned
+  if (!m.prog || Math.hypot(m.x - m.prog.x, m.y - m.prog.y) > 30) m.prog = { x: m.x, y: m.y, at: now };
+  else if (now - m.prog.at > 8000) { mist(m, now); return; }
   const f = Math.cos(m.a) >= 0 ? 1 : -1; m.flip += (f - m.flip) * Math.min(1, dt * 3);
   drawMover(m, t);
 }
@@ -731,14 +746,23 @@ function nearestReachable(tx, ty, now) {
   near = { fb: FB, at: now, tx, ty, p: best && bd < 260 ? best : null };
   return near.p;
 }
+// water on the board: the open water just past the screen's edge counts as sea, so a boat back from the mist near the
+// bottom edge came out below it, and idle, stayed there, out of sight
+function onBoard(p, nx, ny) {
+  const m = 40; if (p[0] > m && p[1] > m && p[0] < W - m && p[1] < H - m) return p;
+  let best = p, bs = -1e9;
+  for (let i = 0; i < 48; i++) { const a = i * 2.4, r = 20 + i * 6, x = clamp(nx + Math.cos(a) * r, m, W - m), y = clamp(ny + Math.sin(a) * r, m, H - m), sv = Math.min(seaS(x, y), 60) - r * .05;
+    if (sv > bs) { bs = sv; best = [x, y]; } }
+  return best;
+}
 let portage = 0;            // no water near you it can reach: the boat fades out here and comes back out of the mist near you
 function stepBoat(dt, t) {
   if (!FB) return;
   if (!B.on) { const [mx, my, mw, mh] = Span.world ? Span.main : [W / 2, H / 2, W, H]; [B.x, B.y] = toWater(mx, my + mh * .2, 50); B.on = true; boat.style.opacity = 1; B.o = 1; }
-  let [tx, ty] = cursor ? toWater(cursor.x, cursor.y) : toWater(B.x, B.y, 50);   // idle: ease out into clear water
+  let [tx, ty] = cursor ? toWater(cursor.x, cursor.y) : onBoard(toWater(B.x, B.y, 50), B.x, B.y);   // idle: ease out into clear water (on the board)
   const now = performance.now();
   if (portage) {
-    if (now > portage) { [B.x, B.y] = toWater(tx + (B.x < tx ? -90 : 90), ty + 40, 50); B.vx = B.vy = 0; B.o = 1; boat.style.opacity = 1; portage = 0; inkWake.reset(); }
+    if (now > portage) { [B.x, B.y] = onBoard(toWater(tx + (B.x < tx ? -90 : 90), ty + 40, 50), tx, ty); B.vx = B.vy = 0; B.o = 1; boat.style.opacity = 1; portage = 0; inkWake.reset(); }
     drawBoat(t); return;
   }
   if (B.o === 0) { B.o = 1; boat.style.opacity = 1; }                 // taken over mid-fade by another display: show it again
@@ -802,11 +826,11 @@ let remote = null, sentAt = 0;
 Span.on('sea', m => { remote = m; });
 function sendSea(now) {
   if (!Span.world || now - sentAt < 30) return; sentAt = now;
-  Span.post('sea', { mv: movers.map(m => [m.x, m.y, m.a, m.flip]), b: B.on ? [B.x, B.y, B.vx, B.vy, B.flip, B.tilt, B.o ?? 1] : null });
+  Span.post('sea', { mv: movers.map(m => [m.x, m.y, m.a, m.flip, m.away ? 0 : 1]), b: B.on ? [B.x, B.y, B.vx, B.vy, B.flip, B.tilt, B.o ?? 1] : null });
 }
 function applySea(t) {
   const m = remote; if (!m) { for (const v of movers) v.el.style.opacity = 0; boat.style.opacity = 0; return; }
-  m.mv.forEach(([x, y, a, f], i) => { const v = movers[i]; if (!v) return; v.x = x; v.y = y; v.a = a; v.flip = f; v.el.style.opacity = 1; drawMover(v, t); });
+  m.mv.forEach(([x, y, a, f, o = 1], i) => { const v = movers[i]; if (!v) return; if (o) { v.x = x; v.y = y; v.a = a; v.flip = f; } if (String(o) !== v.el.style.opacity) { v.el.style.transition = 'opacity 1.1s ease'; v.el.style.opacity = o; } drawMover(v, t); });
   if (m.b) { [B.x, B.y, B.vx, B.vy, B.flip, B.tilt, B.o] = m.b; B.on = true; const o = String(B.o ?? 1); if (boat.style.opacity !== o) { boat.style.opacity = o; inkWake.reset(); } drawBoat(t); }
 }
 
@@ -829,7 +853,7 @@ function frame0(now) {
   // a town easing in drawn at it steps visibly); renewed every frame it's still moving, so it stops the moment it rests
   const settling = morphing;
   if (FB) { const t = Span.secs(16384);                     // (the world's clock: a ship's bob matches across a seam)
-    if (Span.leader()) { for (const m of movers) { if (m.el.style.opacity === '0') m.el.style.opacity = 1; stepMover(m, dt, t); } stepBoat(dt, t); sendSea(now); }
+    if (Span.leader()) { for (const m of movers) { if (m.el.style.opacity === '0' && !m.away) m.el.style.opacity = 1; stepMover(m, dt, t); } stepBoat(dt, t); sendSea(now); }
     else applySea(t); }
   if (stepTowns(dt)) { draw = true; if (window.__twSettle) window.__twSettle(150); }
   else if (settling && window.__twSettle) window.__twSettle(150);

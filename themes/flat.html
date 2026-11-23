@@ -850,6 +850,8 @@ function spawnKayak() {
   }
   return null;
 }
+// 按新的海重新放：船已经在水上的先淡出，再在有水的地方淡入 (clearing them, the ones on screen vanished in a frame)
+function fadeKayaksOut() { const on = kayaks.some(k => (k.fade ?? 1) > .05); if (on) for (const k of kayaks) k.out = true; else kayaks.length = 0; }
 function syncKayaks() {
   const want = Math.max(0, Math.min(4, Math.round(P.kayaks * Span.n)));
   while (kayaks.length > want) kayaks.pop();
@@ -869,10 +871,11 @@ function stepKayaks(dt, now) {
     if (curS(ax, ay) < 150 || margin) {
       // 转向更深的水 / 画面中间
       let gx = curS(k.x + 10, k.y) - curS(k.x - 10, k.y), gy = curS(k.x, k.y + 10) - curS(k.x, k.y - 10);
-      if (margin) { gx += (W / 2 - k.x) * 0.02; gy += ((H - TASKBAR) / 2 - k.y) * 0.02; }
+      // (at the screen's edge the middle wins: the deeper water past the edge drew a kayak half off the screen)
+      if (margin) { const gl = Math.hypot(gx, gy) || 1, cx = W / 2 - k.x, cy = (H - TASKBAR) / 2 - k.y, cl = Math.hypot(cx, cy) || 1; gx = gx / gl * .5 + cx / cl * 1.5; gy = gy / gl * .5 + cy / cl * 1.5; }
       let d = Math.atan2(gy, gx) - k.h;
       d = Math.atan2(Math.sin(d), Math.cos(d));
-      heading += Math.sign(d) * Math.min(Math.abs(d), 0.7 * dt);
+      heading += Math.sign(d) * Math.min(Math.abs(d), (margin ? 1 : 0.7) * dt);
     } else {
       k.wander += dt * 0.3;
       heading += (vnoise(k.wander, i * 10) - 0.5) * 0.25 * dt;
@@ -1237,7 +1240,7 @@ function reseed(v) {
   seed = v; buildNoise();
   if (!iconsSeen) return;
   commit(true);
-  curMix = 1; kayaks.length = 0; syncKayaks(); curMix = 0;   // 皮划艇按新的海重新放
+  curMix = 1; fadeKayaksOut(); syncKayaks(); curMix = 0;   // 皮划艇按新的海重新放
 }
 document.getElementById('btnSeed').addEventListener('click', () => reseed((Math.random() * 1e6) | 0));
 document.getElementById('btnAdd').addEventListener('click', () => {
@@ -1266,12 +1269,12 @@ let resizeT = 0;
 addEventListener('resize', () => {
   clearTimeout(resizeT);
   resizeT = setTimeout(() => {
-    if (WALL || PREVIEW) { resize(); refresh(); kayaks.length = 0; syncKayaks(); return; }
+    if (WALL || PREVIEW) { resize(); refresh(); fadeKayaksOut(); syncKayaks(); return; }
     resize(); computeGrid();
     if (grid.cols * grid.rows > layoutCapacity && layoutCapacity < 40) { applyLayout(layoutKind); syncPanel(); return; }
     for (const ic of icons) setPos(ic, Math.min(ic.x, Math.max(0, DW - ic.w)), Math.min(ic.y, Math.max(0, DH - ic.h)));
     refresh();
-    kayaks.length = 0; syncKayaks();
+    fadeKayaksOut(); syncKayaks();
   }, 100);
 });
 function tickClock() {
@@ -1350,7 +1353,7 @@ function startHostedMode() {
     if (m.t === 'desk') { const dk = [m.x, m.y, m.w, m.h, m.uw, m.uh, JSON.stringify(m.fr || [])].join('|'); if (dk === deskKey) return; deskKey = dk;
       Span.desk(m);
       if (Span.world && seed !== 4242) { seed = 4242; if (noiseTex) gl.deleteTexture(noiseTex); buildNoiseTex(); }   // one sea: the same noise on every display
-      resize(); kayaks.length = 0; birds.length = 0; remoteSea = null; syncBirds(false);
+      resize(); fadeKayaksOut(); remoteSea = null; syncBirds(birds.length > 0);   // (birds already up keep flying: any now off screen wheel back in)
       if (lastIconsMsg) { first = true; handle(lastIconsMsg); } else commit(true);
       return; }
     if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
@@ -1362,7 +1365,7 @@ function startHostedMode() {
     iconsSeen = true;
     if (!first) { pendingCommit = true; settlePaused(); return; }      // laid at the next frame (several updates in one frame: one layout)
     commit(first);                                // 第一次：陆地从海里"长"出来；之后：岸线平滑移动
-    if (first) { curMix = 1; kayaks.length = 0; syncKayaks(); curMix = 0; first = false; }
+    if (first) { curMix = 1; fadeKayaksOut(); syncKayaks(); curMix = 0; first = false; }
     settlePaused();
   };
   if (PREVIEW) {
