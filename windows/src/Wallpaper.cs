@@ -80,7 +80,8 @@ internal sealed class Wallpaper : Form
         // (the page's root doesn't exist yet when this runs: it's hidden as soon as it does; and only on this first load,
         // so a reload later, a lost GPU context say, never starts hidden)
         if (fadeIn) hideScript = await core.AddScriptToExecuteOnDocumentCreatedAsync(
-            "(()=>{const h=()=>{const e=document.documentElement;if(e){e.style.opacity='0';return true}};if(!h())new MutationObserver((_,o)=>{if(h())o.disconnect()}).observe(document,{childList:true})})()");
+            "(()=>{const h=()=>{const e=document.documentElement;if(e){e.style.opacity='0';setTimeout(()=>{if(e.style.opacity==='0'&&!e.getAnimations().length)e.style.opacity=''},8000);return true}};" +
+            "if(!h())new MutationObserver((_,o)=>{if(h())o.disconnect()}).observe(document,{childList:true})})()");   // (and it shows itself after 8 s, whatever else happens)
         core.Settings.AreDefaultContextMenusEnabled = false;
         core.Settings.AreDevToolsEnabled = Args.Has("--devtools");
         core.Settings.IsStatusBarEnabled = false;
