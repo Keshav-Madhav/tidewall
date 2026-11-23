@@ -24,7 +24,6 @@
     -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
     box-shadow: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 22px 60px -24px rgba(45, 32, 10, .35);
   }
-  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
   h1, h2 { margin: 0; font-weight: 500; letter-spacing: -.035em; text-wrap: balance; }
   p { margin: 0; text-wrap: pretty; }
 
@@ -46,8 +45,6 @@
   #head h1 { font-size: clamp(40px, 4.6vw, 62px); line-height: 1; margin: 14px 0 18px; }
   #head p { color: var(--ink-2); font-size: 18px; max-width: 26em; }
   #head .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; margin-top: 30px; }
-  #head .film { font-size: 15px; color: var(--ink-2); text-decoration: none; border-bottom: 1px solid rgba(21, 23, 31, .25); }
-  #head .film:hover { color: var(--ink); border-color: var(--ink); }
   .is-dragging { cursor: grabbing !important; }
   .hint { position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px; white-space: nowrap; transition: opacity .6s ease; }
 
@@ -59,7 +56,6 @@
   .left { margin-left: clamp(0px, 8vw, 140px); } .right { margin-left: auto; margin-right: clamp(0px, 8vw, 140px); }
 
   #film { width: min(980px, 100%); margin-inline: auto; padding: 14px; }
-  #film .cap { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 6px 8px 14px; }
   #film h2 { font-size: clamp(22px, 2.2vw, 28px); margin: 0; }
   video { display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 10px; background: #e7dcc2; }
 
@@ -116,3 +112,12 @@
     #end { padding: 30px 22px 26px; }
   }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .btn, .btn:hover { transition: none; transform: none; } }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* every panel is a window you can move: a grip says so (dots, the usual sign for "drag here") */
+.grip { display: grid; grid-template-columns: repeat(3, 5px); gap: 4px 5px; width: max-content; margin: -14px auto 12px; padding: 7px 12px; border-radius: 999px; cursor: grab; transition: background .2s ease; }
+.grip i { width: 5px; height: 5px; border-radius: 50%; background: rgba(21, 23, 31, .45); transition: background .2s ease; }
+.win:hover .grip i, .grip:hover i { background: rgba(21, 23, 31, .7); }
+.grip:hover { background: rgba(21, 23, 31, .06); }
+.is-dragging .grip { cursor: grabbing; }
+#head .grip { margin-top: -24px; }
+@media (max-width: 759px) { .grip { display: none; } }

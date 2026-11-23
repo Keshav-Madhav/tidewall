@@ -51,6 +51,14 @@ if (!narrow) {
     onMove: () => wall.update(true), onDrop: () => wall.update(false),
   });
 }
+// the panels below are windows too: moved by their grip (so the film's controls and the walls' strip still work as
+// they look); a double-click on the grip puts one back
+if (!narrow) for (const id of ['film', 'walls', 'perf', 'end']) {
+  const el = document.getElementById(id);
+  const d = TW.draggable(el, { within: document.body, handle: '.grip', onMove: () => wall.update(true), onDrop: () => wall.update(false) });
+  el.style.touchAction = '';                                         // (only the grip takes the pointer: the page still scrolls)
+  el.querySelector('.grip').addEventListener('dblclick', () => { d.moveTo(0, 0); wall.update(false); });
+}
 wall.update(false);   // the page has laid out: tell the map where its panels are
 
 // the film plays only while you can see it
