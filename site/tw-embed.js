@@ -76,15 +76,16 @@
       o.onReady && o.onReady();
     });
     // the pointer, for walls with something that follows it (the boat, footprints)
+    // (heard on the whole page: the panels sit on top of the host, so the host itself rarely sees the pointer)
     if (o.cursor !== false) {
-      host.addEventListener('pointermove', e => {
+      addEventListener('pointermove', e => {
         if (!ready) return;
         const b = box();
         // over one of the "windows" (as the apps say it): walls leave the pointer alone there (no warming, no stirring)
         const over = (o.windows ? o.windows() : []).some(el => { const r = el && el.getBoundingClientRect(); return r && e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom; });
         post({ t: 'cursor', x: Math.round((e.clientX - b.left) * dpr), y: Math.round((e.clientY - b.top) * dpr), ...(over ? { w: 1 } : {}) });
       });
-      host.addEventListener('pointerleave', () => ready && post({ t: 'cursorOff' }));
+      document.documentElement.addEventListener('pointerleave', () => ready && post({ t: 'cursorOff' }));
     }
     new ResizeObserver(() => { if (ready) { desk(); last = ''; send(false); } }).observe(host);
     new IntersectionObserver(es => { seen = es[0].isIntersecting; restIfHidden(); }).observe(host);
