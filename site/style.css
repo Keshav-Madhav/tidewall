@@ -121,3 +121,6 @@
 .is-dragging .grip { cursor: grabbing; }
 #head .grip { margin-top: -24px; }
 @media (max-width: 759px) { .grip { display: none; } }
+.try { margin-top: 10px; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, .7); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; transition: background .2s ease; }
+.try:hover:not(:disabled) { background: #fff; }
+.try.on { border-color: transparent; background: transparent; color: var(--ink-3); cursor: default; padding-left: 0; }

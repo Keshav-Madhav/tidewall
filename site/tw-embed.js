@@ -11,14 +11,20 @@
 
   function mount(host, o) {
     const dpr = o.dpr || Math.min(2, window.devicePixelRatio || 1);
-    const frame = document.createElement('iframe');
-    frame.title = o.title || 'A live Tidewall wall';
-    frame.setAttribute('aria-hidden', 'true');
-    frame.tabIndex = -1;
-    frame.src = `${base}walls/${o.wall}.html?wallpaper=1&pdpr=${dpr}${o.variant ? '&v=' + o.variant : ''}`;   // (as the app loads them)
-    // under everything else in the host (the panels that act as windows sit on top of it)
-    frame.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;opacity:0;transition:opacity .6s ease;z-index:0';
-    host.insertBefore(frame, host.firstChild);
+    // a wall's page in a frame, under everything else in the host (the panels that act as windows sit on top of it)
+    function make(wall, variant) {
+      const f = document.createElement('iframe');
+      f.title = o.title || 'A live Tidewall wall';
+      f.setAttribute('aria-hidden', 'true');
+      f.tabIndex = -1;
+      f.src = `${base}walls/${wall}.html?wallpaper=1&pdpr=${dpr}${variant ? '&v=' + variant : ''}`;   // (as the app loads them)
+      f.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none;opacity:0;transition:opacity .6s ease;z-index:0';
+      host.insertBefore(f, host.firstChild);
+      return f;
+    }
+    // the wall showing, and the one coming in beneath it (a swap hands over as the app does: the old one stays until
+    // the new one is drawn, then fades)
+    let frame = make(o.wall, o.variant), coming = null, wall = o.wall;
 
     let ready = false, paused = false, last = '', raf = 0, liveT = 0, seen = true;
     const post = m => frame.contentWindow && frame.contentWindow.postMessage({ __tw: JSON.stringify(m) }, '*');
@@ -55,7 +61,12 @@
     const restIfHidden = () => rest(document.hidden || !seen);
 
     addEventListener('message', e => {
-      if (e.source !== frame.contentWindow || !e.data || String(e.data.__twFrom) !== 'ready') return;
+      if (!e.data || String(e.data.__twFrom) !== 'ready') return;
+      if (coming && e.source === coming.contentWindow) {
+        const old = frame; frame = coming; coming = null;
+        old.style.zIndex = 1; old.style.opacity = 0; setTimeout(() => old.remove(), 700);
+        paused = false;
+      } else if (e.source !== frame.contentWindow) return;
       ready = true;
       desk();
       post({ t: 'me', seed: o.seed ?? 7 });
@@ -77,7 +88,13 @@
     new IntersectionObserver(es => { seen = es[0].isIntersecting; restIfHidden(); }).observe(host);
     document.addEventListener('visibilitychange', restIfHidden);
     if (o.followScroll) addEventListener('scroll', () => update(true), { passive: true });
-    return { update, frame, get ready() { return ready; } };
+    function swap(next, variant) {
+      if (next === wall && !coming) return;
+      wall = next;
+      if (coming) coming.remove();
+      coming = make(next, variant);
+    }
+    return { update, swap, get frame() { return frame; }, get wall() { return wall; }, get ready() { return ready; } };
   }
 
   // A panel you can drag (pointer or arrow keys), kept inside `within`. Moves with a transform, so nothing reflows.

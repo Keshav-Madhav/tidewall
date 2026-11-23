@@ -22,11 +22,24 @@ for (const [id, name, cost, line] of WALLS) {
   const cap = document.createElement('figcaption');
   const top = document.createElement('div'); top.className = 'name';
   const n = document.createElement('b'); n.textContent = name;
-  const c = document.createElement('span'); c.textContent = id === 'inkmap' ? 'behind this page' : `${cost} cost`;
+  const c = document.createElement('span'); c.textContent = `${cost} cost`;
   top.append(n, c);
   const p = document.createElement('p'); p.textContent = line;
-  cap.append(top, p); f.append(img, cap); strip.append(f);
+  // every wall runs live behind this page too: try it here
+  const t = document.createElement('button'); t.type = 'button'; t.className = 'try'; t.dataset.wall = id;
+  t.addEventListener('click', () => tryWall(id, name));
+  cap.append(top, p, t); f.append(img, cap); strip.append(f);
 }
+const live = document.getElementById('live');
+function tryWall(id, name) {
+  window.tide.swap(id === 'beach' ? 'flat' : id);
+  for (const b of document.querySelectorAll('.try')) {
+    const on = b.dataset.wall === id;
+    b.textContent = on ? 'Behind this page' : 'Try it live'; b.disabled = on; b.classList.toggle('on', on);
+  }
+  if (live) live.textContent = name;
+}
+for (const b of document.querySelectorAll('.try')) { const on = b.dataset.wall === 'inkmap'; b.textContent = on ? 'Behind this page' : 'Try it live'; b.disabled = on; b.classList.toggle('on', on); }
 const step = dir => strip.scrollBy({ left: dir * (strip.firstElementChild.getBoundingClientRect().width + 18), behavior: 'smooth' });
 document.getElementById('prev').addEventListener('click', () => step(-1));
 document.getElementById('next').addEventListener('click', () => step(1));
