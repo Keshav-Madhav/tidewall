@@ -110,7 +110,7 @@ internal sealed class SettingsWindow : Form
             ["settings"] = new JsonObject
             {
                 ["spanWorlds"] = Config.SpanWorlds, ["login"] = LoginItem.Enabled, ["loginBlocked"] = LoginItem.Blocked,
-                ["restWhenIdle"] = Config.IdleMinutes > 0, ["paused"] = Config.Paused, ["fps"] = Config.Fps, ["margin"] = Config.Margin,
+                ["restWhenIdle"] = Config.IdleMinutes > 0, ["paused"] = Config.Paused, ["fps"] = Config.Fps, ["tier"] = Config.Tier, ["margin"] = Config.Margin,
                 ["autoUpdate"] = Config.AutoUpdate, ["deskIcons"] = Config.DeskIcons, ["deskIconsState"] = "ok",
                 ["reactWindows"] = Config.ReactWindows, ["reactStage"] = true, ["reactWidgets"] = true, ["reactCursor"] = Config.ReactCursor,
                 ["idleMinutes"] = Config.IdleMinutes > 0 ? Config.IdleMinutes : 0, ["battery"] = Config.Battery,
@@ -299,6 +299,7 @@ internal sealed class SettingsWindow : Form
             case "spanWorlds": Config.SpanWorlds = On(v, true); app.Dispatch(false); app.RefreshMenu(); break;   // the walls are told their new world: none starts again
             case "paused": Config.Paused = On(v, false); app.Dispatch(false); break;
             case "fps": Config.Fps = Num(v, 0); app.RebuildWalls(); break;
+            case "tier": Config.Tier = (int)Num(v, 1); app.RebuildWalls(); break;
             case "margin": Config.Margin = Num(v, 140); app.Dispatch(false); break;
             case "reactWindows": Config.ReactWindows = On(v, true); app.Dispatch(false); break;
             case "reactCursor":

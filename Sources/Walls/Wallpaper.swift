@@ -26,7 +26,8 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
   /// The most device pixels per point the page draws at, fixed when it's made: the devicePixelRatio it was given.
   private let cap: CGFloat
-  private var scale: CGFloat { min(window.backingScaleFactor, cap) }
+  private var scale: CGFloat { min(window.backingScaleFactor, cap) * res }
+  private let res: CGFloat
 
   private struct Sent { var windows = "", icons = "", desk = "", deskIcons = "" }
   private var lastSent = Sent()
@@ -49,6 +50,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     cgFrame = fakeFrame ?? screen.cgFrame
     let cap = min(stock ? 8 : CGFloat(Cfg.renderCap(Cfg.theme(for: id))), fakeID.flatMap { fakeScale[$0] } ?? 8)
     self.cap = cap
+    self.res = stock ? 1 : CGFloat(Cfg.tierRes)
     let winRect = fakeFrame.map { NSRect(x: screen.frame.minX, y: screen.frame.minY, width: $0.width, height: $0.height) }
       ?? screen.frame
     let config = Wallpaper.configuration(cap: cap, maxHz: screen.maximumFramesPerSecond)
@@ -82,7 +84,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
       ucc.addUserScript(WKUserScript(source: timescaleScript(k), injectionTime: .atDocumentStart, forMainFrameOnly: true))
     }
     let opaque = !stock && !args.contains("--no-opaque")
-    let early = earlyScript(fps: stock ? 0 : Cfg.fps, opaque: opaque, cap: Double(cap), maxHz: maxHz)
+    let early = earlyScript(fps: stock ? 0 : Cfg.fps, opaque: opaque, cap: Double(cap), maxHz: maxHz, tier: stock ? 1 : Cfg.tier, res: stock ? 1 : Cfg.tierRes)
     ucc.addUserScript(WKUserScript(source: early, injectionTime: .atDocumentStart, forMainFrameOnly: true))
     ucc.addUserScript(WKUserScript(source: lateScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
     return cfg

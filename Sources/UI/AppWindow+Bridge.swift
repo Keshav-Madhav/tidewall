@@ -50,7 +50,7 @@ extension AppWindow {
 
   private func settings(of app: App) -> [String: Any] {
     ["spanWorlds": Cfg.spanWorlds, "login": LoginItem.enabled, "loginBlocked": LoginItem.blocked,
-     "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "margin": Cfg.margin,
+     "restWhenIdle": Cfg.restWhenIdle, "paused": app.userPaused, "fps": Cfg.fps, "tier": Cfg.tier, "margin": Cfg.margin,
      "autoUpdate": Cfg.autoUpdate, "deskIcons": Cfg.deskIcons, "deskIconsState": app.deskIcons.state.rawValue,
      "reactWindows": Cfg.reactWindows, "reactStage": Cfg.reactStage, "reactWidgets": Cfg.reactWidgets,
      "reactCursor": Cfg.reactCursor, "idleMinutes": Cfg.idleMinutes, "battery": Cfg.battery,
@@ -235,6 +235,9 @@ extension AppWindow {
       app.dispatch(live: false)
     case "fps":
       Cfg.fps = (v as? NSNumber)?.doubleValue ?? 0
+      app.reloadAll()
+    case "tier":
+      Cfg.tier = (v as? NSNumber)?.intValue ?? 1
       app.reloadAll()
     case "margin":
       Cfg.margin = (v as? NSNumber)?.doubleValue ?? 140

@@ -103,6 +103,9 @@ internal static class Config
     public static string Page(string id) => id == "beach" ? "flat" : id;
 
     public static double Fps { get => Get("fps", 0.0); set => Set("fps", value); }
+    /// Settings ▸ Optimize for: 0 Performance, 1 Balanced (the default), 2 Quality (see themes/host/early.js).
+    public static int Tier { get => Math.Clamp(Get("tier", 1), 0, 2); set => Set("tier", value); }
+    public static double TierRes => Tier == 0 ? 0.75 : 1;
     public static double Margin { get => Math.Clamp(Get("margin", 140.0), 0, 400); set => Set("margin", value); }
     /// Seeds the generated names (your walker, the strangers): chosen once, stable across launches.
     public static int Seed

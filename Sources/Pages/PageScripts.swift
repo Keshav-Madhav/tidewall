@@ -19,8 +19,8 @@ enum HostScript {
 }
 
 /// Runs before any page script.
-func earlyScript(fps: Double, opaque: Bool, cap: Double = 8, maxHz: Int = 60) -> String {
-  HostScript.early + "({ fps: \(fps), opaque: \(opaque), cap: \(cap), maxHz: \(maxHz), profile: \(args.contains("--profile")) });"
+func earlyScript(fps: Double, opaque: Bool, cap: Double = 8, maxHz: Int = 60, tier: Int = 1, res: Double = 1) -> String {
+  HostScript.early + "({ fps: \(fps), opaque: \(opaque), cap: \(cap), maxHz: \(maxHz), profile: \(args.contains("--profile")), tier: \(tier), res: \(res) });"
 }
 
 /// Runs after the page's own scripts.

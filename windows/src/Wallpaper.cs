@@ -90,7 +90,7 @@ internal sealed class Wallpaper : Form
         core.SetVirtualHostNameToFolderMapping(Host, Config.ThemesRoot, CoreWebView2HostResourceAccessKind.Allow);
 
         await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScripts.Bridge);
-        await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScripts.Early(Config.Fps, maxHz: RefreshRate()));
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(PageScripts.Early(Config.Fps, maxHz: RefreshRate(), Config.Tier, Res));
         core.DOMContentLoaded += (_, _) => _ = core.ExecuteScriptAsync(PageScripts.Late);
         core.WebMessageReceived += (_, e) => Received(e.TryGetWebMessageAsString());
         await WatchConsole(core);
@@ -170,6 +170,10 @@ internal sealed class Wallpaper : Form
 
     /// This display's scale (its device pixels per page pixel).
     public double PixelScale => DeviceDpi / 96.0;
+    /// Optimize for ▸ Performance draws fewer pixels: the page's devicePixelRatio is scaled by this, so its device-pixel
+    /// messages are too.
+    readonly double Res = Config.TierRes;
+    int D(double v) => (int)Math.Round(v * Res);
 
     /// Where this display sits among the others, in page pixels.
     /// This wall alone: a world of one.
@@ -204,7 +208,7 @@ internal sealed class Wallpaper : Form
         LaidOut = true;
         var f = Frame;
         var mine = windows.Where(w => w.Bounds.IntersectsWith(f)).ToList();
-        string Box(Rectangle r) => $"[{r.Left - f.Left},{r.Top - f.Top},{r.Right - f.Left},{r.Bottom - f.Top}]";
+        string Box(Rectangle r) => $"[{D(r.Left - f.Left)},{D(r.Top - f.Top)},{D(r.Right - f.Left)},{D(r.Bottom - f.Top)}]";
         var names = JsonSerializer.Serialize(mine.Select(w => w.Name).ToArray());
         var wins = $"{{\"t\":\"windows\",\"live\":{(live ? "true" : "false")},\"r\":[{string.Join(",", mine.Select(w => Box(w.Bounds)))}],\"n\":{names},\"sm\":[{string.Join(",", mine.Select(_ => "0"))}]}}";
         if (wins != lastWindows) { lastWindows = wins; Send(wins, live); }
@@ -220,10 +224,10 @@ internal sealed class Wallpaper : Form
     {
         world ??= [Alone];
         var mine = world.FirstOrDefault(p => p.Screen.Name == Screen.Name) ?? Alone;
-        double k = PixelScale;
+        double k = PixelScale * Res;
         string Local(Rectangle r, WorldPart on)
         {
-            if (on.Screen.Name == Screen.Name) return $"[{r.Left - Frame.Left},{r.Top - Frame.Top},{r.Right - Frame.Left},{r.Bottom - Frame.Top}]";
+            if (on.Screen.Name == Screen.Name) return $"[{D(r.Left - Frame.Left)},{D(r.Top - Frame.Top)},{D(r.Right - Frame.Left)},{D(r.Bottom - Frame.Top)}]";
             PointF a = on.ToPoints(new Point(r.Left, r.Top)), b = on.ToPoints(new Point(r.Right, r.Bottom));
             int X(float v) => (int)Math.Round((v - mine.Points.X) * k);
             int Y(float v) => (int)Math.Round((v - mine.Points.Y) * k);
@@ -255,7 +259,7 @@ internal sealed class Wallpaper : Form
         wasOverWindow = overWindow;
         if (overWindow) lastOverSend = now;
         var f = Frame;
-        Send($"{{\"t\":\"cursor\",\"x\":{screen.X - f.Left},\"y\":{screen.Y - f.Top}{(overWindow ? ",\"w\":1" : "")}}}");
+        Send($"{{\"t\":\"cursor\",\"x\":{D(screen.X - f.Left)},\"y\":{D(screen.Y - f.Top)}{(overWindow ? ",\"w\":1" : "")}}}");
     }
 
     bool wasOverWindow;

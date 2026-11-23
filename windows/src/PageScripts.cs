@@ -13,8 +13,8 @@ internal static class PageScripts
 
     public static string Late => late;
 
-    public static string Early(double fps, int maxHz) =>
-        $"{early}({{ fps: {fps.ToString(System.Globalization.CultureInfo.InvariantCulture)}, opaque: true, cap: 8, maxHz: {maxHz}, profile: false }});";
+    public static string Early(double fps, int maxHz, int tier = 1, double res = 1) =>
+        $"{early}({{ fps: {fps.ToString(System.Globalization.CultureInfo.InvariantCulture)}, opaque: true, cap: 8, maxHz: {maxHz}, profile: false, tier: {tier}, res: {res.ToString(System.Globalization.CultureInfo.InvariantCulture)} }});";
 
     static string Load(string name)
     {

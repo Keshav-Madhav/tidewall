@@ -189,6 +189,14 @@ enum Cfg {
   /// How far (pt) the land or cloud bank reaches past each window edge.
   static var margin: Double { get { clamped("margin", to: 0...400) ?? 140 } set { d.set(newValue, forKey: "margin") } }
   static var fps: Double { get { clamped("fps", to: 0...120) ?? 0 } set { d.set(newValue, forKey: "fps") } }
+  /// Settings ▸ Optimize for: 0 Performance, 1 Balanced (the default), 2 Quality. Every wall a little leaner or richer
+  /// in every part (resolution, frame rates, particles, simulation detail, effects): see themes/host/early.js.
+  static var tier: Int {
+    get { if let t = argValue("--tier").flatMap(Int.init) { return max(0, min(2, t)) }   // (benches and tests)
+          return d.object(forKey: "tier") == nil ? 1 : max(0, min(2, d.integer(forKey: "tier"))) }
+    set { d.set(newValue, forKey: "tier") } }
+  /// The share of the display's pixels Performance draws (the page and the host's messages both use it).
+  static var tierRes: Double { tier == 0 ? 0.75 : 1 }
 
   /// Seeds the generated names (your walker, the strangers); stable across launches.
   static var seed: Int {
