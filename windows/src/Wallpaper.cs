@@ -140,7 +140,7 @@ internal sealed class Wallpaper : Form
         {
             case "ready":
                 Ready = true;
-                lastWindows = lastIcons = lastDesk = lastDeskIcons = "";
+                lastWindows = lastIcons = lastDesk = lastDeskIcons = lastArea = "";
                 SendDesk();
                 Send($"{{\"t\":\"me\",\"seed\":{Config.Seed}}}");
                 if (Pace != 1) Send($"{{\"t\":\"pace\",\"k\":{Pace}}}");
@@ -212,6 +212,11 @@ internal sealed class Wallpaper : Form
         var names = JsonSerializer.Serialize(mine.Select(w => w.Name).ToArray());
         var wins = $"{{\"t\":\"windows\",\"live\":{(live ? "true" : "false")},\"r\":[{string.Join(",", mine.Select(w => Box(w.Bounds)))}],\"n\":{names},\"sm\":[{string.Join(",", mine.Select(_ => "0"))}]}}";
         if (wins != lastWindows) { lastWindows = wins; Send(wins, live); }
+        // the part of the display you see the wallpaper in (above the taskbar): a wall that sets things on the ground
+        // (Snowfall's bank of snow) puts them on this bottom edge
+        var wa = Screen.WorkingArea;
+        var area = $"{{\"t\":\"area\",\"r\":{Box(wa)}}}";
+        if (area != lastArea) { lastArea = area; Send(area); }
         int m = (int)Math.Round(Config.Margin * PixelScale);   // the room the scene keeps around each window, in page pixels
         var icons = $"{{\"t\":\"icons\",\"vis\":true,\"live\":{(live ? "true" : "false")},\"r\":[{string.Join(",", mine.Select(w => Box(Rectangle.Inflate(w.Bounds, m, m))))}]}}";
         if (icons != lastIcons) { lastIcons = icons; Send(icons, live); }
@@ -240,7 +245,7 @@ internal sealed class Wallpaper : Form
         lastDeskIcons = msg;
         Send(msg);
     }
-    string lastDeskIcons = "";
+    string lastDeskIcons = "", lastArea = "";
 
     public void SetPaused(bool on)
     {

@@ -29,7 +29,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   private var scale: CGFloat { min(window.backingScaleFactor, cap) * res }
   private let res: CGFloat
 
-  private struct Sent { var windows = "", icons = "", desk = "", deskIcons = "" }
+  private struct Sent { var windows = "", icons = "", desk = "", deskIcons = "", area = "" }
   private var lastSent = Sent()
   private var lastLayout: (rects: [CGRect], owners: [String], pause: Bool)?
   private var pending: (() -> Void)?
@@ -232,7 +232,17 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     let k = scale, o = cgFrame.origin
     let local = rects.map { $0.offsetBy(dx: -o.x, dy: -o.y) }
-    send([windowsMessage(local, rects: rects, owners: owners, scale: k, live: live), roomMessage(local, scale: k, live: live)].compactMap { $0 }, live: live)
+    send([windowsMessage(local, rects: rects, owners: owners, scale: k, live: live), roomMessage(local, scale: k, live: live), areaMessage(scale: k)].compactMap { $0 }, live: live)
+  }
+
+  /// The part of the display you see the wallpaper in: below the menu bar, above (or beside) the Dock. A wall that sets
+  /// things on the ground (Snowfall's bank of snow) puts them on this bottom edge, not behind the Dock.
+  private func areaMessage(scale k: CGFloat) -> String? {
+    let a = (usable ?? cgFrame).offsetBy(dx: -cgFrame.minX, dy: -cgFrame.minY)
+    let m = "{\"t\":\"area\",\"r\":\(boxJSON(a, scale: k))}"
+    guard m != lastSent.area else { return nil }
+    lastSent.area = m
+    return m
   }
 
   /// The windows' own edges and app names, for themes that draw around the real window (Estate, say).

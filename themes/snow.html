@@ -89,7 +89,7 @@ function paintBackdrop() {
 // a snowman in the foreground snow (painted once with the backdrop: nothing per frame). Moonlit from the upper right in
 // the painting's own palette; a cranberry scarf is the one bit of colour. Its feet sink into the ground drift.
 function snowman(x) {
-  const h = Math.max(46, Math.min(96, H * .085)), cx = W * .23, base = H - 12;
+  const h = Math.max(46, Math.min(96, H * .085)), cx = W * .23, base = Math.min(H, GY ?? H) - 12;   // (standing on the bank, above the Dock)
   x.save(); x.filter = 'blur(.45px)'; x.globalAlpha = .93;                 // painted softness, not a sticker
   const ball = (cy, r) => {
     const g = x.createRadialGradient(cx + r * .35, cy - r * .4, r * .1, cx, cy, r * 1.05);
@@ -196,7 +196,7 @@ function setTargets(list) {
       else if (!settled || performance.now() < 8000) for (let i = 0; i < c.cols.length; i++) c.cols[i] = 11 + 10 * vnoise(i * .06 + t.x, 2) + 5 * vnoise(i * .25 + t.y, 5);   // it's been snowing a while (icons arrive a moment after the first windows)
       cur.push(c); used.add(c); }
   }
-  settled = true;
+  settled = true; driftsDirty = true;
   for (const c of cur) if (!used.has(c) && c.alive) {           // gone (closed, minimised, Show Desktop): with nothing under it, its snow falls
     c.alive = false; if (c.owner !== '__icon') { const keep = Float32Array.from(c.cols); shed(c, 1, 0, 40); c.cols = keep; }   // tumbling clumps, not a ledge in mid-air
     else orphans.push({ x: c.x, y: c.y, w: c.w, cols: c.cols, melt: 0, owner: c.owner });
@@ -204,6 +204,11 @@ function setTargets(list) {
   }
   cur = cur.filter(c => c.alive);
 }
+let driftsDirty = true, upkeepDt = 0, dStrips = [];
+// where the snow banks up along the bottom: the bottom of what you see (above the Dock or taskbar, from the host's
+// "area"), not the screen's edge behind them
+let GY = null; const GB = () => Math.min(H, GY ?? H) - 6;
+let gWant = null;
 function stepWins(dt) {
   // a window in your hand: its snow sits right on it, every frame (eased, it trailed the window by a hand's width)
   const live = performance.now() < liveUntil, k = live ? 1 : 1 - Math.exp(-dt * 8);
@@ -211,6 +216,7 @@ function stepWins(dt) {
     const ox = c.x, oy = c.y, ow = c.w;
     for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = c[b] - c[a]; if (Math.abs(d) > .2) c[a] += d * k; else c[a] = c[b]; }
     const vx = (c.x - ox) / dt, vy = (c.y - oy) / dt; c.vx = c.vx * .6 + vx * .4; c.vy = c.vy * .6 + vy * .4;
+    if (c.x !== ox || c.y !== oy || c.w !== ow) driftsDirty = true;
     if (Math.abs(c.w - ow) > .5) { shed(c, .55, 0, 0); c.cols = makeCols(c.w, c.cols); }   // a resize shrugs most of it off
     else if (c.cols.length !== Math.max(2, Math.ceil(c.w / COL) + 1)) c.cols = makeCols(c.w, c.cols);
     const sp = Math.hypot(c.vx, c.vy);
@@ -263,7 +269,7 @@ function stepSnow(dt, now) {
       let landed = false;
       for (const c of cur) { if (nx < c.x || nx > c.x + c.w) continue; const i = Math.round((nx - c.x) / COL), top = c.y + floor(c, i) - c.cols[i];
         if (f.y <= top && ny >= top) { deposit(c.cols, i, f.size * .16); landed = true; break; } }
-      if (!landed) { const gi = Math.round(nx / COL); if (gi >= 0 && gi < ground.length && ny >= H - 6 - ground[gi]) { deposit(ground, gi, f.size * .05); landed = true; } }
+      if (!landed) { const gi = Math.round(nx / COL); if (gi >= 0 && gi < ground.length && ny >= GB() - ground[gi]) { deposit(ground, gi, f.size * .05); landed = true; } }
       if (landed) { respawn(f); continue; }
     }
     f.x = nx; f.y = ny; if (f.y > H + 10 || f.x < -120 || f.x > W + 120) respawn(f);
@@ -273,22 +279,34 @@ function stepSnow(dt, now) {
     c.vy += 520 * dt; c.vx *= .99; const ny = c.y + c.vy * dt, nx = c.x + c.vx * dt;
     for (const w of cur) { if (nx < w.x || nx > w.x + w.w || c.y > w.y + RAD) continue; const i = Math.round((nx - w.x) / COL), top = w.y + floor(w, i) - w.cols[i];
       if (c.y <= top && ny >= top && c.vy > 0) { deposit(w.cols, i, c.s * 1.2); c.life = 0; break; } }
-    const gi = Math.round(nx / COL); if (c.life > 0 && gi >= 0 && gi < ground.length && ny >= H - 6 - ground[gi]) { deposit(ground, gi, c.s * .6); c.life = 0; }
+    const gi = Math.round(nx / COL); if (c.life > 0 && gi >= 0 && gi < ground.length && ny >= GB() - ground[gi]) { deposit(ground, gi, c.s * .6); c.life = 0; }
     c.x = nx; c.y = ny; if (c.y > H + 20) c.life = 0;
   }
   for (let i = clumps.length - 1; i >= 0; i--) if (clumps[i].life <= 0) clumps.splice(i, 1);
-  // drifts settle; warmth melts grooves; orphans melt away
-  const settle = Math.exp(-dt / 600);
-  // (the cursor melts only snow it's in: on a window's title bar, dragging it, it's below the snow, not in it)
+  // drifts settle; warmth melts grooves; orphans melt away. Ten times a second, not every frame: they change over
+  // seconds, and the slump and the mesh were most of what the wall cost at rest (every frame while a window moves)
   const dragging = now < liveUntil;
+  upkeepDt += dt;
+  if (upkeepDt < .1 && !dragging) return;
+  const ud = upkeepDt; upkeepDt = 0; driftsDirty = true;
+  const settle = Math.exp(-ud / 600);
   // it's been snowing all along: besides the flakes you see land, every top gathers a light, uneven layer at a steady
-  // rate (a cap within half a minute, up to a natural depth; the heaps above that come from flakes and clumps)
-  for (const c of cur) { const deep = c.cap ? c.cap * .8 : 16, g = dt * (c.cap ? .35 : .6);
-    for (let i = 0; i < c.cols.length; i++) { const want = deep * (.6 + .7 * vnoise(i * .05 + c.x * .013, 2)); if (c.cols[i] < want) c.cols[i] = Math.min(want, c.cols[i] + g * (.5 + vnoise(i * .2 + c.y * .01, 5))); } }
-  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, c.cap || 42); if (warm && !dragging && cursor.y < c.y) melt(c.cols, c.x, c.y, dt, c); }   // c.cap: a desktop icon wears only a little cap
-  for (let i = 0; i < ground.length; i++) ground[i] *= Math.exp(-dt / 1500);
-  relax(ground, 70); if (warm) melt(ground, 0, H - 6, dt);
-  for (const o of orphans) { o.melt += dt; for (let i = 0; i < o.cols.length; i++) o.cols[i] *= Math.exp(-dt / 14); relax(o.cols, 34); }
+  // rate (a cap within half a minute, up to a natural depth; the heaps above that come from flakes and clumps). Each
+  // column's depth and pace are noise, worked out once per window rather than every frame
+  for (const c of cur) {
+    if (!c.want || c.want.length !== c.cols.length) { const deep = c.cap ? c.cap * .8 : 16; c.want = new Float32Array(c.cols.length); c.gr = new Float32Array(c.cols.length);
+      for (let i = 0; i < c.cols.length; i++) { c.want[i] = deep * (.6 + .7 * vnoise(i * .05 + c.x * .013, 2)); c.gr[i] = .5 + vnoise(i * .2 + c.y * .01, 5); } }
+    const g = ud * (c.cap ? .35 : .6);
+    for (let i = 0; i < c.cols.length; i++) if (c.cols[i] < c.want[i]) c.cols[i] = Math.min(c.want[i], c.cols[i] + g * c.gr[i]);
+  }
+  // (the cursor melts only snow it's in: on a window's title bar, dragging it, it's below the snow, not in it)
+  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, c.cap || 42); if (warm && !dragging && cursor.y < c.y) melt(c.cols, c.x, c.y, ud, c); }   // c.cap: a desktop icon wears only a little cap
+  const gs = Math.exp(-ud / 1500); for (let i = 0; i < ground.length; i++) ground[i] *= gs;
+  // the bank along the bottom builds up like the window tops do: a soft, uneven bank within a minute or so
+  if (!gWant || gWant.length !== ground.length) { gWant = new Float32Array(ground.length); for (let i = 0; i < ground.length; i++) gWant[i] = 26 * (.55 + .9 * vnoise(i * .025, 11)); }
+  for (let i = 0; i < ground.length; i++) if (ground[i] < gWant[i]) ground[i] = Math.min(gWant[i], ground[i] + ud * .45);
+  relax(ground, 70); if (warm) melt(ground, 0, GB(), ud);
+  for (const o of orphans) { o.melt += ud; const os = Math.exp(-ud / 14); for (let i = 0; i < o.cols.length; i++) o.cols[i] *= os; relax(o.cols, 34); }
   orphans = orphans.filter(o => o.cols.some(v => v > .3));
 }
 function melt(cols, x0, y0, dt, c) {
@@ -354,17 +372,19 @@ function render() {
   const drawPts = n => { if (!n) return; gl.useProgram(FLAKE); gl.uniform2f(U(FLAKE, 'uRes'), W, H); gl.uniform1f(U(FLAKE, 'uK'), K);
     gl.bindVertexArray(fVao); gl.bindBuffer(gl.ARRAY_BUFFER, fBuf); gl.bufferData(gl.ARRAY_BUFFER, fArr.subarray(0, n * 4), gl.DYNAMIC_DRAW); gl.drawArrays(gl.POINTS, 0, n); };
   drawPts(pts(true));
-  // drifts: a triangle strip per profile (base at the edge, crest at the surface)
+  // drifts: a triangle strip per profile (base at the edge, crest at the surface), rebuilt only when they've changed
+  if (driftsDirty) { driftsDirty = false;
   let m = 0; const strips = [];
-  const add = (cols, x0, y0, c) => { const start = m;
+  const add = (cols, x0, y0, c, base) => { const start = m;   // (base: where the snow's foot is drawn from, when not its own floor)
     for (let i = 0; i < cols.length; i++) { const px = x0 + i * COL, d = cols[i], fy = y0 + (c ? floor(c, i) : 0); if (m * 3 + 6 > dArr.length) { const g = new Float32Array(dArr.length * 2); g.set(dArr); dArr = g; }
-      const o = m * 3; dArr[o] = px; dArr[o + 1] = fy + .5; dArr[o + 2] = 0; dArr[o + 3] = px; dArr[o + 4] = fy - d - 1.2; dArr[o + 5] = d > .3 ? 1 : 0; m += 2; }   /* 1 at the crest: the shader feathers it */
+      const o = m * 3; dArr[o] = px; dArr[o + 1] = base ?? fy + .5; dArr[o + 2] = 0; dArr[o + 3] = px; dArr[o + 4] = fy - d - 1.2; dArr[o + 5] = d > .3 ? 1 : 0; m += 2; }   /* 1 at the crest: the shader feathers it */
     strips.push([start, m - start]); };
   for (const c of cur) if (c.cols.some(v => v > .2)) add(c.cols, c.x, c.y, c);
   for (const o of orphans) add(o.cols, o.x, o.y, o);
-  add(ground, 0, H - 6);
-  if (m) { gl.useProgram(DRIFT); gl.uniform2f(U(DRIFT, 'uRes'), W, H); gl.bindVertexArray(dVao); gl.bindBuffer(gl.ARRAY_BUFFER, dBuf); gl.bufferData(gl.ARRAY_BUFFER, dArr.subarray(0, m * 3), gl.DYNAMIC_DRAW);
-    for (const [s, n] of strips) gl.drawArrays(gl.TRIANGLE_STRIP, s, n); }
+  add(ground, 0, GB(), null, H + 2);                                // deep snow from the screen's bottom edge up to the bank's crest
+  gl.bindBuffer(gl.ARRAY_BUFFER, dBuf); gl.bufferData(gl.ARRAY_BUFFER, dArr.subarray(0, Math.max(1, m) * 3), gl.DYNAMIC_DRAW); dStrips = strips; }
+  if (dStrips.length) { gl.useProgram(DRIFT); gl.uniform2f(U(DRIFT, 'uRes'), W, H); gl.bindVertexArray(dVao);
+    for (const [s, n] of dStrips) gl.drawArrays(gl.TRIANGLE_STRIP, s, n); }
   let n = pts(false);
   for (const c of clumps) { if (n * 4 + 4 > fArr.length) break; const o = n * 4; fArr[o] = c.x; fArr[o + 1] = c.y; fArr[o + 2] = c.s; fArr[o + 3] = .95; n++; }
   drawPts(n);
@@ -384,12 +404,13 @@ function loop0(now) {
 }
 
 /* ---------- boot + host protocol ---------- */
-function build() { W = innerWidth; H = innerHeight; $('gl').width = Math.round(W * K); $('gl').height = Math.round(H * K); drawBackdrop(); makeFlakes(); findMoon(); }
+function build() { W = innerWidth; H = innerHeight; $('gl').width = Math.round(W * K); $('gl').height = Math.round(H * K); drawBackdrop(); makeFlakes(); findMoon(); driftsDirty = true; }
 window.__twSleigh = () => { nextSleigh = 0; };   // (tests: one now)
 let FB = null; function commit() { } function refresh() { }
 let lastWins = null, deskIc = [];
 const handle = m => {
   if (m.t === 'desk') { showPanel(m.i, m.n); return; }
+  if (m.t === 'area') { const was = GY; GY = m.r[3] / K; driftsDirty = true; if (was !== GY && PAINT.complete) drawBackdrop(); return; }   // (the snowman moves up onto it)
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
   if (m.t === 'cursor') { cursor = { x: m.x / K, y: m.y / K }; cursorT = performance.now(); return; }
   if (m.t === 'cursorOff') { cursor = null; return; }
