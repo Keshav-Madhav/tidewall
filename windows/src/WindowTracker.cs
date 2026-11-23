@@ -2,7 +2,9 @@ using System.Diagnostics;
 
 namespace Tidewall;
 
-internal sealed record TrackedWindow(IntPtr Handle, Rectangle Bounds, string Owner);
+/// Owner: the process ("msedge"), what Tidewall's own rules go by; Name: the app as people know it ("Microsoft Edge"),
+/// what the walls show (Gallery's plaques), as the Mac gives them.
+internal sealed record TrackedWindow(IntPtr Handle, Rectangle Bounds, string Owner, string Name);
 
 /// Where the windows are. Windows tells us the moment any window moves, shows, hides or changes state (WinEvent hooks,
 /// no permission needed); each burst of events is coalesced into one look at the window list on the next turn of the
@@ -94,7 +96,7 @@ internal sealed class WindowTracker : IDisposable
         var list = new List<TrackedWindow>();
         Native.EnumWindows((h, _) =>
         {
-            if (Counts(h, out var bounds)) list.Add(new TrackedWindow(h, bounds, Owner(h)));
+            if (Counts(h, out var bounds)) list.Add(new TrackedWindow(h, bounds, Owner(h), AppName(h)));
             return true;
         }, IntPtr.Zero);
         return list;
@@ -127,6 +129,30 @@ internal sealed class WindowTracker : IDisposable
         try { name = Process.GetProcessById((int)pid).ProcessName; } catch (ArgumentException) { name = ""; }
         owners[pid] = name;
         return name;
+    }
+
+    readonly Dictionary<uint, string> names = [];
+
+    string AppName(IntPtr h)
+    {
+        // Store apps (Settings, Calculator, Photos) all run in one frame host: the window's own title is the app's name
+        if (classes.TryGetValue(h, out var cls) && cls == "ApplicationFrameWindow") return Native.Title(h) is { Length: > 0 } t ? t : Owner(h);
+        Native.GetWindowThreadProcessId(h, out uint pid);
+        if (names.TryGetValue(pid, out var name)) return name;
+        name = Owner(h);
+        try
+        {
+            if (Native.ImagePath(pid) is { } path)
+            {
+                var info = FileVersionInfo.GetVersionInfo(path);
+                var described = (info.FileDescription ?? "").Trim();
+                if (described.Length is > 0 and < 40) name = described;
+                else if ((info.ProductName ?? "").Trim() is { Length: > 0 and < 40 } product) name = product;
+            }
+        }
+        catch (Exception) { }                                              // (a process that went, a file we may not read)
+        if (names.Count > 500) names.Clear();
+        return names[pid] = name;
     }
 
     public void Dispose()

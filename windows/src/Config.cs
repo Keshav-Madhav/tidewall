@@ -119,7 +119,12 @@ internal static class Config
     /// Rest after this long with no keyboard or mouse (0: never). Test runs never rest: a CI machine has no input at all.
     public static double IdleMinutes { get => Args.Has("--test") ? 0 : Get("idleMinutes", 3.0); set { Set("idleMinutes", value); if (value > 0) IdleLast = value; } }
     public static int Battery { get => Get("battery", 0); set => Set("battery", value); }
-    public static string? Variant(string theme) => data["variant." + theme]?.GetValue<string>();
+    /// A theme's own sub-choice (Wind Map's region, …): the saved one, else the Mac's defaults: Wind Map on your own
+    /// country, Wind Tunnel (no model chosen) over your desktop icons when you have some
+    public static string? Variant(string theme) => data["variant." + theme]?.GetValue<string>()
+        ?? (theme == "wind" ? Home.Region : theme == "tunnel" && IconsPresent ? "none" : null);
+    /// Whether the desktop has icons (the last read; before this launch's first, the last launch's).
+    public static bool IconsPresent { get => Get("iconsPresent", false); set { if (value != IconsPresent) Set("iconsPresent", value); } }
     public static void SetVariant(string theme, string id) => Set("variant." + theme, id);
 
     /// A display's own wall, if it has one (else it shows the main wall). Keyed by the display's device name.
@@ -148,6 +153,9 @@ internal static class Config
     /// The idle time last chosen, so turning "rest when idle" back on restores it.
     public static double IdleLast { get => Get("idleLast", 3.0); set => Set("idleLast", value); }
     public static string? NotesSeen { get => data["notesSeen"]?.GetValue<string>(); set => Set("notesSeen", value); }
+    /// What's New has something to say: this version is newer than the newest one whose notes you've seen (as on the Mac).
+    public static bool HasNewNotes => Changelog.Length > 0 && (NotesSeen is not { } seen
+        || !System.Version.TryParse(seen, out var s) || !System.Version.TryParse(Version, out var v) || v > s);
     public static string Changelog
     {
         get { try { return File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "CHANGELOG.md")); } catch (IOException) { return ""; } }

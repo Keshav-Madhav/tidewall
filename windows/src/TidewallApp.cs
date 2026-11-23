@@ -41,9 +41,16 @@ internal sealed class TidewallApp : ApplicationContext
         deskIcons = new DeskIcons();
         Updates = new Updater();
         Updates.Changed += () => { settings?.PushState(); RebuildMenu(); };
-        deskIcons.Changed += () => { foreach (var w in walls) if (w.Ready) w.SendDeskIcons(deskIcons, WorldFor(w)); };
+        deskIcons.Changed += () =>
+        {
+            foreach (var w in walls) if (w.Ready) w.SendDeskIcons(deskIcons, WorldFor(w));
+            settings?.PushDesk();                                          // (the preview's desk shows them too)
+            retune.Stop(); retune.Start();                                 // Wind Tunnel's default follows whether there are icons
+        };
+        retune.Tick += (_, _) => { retune.Stop(); ReloadStale("desktop icons came or went"); };
         tray = new NotifyIcon { Icon = AppIcon(), Text = "Tidewall", Visible = !Args.Has("--test") };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) ShowSettings(); };   // a click opens the window; right-click, the menu
+        if (Config.NotesSeen == null && !Config.Welcomed) Config.NotesSeen = Config.Version;   // a fresh install: nothing to announce
         RebuildMenu();
         BuildWalls();
         // opened by hand (Start menu, the desktop shortcut, the installer's last step), or for the first time ever: the window,
@@ -51,7 +58,8 @@ internal sealed class TidewallApp : ApplicationContext
         if (Args.Has("--settings")) loop.BeginInvoke(() => ShowSettings(Args.Value("--settings")));
         else if (!Args.Has("--test") && (!Args.Has("--background") || !Config.Welcomed)) loop.BeginInvoke(() => { ShowSettings(); Config.Welcomed = true; });
 
-        rebuildSoon.Tick += (_, _) => { rebuildSoon.Stop(); BuildWalls(!rebuildWithoutHandOver); rebuildWithoutHandOver = false; };
+        // (the menu's display list and the window's preview follow the displays too, as on the Mac)
+        rebuildSoon.Tick += (_, _) => { rebuildSoon.Stop(); BuildWalls(!rebuildWithoutHandOver); rebuildWithoutHandOver = false; RefreshMenu(); settings?.PushDesk(); };
         SystemEvents.DisplaySettingsChanged += (_, _) => loop.BeginInvoke(() => RebuildSoon("displays changed"));
         // Explorer restarted (it crashed, or someone restarted it): the desktop window the walls lived in went with it.
         // It says so to every top-level window ("TaskbarCreated"); the walls are made again in the new one.
@@ -250,7 +258,18 @@ internal sealed class TidewallApp : ApplicationContext
     }
 
     /// One wall made again (its still picture replaced by the live page).
-    void ReplaceWall(Wallpaper old)
+    readonly System.Windows.Forms.Timer retune = new() { Interval = 2000 };
+
+    /// Only the walls a change touches start again, as on the Mac (a theme or variant chosen for one display, or a
+    /// default that moved): the others carry on undisturbed.
+    public void ReloadStale(string why)
+    {
+        foreach (var w in walls.Where(w => w.Theme != Config.ThemeFor(w.Screen) || w.LoadedVariant != Config.Variant(w.Theme)).ToList())
+            ReplaceWall(w, why);
+        RefreshMenu();
+    }
+
+    void ReplaceWall(Wallpaper old, string why = "uncovered")
     {
         int i = walls.IndexOf(old);
         if (i < 0) return;
@@ -259,7 +278,7 @@ internal sealed class TidewallApp : ApplicationContext
         var wall = new Wallpaper(old.Screen, Config.ThemeFor(old.Screen)) { Replacing = old };
         Watch(wall);
         walls[i] = wall;
-        Log.Write($"uncovered: the {wall.Theme} wall again on {wall.Screen.Name}");
+        Log.Write($"{why}: the {wall.Theme} wall again on {wall.Screen.Name}");
         _ = StartWall(wall);
     }
 
@@ -332,7 +351,7 @@ internal sealed class TidewallApp : ApplicationContext
         var menu = new ContextMenuStrip();
         var bold = new Font(menu.Font, FontStyle.Bold);
         // notices: what's new, an update
-        if (Config.NotesSeen != Config.Version && Config.Changelog.Length > 0)
+        if (Config.HasNewNotes)
         {
             menu.Items.Add(new ToolStripMenuItem($"What’s New in Tidewall {Config.Version}…", null, (_, _) => ShowSettings("whatsnew")) { Font = bold });
             menu.Items.Add(new ToolStripSeparator());
@@ -352,14 +371,14 @@ internal sealed class TidewallApp : ApplicationContext
             {
                 var d = displays[i]; bool own = Config.OwnTheme(d.Name) != null;
                 var sub = new ToolStripMenuItem($"{DisplayName(d, i)} — {LabelOf(Config.ThemeFor(d))}");
-                sub.DropDownItems.Add(ThemeItem(d.Primary ? $"Default ({LabelOf(Config.Theme)})" : $"Same as Main ({LabelOf(Config.Theme)})", !own, () => { Config.SetOwnTheme(d.Name, null); RebuildWalls(); }));
-                foreach (var (id, label) in Config.Themes) sub.DropDownItems.Add(ThemeItem(label, own && Config.ThemeFor(d) == id, () => { Config.SetOwnTheme(d.Name, id); RebuildWalls(); }));
+                sub.DropDownItems.Add(ThemeItem(d.Primary ? $"Default ({LabelOf(Config.Theme)})" : $"Same as Main ({LabelOf(Config.Theme)})", !own, () => { Config.SetOwnTheme(d.Name, null); ReloadStale("theme chosen"); }));
+                foreach (var (id, label) in Config.Themes) sub.DropDownItems.Add(ThemeItem(label, own && Config.ThemeFor(d) == id, () => { Config.SetOwnTheme(d.Name, id); ReloadStale("theme chosen"); }));
                 menu.Items.Add(sub);
             }
         bool anyOwn = displays.Any(d => Config.OwnTheme(d.Name) != null);
         var all = new ToolStripMenuItem(several ? "All Displays" : "Wall");
         foreach (var (id, label) in Config.Themes)
-            all.DropDownItems.Add(ThemeItem(label, Config.Theme == id && !anyOwn, () => { Config.ClearDisplayThemes(); Config.Theme = id; RebuildWalls(); }));
+            all.DropDownItems.Add(ThemeItem(label, Config.Theme == id && !anyOwn, () => { Config.ClearDisplayThemes(); Config.Theme = id; ReloadStale("theme chosen"); }));
         menu.Items.Add(all);
         menu.Items.Add(new ToolStripSeparator());
         // the switches

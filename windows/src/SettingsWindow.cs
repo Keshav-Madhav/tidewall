@@ -82,7 +82,7 @@ internal sealed class SettingsWindow : Form
         Send(new JsonObject
         {
             ["t"] = "state", ["platform"] = "windows", ["current"] = Config.Theme, ["displays"] = Displays(), ["variants"] = variants,
-            ["seed"] = Config.Seed, ["version"] = Config.Version, ["siteQuery"] = "",
+            ["seed"] = Config.Seed, ["version"] = Config.Version, ["siteQuery"] = Home.Query,
             ["spanThemes"] = new JsonArray(Config.SpanThemes.Select(t => (JsonNode)t).ToArray()),
             ["settings"] = new JsonObject
             {
@@ -93,8 +93,9 @@ internal sealed class SettingsWindow : Form
                 ["idleMinutes"] = Config.IdleMinutes > 0 ? Config.IdleMinutes : 0, ["battery"] = Config.Battery,
                 ["onBattery"] = app.Power.OnBattery, ["lowPower"] = app.Power.Saver,
             },
-            ["update"] = new JsonObject { ["s"] = app.Updates.State, ["v"] = app.Updates.Version, ["err"] = app.Updates.Error, ["checked"] = app.Updates.Checked },
-            ["newNotes"] = Config.NotesSeen != Config.Version && Config.Changelog.Length > 0, ["notesSeen"] = Config.NotesSeen ?? "",
+            ["update"] = new JsonObject { ["s"] = app.Updates.State, ["v"] = app.Updates.Version, ["err"] = app.Updates.Error, ["checked"] = app.Updates.Checked,
+                ["notes"] = app.Updates.Notes, ["auto"] = Config.AutoUpdate, ["admin"] = false },   // (installed per user: never an administrator's password)
+            ["newNotes"] = Config.HasNewNotes, ["notesSeen"] = Config.NotesSeen ?? "",
         });
     }
 
@@ -122,6 +123,16 @@ internal sealed class SettingsWindow : Form
         return list;
     }
 
+    int? deskShown;   // the display the preview last asked for
+
+    /// The desktop icons changed: the preview redraws them (and the state's "has icons" with it), as on the Mac.
+    public void PushDesk()
+    {
+        if (!loaded || IsDisposed || web.CoreWebView2 == null) return;
+        PushState();
+        Js($"{{\"t\":\"desktop\",\"d\":{Desktop(deskShown).ToJsonString()},\"icons\":1}}");
+    }
+
     /// A display (the main one by default) and the windows on it now, in its page pixels, so the preview shows your own desktop.
     JsonObject Desktop(int? id = null)
     {
@@ -132,7 +143,7 @@ internal sealed class SettingsWindow : Form
         {
             if (!w.Bounds.IntersectsWith(f) || w.Owner == "Tidewall") continue;
             windows.Add(new JsonObject { ["x"] = (w.Bounds.X - f.X) / k, ["y"] = (w.Bounds.Y - f.Y) / k, ["w"] = w.Bounds.Width / k,
-                ["h"] = w.Bounds.Height / k, ["name"] = w.Owner, ["sm"] = false, ["widget"] = false });
+                ["h"] = w.Bounds.Height / k, ["name"] = w.Name, ["sm"] = false, ["widget"] = false });
         }
         return new JsonObject { ["w"] = f.Width / k, ["h"] = f.Height / k, ["windows"] = windows, ["display"] = IdOf(s), ["notch"] = false,
             ["icons"] = new JsonObject { ["r"] = Local(app.DeskIcons.Icons), ["i"] = Local(app.DeskIcons.Images), ["c"] = Local(app.DeskIcons.Clusters) } };
@@ -169,6 +180,7 @@ internal sealed class SettingsWindow : Form
                 if (pendingPage != null) { ShowPage(pendingPage); pendingPage = null; }
                 return;
             case "desktop":
+                deskShown = o["display"]?.GetValue<int>();
                 Js($"{{\"t\":\"desktop\",\"d\":{Desktop(o["display"]?.GetValue<int>()).ToJsonString()}}}");
                 return;
             case "log":
@@ -203,17 +215,17 @@ internal sealed class SettingsWindow : Form
                 Config.NotesSeen = Config.Version;
                 break;
             case "apply":
-                if (o["theme"]?.GetValue<string>() is { } id && Config.IsTheme(id)) { Config.ClearDisplayThemes(); Config.Theme = id; app.RebuildWalls(); }
+                if (o["theme"]?.GetValue<string>() is { } id && Config.IsTheme(id)) { Config.ClearDisplayThemes(); Config.Theme = id; app.ReloadStale("theme chosen"); }
                 break;
             case "applyDisplay":
                 var theme = o["theme"]?.GetValue<string>();
                 if (theme != null && !Config.IsTheme(theme)) break;
                 if (o["display"]?.GetValue<int>() is not int d || ScreenOf(d) is not { } s) { Toast("That display isn't connected any more."); break; }
                 Config.SetOwnTheme(s.Name, theme);
-                app.RebuildWalls();
+                app.ReloadStale("theme chosen");
                 break;
             case "variant":
-                if (o["theme"]?.GetValue<string>() is { } vt && o["id"]?.GetValue<string>() is { } v && Config.IsTheme(vt)) { Config.SetVariant(vt, v); app.RebuildWalls(); }
+                if (o["theme"]?.GetValue<string>() is { } vt && o["id"]?.GetValue<string>() is { } v && Config.IsTheme(vt)) { Config.SetVariant(vt, v); app.ReloadStale("variant chosen"); }
                 break;
             case "set":
                 Set(o["key"]?.GetValue<string>() ?? "", o["value"]);
@@ -237,7 +249,7 @@ internal sealed class SettingsWindow : Form
             case "login": LoginItem.Enabled = On(v, false); break;
             case "restWhenIdle": Config.IdleMinutes = On(v, true) ? Config.IdleLast : 0; break;
             case "idleMinutes": Config.IdleMinutes = Num(v, 3); break;
-            case "spanWorlds": Config.SpanWorlds = On(v, true); app.RebuildWalls(); break;
+            case "spanWorlds": Config.SpanWorlds = On(v, true); app.Dispatch(false); app.RefreshMenu(); break;   // the walls are told their new world: none starts again
             case "paused": Config.Paused = On(v, false); app.Dispatch(false); break;
             case "fps": Config.Fps = Num(v, 0); app.RebuildWalls(); break;
             case "margin": Config.Margin = Num(v, 140); app.Dispatch(false); break;

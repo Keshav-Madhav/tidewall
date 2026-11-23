@@ -17,6 +17,8 @@ internal sealed class Updater
     /// idle, checking, downloading, ready, current, failed, off — the Settings page's words.
     public string State { get; private set; } = "idle";
     public string? Version => (ready ?? found)?.TargetFullRelease.Version.ToString();
+    /// The waiting update's own notes (its CHANGELOG section, packed into it), for What's New.
+    public string? Notes => (ready ?? found)?.TargetFullRelease.NotesMarkdown is { Length: > 0 } md ? md : null;
     public string? Error { get; private set; }
     public long Checked { get; private set; }
     public event Action? Changed;

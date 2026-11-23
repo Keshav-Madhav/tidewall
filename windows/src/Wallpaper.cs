@@ -26,6 +26,8 @@ internal sealed class Wallpaper : Form
     public bool Paused { get; private set; }
     public bool WantsCursor { get; private set; } = true;
     public string Theme => theme;
+    /// The variant the page was opened with (a change of it, or of its default, starts this wall again).
+    public string? LoadedVariant { get; private set; }
     public event Action<Wallpaper>? BecameReady;
 
     string lastWindows = "", lastIcons = "", lastDesk = "";
@@ -80,8 +82,9 @@ internal sealed class Wallpaper : Form
         await WatchConsole(core);
         core.ProcessFailed += (_, e) => { Log.Write($"[{theme}] web process failed ({e.ProcessFailedKind}); reloading"); Ready = false; core.Reload(); };
 
-        var variant = Config.Variant(theme) is { } v ? "&v=" + Uri.EscapeDataString(v) : "";
-        core.Navigate($"https://{Host}/{Config.Page(theme)}.html?wallpaper=1{variant}");
+        LoadedVariant = Config.Variant(theme);
+        var variant = LoadedVariant is { } v ? "&v=" + Uri.EscapeDataString(v) : "";
+        core.Navigate($"https://{Host}/{Config.Page(theme)}.html?wallpaper=1{variant}{Home.Query}");   // (the place: Celestial Atlas draws its sky)
     }
 
     public int RefreshRate()
@@ -168,7 +171,7 @@ internal sealed class Wallpaper : Form
         var f = Frame;
         var mine = windows.Where(w => w.Bounds.IntersectsWith(f)).ToList();
         string Box(Rectangle r) => $"[{r.Left - f.Left},{r.Top - f.Top},{r.Right - f.Left},{r.Bottom - f.Top}]";
-        var names = JsonSerializer.Serialize(mine.Select(w => w.Owner).ToArray());
+        var names = JsonSerializer.Serialize(mine.Select(w => w.Name).ToArray());
         var wins = $"{{\"t\":\"windows\",\"live\":{(live ? "true" : "false")},\"r\":[{string.Join(",", mine.Select(w => Box(w.Bounds)))}],\"n\":{names},\"sm\":[{string.Join(",", mine.Select(_ => "0"))}]}}";
         if (wins != lastWindows) { lastWindows = wins; Send(wins, live); }
         int m = (int)Math.Round(Config.Margin * PixelScale);   // the room the scene keeps around each window, in page pixels

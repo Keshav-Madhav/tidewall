@@ -102,6 +102,7 @@ internal sealed class DeskIcons : IDisposable
     {
         if (boxes.SequenceEqual(Icons) && images.SequenceEqual(Images)) return;   // checked before clustering: that's the costly part
         float dpi; using (var g = Graphics.FromHwnd(IntPtr.Zero)) dpi = g.DpiX;
+        Config.IconsPresent = boxes.Count > 0;
         Icons = boxes; Images = images; Clusters = Cluster(boxes, (int)Math.Round(26 * dpi / 96));   // (26 pt, as on the Mac)
         Changed?.Invoke();
     }
