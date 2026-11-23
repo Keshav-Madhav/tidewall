@@ -80,7 +80,9 @@
       host.addEventListener('pointermove', e => {
         if (!ready) return;
         const b = box();
-        post({ t: 'cursor', x: Math.round((e.clientX - b.left) * dpr), y: Math.round((e.clientY - b.top) * dpr) });
+        // over one of the "windows" (as the apps say it): walls leave the pointer alone there (no warming, no stirring)
+        const over = (o.windows ? o.windows() : []).some(el => { const r = el && el.getBoundingClientRect(); return r && e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom; });
+        post({ t: 'cursor', x: Math.round((e.clientX - b.left) * dpr), y: Math.round((e.clientY - b.top) * dpr), ...(over ? { w: 1 } : {}) });
       });
       host.addEventListener('pointerleave', () => ready && post({ t: 'cursorOff' }));
     }
