@@ -147,7 +147,10 @@ state: a taskbar instead of the menu bar, `.mac-only` rows hidden; `web/frame.js
 page around it), `Updater` (Velopack from the GitHub releases), `Display` (`--fakescreens N` splits the main display),
 `Covered` (the Mac's covered-area check), `TestRun` (`--test DIR`: windows, a glide, pictures, frame times),
 `Usage` (CPU/memory of Tidewall's processes, GPU from Windows' "GPU Engine" counters), `Power` (battery / Battery
-saver → Settings ▸ On battery: pace 2 or paused). As on the Mac: opened by hand (not `--background`) or first ever →
+saver → Settings ▸ On battery: pace 2 or paused), `Home` (where you are: the time zone's city from `zone.tab`, for
+Celestial's sky and Wind Map's country), `World` (span worlds in points, so displays at different scales join up),
+`DisplayNames` (monitors' own names), `ProblemReport` (the Mac's report: summary in the issue, scrubbed log on the
+clipboard). As on the Mac: opened by hand (not `--background`) or first ever →
 the window; away 90 s (paused, locked, asleep) or idle 10 min → every wall a still picture (`Wallpaper.FreezeAsync`),
 covered 30 s → that wall; walls are replaced with a hand-over (`Replacing`: the new one starts beneath the old, which
 goes when the new one is ready). The tray menu mirrors the Mac's menu-bar menu (`ShowMenuForTest`, `--menu-shot`).
@@ -165,6 +168,12 @@ goes when the new one is ready). The tray menu mirrors the Mac's menu-bar menu (
   furniture, not app windows. A test machine with no input idles the walls after 3 minutes (synthetic cursor moves
   aren't input). Windows' Widgets and Search run WebView2 too: count Tidewall's processes by `TidewallData`. On a
   software renderer a busy start can lose a WebGL context once (the page reloads itself).
+- The app is built with `InvariantGlobalization` (no culture can leak "1,5" into the JSON the walls parse), so .NET
+  can't convert time zones or countries: `windows/zone.tab`, `windowsZones.tsv` and `countries.tsv` (tzdb and
+  Unicode CLDR tables, embedded) do it. Explorer raises no event when a desktop icon moves; the end of a drag on its
+  icon list does (`EVENT_SYSTEM_CAPTUREEND`), and the icons are read again 0.35 s later.
+- Testing in the VM: Playwright attached over `--cdp` forces the pages' colour scheme to light; picture dark mode
+  without it. Never run anything else in the VM while a suite runs (it stops Tidewall under the suite).
 
 ## Rules the project lives by
 

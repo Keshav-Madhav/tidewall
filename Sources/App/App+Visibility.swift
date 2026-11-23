@@ -85,11 +85,12 @@ extension App {
           walls[id] = nil
           dormant.insert(id)
           log("screen \(id) fully covered: released its page")
-        } else if let img = pendingStills[id] ?? thumbnail(Cfg.theme(for: id)) {
-          // covered since it opened, WebKit never drew it: the theme's thumbnail reads the same through a menu bar
+        } else if let img = pendingStills[id] {
           releaseToStill(id, w, img)
           log("screen \(id) covered but for its menu bar: a still picture, page released")
         }
+        // (covered since it opened, there's no picture of your own desktop: the page stays, paused. The theme's
+        // catalogue thumbnail stood in once, and its demo windows showed when you came back to the desktop)
       } else if !covered, dormant.contains(id), !releasedAway {
         dormant.remove(id)
         buildWalls()
@@ -105,10 +106,6 @@ extension App {
       self?.coverTimer = nil
       self?.dispatch(live: false)
     }
-  }
-
-  private func thumbnail(_ theme: String) -> NSImage? {
-    NSImage(contentsOf: themesRoot.appendingPathComponent("ui/thumbs/\(theme).jpg"))
   }
 
   /// The moment a display is covered but for its menu bar and Dock: a picture of its page as last seen. A page covered

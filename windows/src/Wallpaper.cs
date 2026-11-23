@@ -320,10 +320,11 @@ internal sealed class Wallpaper : Form
         }
         catch (Exception e)
         {
-            // as on the Mac: the theme's own thumbnail stands in (better than a flat colour)
-            var thumb = Path.Combine(Config.ThemesRoot, "ui", "thumbs", theme + ".jpg");
-            if (File.Exists(thumb)) { BackgroundImage = Image.FromStream(new MemoryStream(File.ReadAllBytes(thumb))); BackgroundImageLayout = ImageLayout.Zoom; }
-            Log.Write($"[{theme}] no still picture ({e.Message}): {(File.Exists(thumb) ? "its thumbnail" : "the wall's colour")} stands in");
+            // no picture of your own desktop to stand in: the page stays (paused) rather than something that isn't
+            // yours (the theme's thumbnail has demo windows on it) or a blank
+            Log.Write($"[{theme}] no still picture ({e.Message}): the page stays, paused");
+            Frozen = false;
+            return;
         }
         Ready = false;
         Controls.Remove(web);
