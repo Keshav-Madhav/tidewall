@@ -38,14 +38,15 @@ const PAINT = new Image(); PAINT.decoding = 'async';
 function panelFor(i, n) { const P = ['backdrop_l', 'backdrop', 'backdrop_r']; return n <= 1 ? P[1] : n === 2 ? P[1 + i] : P[(i + (n === 3 ? 0 : 1)) % 3]; }
 const showPanel = (i, n) => { const src = `snow/${panelFor(i, n)}.jpg`; if (!PAINT.src.endsWith(src)) PAINT.src = src; };
 setTimeout(() => { if (!PAINT.src) showPanel(0, 1); }, 600);              // no word from the host about other screens
-PAINT.onload = () => drawBackdrop();
+PAINT.onload = () => { drawBackdrop(); findMoon(); };
 // the backdrop is painted once into a 2D canvas, then handed to WebGL as a texture and the canvas freed: one layer, not two
 function drawBackdrop() { paintBackdrop(); backdropToGL(); }
 function paintBackdrop() {
   if (PAINT.complete && PAINT.naturalWidth) {
     cv.width = Math.round(W * K); cv.height = Math.round(H * K);
     const x = cv.getContext('2d'), iw = PAINT.naturalWidth, ih = PAINT.naturalHeight, s = Math.max(cv.width / iw, cv.height / ih);
-    x.imageSmoothingQuality = 'high'; x.drawImage(PAINT, (cv.width - iw * s) / 2, cv.height - ih * s, iw * s, ih * s); return;
+    x.imageSmoothingQuality = 'high'; x.drawImage(PAINT, (cv.width - iw * s) / 2, cv.height - ih * s, iw * s, ih * s);
+    x.setTransform(K, 0, 0, K, 0, 0); snowman(x); return;
   }
   cv.width = Math.round(W * K); cv.height = Math.round(H * K);
   const x = cv.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); const R = rng(4);
@@ -83,6 +84,89 @@ function paintBackdrop() {
     x.fillStyle = 'rgba(232,238,252,.85)'; for (let t = 1; t <= 4; t++) { const yy = py - h + h * t / 4.4, ww = h * .13 * t; x.beginPath(); x.ellipse(px - ww * .25, yy - 1.5, ww * .55, 1.6, -.1, 0, 7); x.fill(); } };
   for (let px = -10; px < W + 20; px += 10 + R() * 26) pine(px, H - 4 + R() * 10, 34 + R() * 60);
   x.fillStyle = '#e9eef9'; x.fillRect(0, H - 6, W, 6);
+  snowman(x);
+}
+// a snowman in the foreground snow (painted once with the backdrop: nothing per frame). Moonlit from the upper right in
+// the painting's own palette; a cranberry scarf is the one bit of colour. Its feet sink into the ground drift.
+function snowman(x) {
+  const h = Math.max(46, Math.min(96, H * .085)), cx = W * .23, base = H - 12;
+  x.save(); x.filter = 'blur(.45px)'; x.globalAlpha = .93;                 // painted softness, not a sticker
+  const ball = (cy, r) => {
+    const g = x.createRadialGradient(cx + r * .35, cy - r * .4, r * .1, cx, cy, r * 1.05);
+    g.addColorStop(0, '#e8ebf8'); g.addColorStop(.5, '#cdd2ea'); g.addColorStop(.82, '#9da4c9'); g.addColorStop(1, '#7d84ae');
+    x.fillStyle = g; x.beginPath(); x.ellipse(cx, cy, r, r * .94, 0, 0, 7); x.fill(); };
+  // a soft shadow on the snow, away from the moon
+  const sh = x.createRadialGradient(cx - h * .18, base, 0, cx - h * .18, base, h * .5);
+  sh.addColorStop(0, 'rgba(70,78,120,.35)'); sh.addColorStop(1, 'rgba(70,78,120,0)');
+  x.fillStyle = sh; x.beginPath(); x.ellipse(cx - h * .18, base, h * .5, h * .09, 0, 0, 7); x.fill();
+  const r1 = h * .25, r2 = h * .18, r3 = h * .13, y1 = base - r1 * .8, y2 = y1 - r1 * .78 - r2 * .72, y3 = y2 - r2 * .78 - r3 * .7;
+  // twig arms (behind the middle ball)
+  x.strokeStyle = '#4b3c38'; x.lineWidth = Math.max(1.4, h * .022); x.lineCap = 'round';
+  x.beginPath(); x.moveTo(cx - r2 * .8, y2); x.lineTo(cx - r2 * 2.1, y2 - r2 * .9); x.moveTo(cx - r2 * 1.7, y2 - r2 * .62); x.lineTo(cx - r2 * 1.95, y2 - r2 * 1.15);
+  x.moveTo(cx + r2 * .8, y2 - r2 * .1); x.lineTo(cx + r2 * 2.05, y2 - r2 * .55); x.moveTo(cx + r2 * 1.65, y2 - r2 * .38); x.lineTo(cx + r2 * 1.95, y2 - r2 * .85); x.stroke();
+  ball(y1, r1); ball(y2, r2); ball(y3, r3);
+  // the scarf: a band round the neck and a tail falling away from the wind
+  x.fillStyle = '#74303f'; x.beginPath(); x.ellipse(cx, y3 + r3 * .78, r3 * 1.02, r3 * .26, 0, 0, 7); x.fill();
+  x.beginPath(); x.moveTo(cx - r3 * .45, y3 + r3 * .85); x.lineTo(cx - r3 * .2, y3 + r3 * .9); x.lineTo(cx - r3 * .38, y3 + r3 * 2.05); x.lineTo(cx - r3 * .7, y3 + r3 * 1.95); x.closePath(); x.fill();
+  x.fillStyle = 'rgba(255,255,255,.12)'; x.beginPath(); x.ellipse(cx + r3 * .25, y3 + r3 * .7, r3 * .5, r3 * .1, 0, 0, 7); x.fill();
+  // coal eyes, a carrot nose turned a little toward the moon, coal buttons
+  x.fillStyle = '#272a38';
+  for (const dx of [-.32, .3]) { x.beginPath(); x.arc(cx + dx * r3, y3 - r3 * .18, Math.max(1.1, r3 * .1), 0, 7); x.fill(); }
+  for (const k of [-.35, .1]) { x.beginPath(); x.arc(cx + r2 * .05, y2 + k * r2, Math.max(1.1, r2 * .09), 0, 7); x.fill(); }
+  x.fillStyle = '#c4763a'; x.beginPath(); x.moveTo(cx + r3 * .05, y3 + r3 * .02); x.lineTo(cx + r3 * .95, y3 + r3 * .16); x.lineTo(cx + r3 * .05, y3 + r3 * .26); x.closePath(); x.fill();
+  x.restore();
+}
+
+/* ---------- the Christmas season: now and then, a sleigh across the moon ---------- */
+// Mid-November to Epiphany only, and rarely (the first a minute and a half in, then every ten to twenty minutes): a
+// small silhouette, Santa's sleigh and four reindeer, crossing in front of the moon. Its own little canvas exists only
+// while it flies.
+const SEASON = (() => { const d = new Date(), m = d.getMonth(), day = d.getDate(); return (m === 10 && day >= 15) || m === 11 || (m === 0 && day <= 6); })();
+let moon = null, sleigh = null, nextSleigh = 90000;
+function findMoon() {                     // the brightest spot in the painting's sky, where the moon is on this display
+  if (!PAINT.naturalWidth) return;
+  const c = document.createElement('canvas'), sw = 96, sh = Math.round(96 * PAINT.naturalHeight / PAINT.naturalWidth);
+  c.width = sw; c.height = sh; const g = c.getContext('2d'); g.drawImage(PAINT, 0, 0, sw, sh);
+  const d = g.getImageData(0, 0, sw, Math.round(sh * .45)).data; let best = -1, bx = 0, by = 0;
+  for (let i = 0; i < d.length; i += 4) { const l = d[i] + d[i + 1] + d[i + 2]; if (l > best) { best = l; bx = (i / 4) % sw; by = Math.floor(i / 4 / sw); } }
+  const s = Math.max(W / PAINT.naturalWidth, H / PAINT.naturalHeight), iw = PAINT.naturalWidth * s, ih = PAINT.naturalHeight * s;
+  moon = { x: (W - iw) / 2 + (bx + .5) / sw * iw, y: H - ih + (by + .5) / sh * ih };
+}
+function stepSleigh(now) {
+  if (!SEASON || !moon) return;
+  if (!sleigh && now > nextSleigh) {
+    const c = document.createElement('canvas'); c.className = 'layer'; c.style.zIndex = 2; document.body.appendChild(c);
+    c.width = Math.round(W * K); c.height = Math.round(H * K);
+    const dir = Math.random() < .5 ? -1 : 1;
+    sleigh = { c, t0: now, dur: 11000, dir, x0: moon.x - dir * W * .28, x1: moon.x + dir * W * .28, y: moon.y + 4 };
+  }
+  if (!sleigh) return;
+  const u = (now - sleigh.t0) / sleigh.dur, x = sleigh.c.getContext('2d');
+  x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, sleigh.c.width, sleigh.c.height);
+  if (u >= 1) { sleigh.c.remove(); sleigh = null; nextSleigh = now + 600000 + Math.random() * 600000; return; }
+  const px = sleigh.x0 + (sleigh.x1 - sleigh.x0) * u, py = sleigh.y + (1 - Math.sin(u * Math.PI)) * H * .05;   // a gentle arc that crests on the moon
+  const a = Math.min(1, u * 6, (1 - u) * 6) * .88;                      // it comes out of the dusk and goes back into it
+  x.setTransform(K * sleigh.dir, 0, 0, K, px * K, py * K); x.globalAlpha = a; drawSleigh(x, now / 1000, Math.max(.85, Math.min(1.5, H / 760)));
+}
+function drawSleigh(x, t, k) {
+  x.fillStyle = x.strokeStyle = '#1c2240'; x.lineCap = 'round'; x.lineJoin = 'round';
+  // the sleigh: a curled runner, the body, Santa and his sack
+  x.lineWidth = 1.3 * k; x.beginPath(); x.moveTo(-34 * k, 4 * k); x.lineTo(-6 * k, 4 * k); x.quadraticCurveTo(2 * k, 4 * k, 2 * k, -2 * k); x.stroke();
+  x.beginPath(); x.moveTo(-32 * k, 2 * k); x.lineTo(-30 * k, -6 * k); x.lineTo(-12 * k, -6 * k); x.quadraticCurveTo(-6 * k, -6 * k, -4 * k, 1 * k); x.lineTo(-32 * k, 2 * k); x.fill();
+  x.beginPath(); x.arc(-16 * k, -10 * k, 4.2 * k, 0, 7); x.fill();                     // Santa
+  x.beginPath(); x.arc(-15 * k, -15 * k, 2.4 * k, 0, 7); x.fill();
+  x.beginPath(); x.ellipse(-26 * k, -9 * k, 4.5 * k, 4 * k, -.3, 0, 7); x.fill();      // the sack
+  // the reins, then four reindeer in pairs, legs gathering and stretching as they run
+  x.lineWidth = .7 * k; x.beginPath(); x.moveTo(-13 * k, -10 * k); x.lineTo(30 * k, -5 * k); x.stroke();
+  for (let i = 0; i < 4; i++) {
+    const rx = 8 * k + i * 9.5 * k, ph = t * 9 + i * .9, bob = Math.sin(ph) * 1.2 * k, ry = -4 * k + bob - (i % 2) * 1.5 * k;
+    x.beginPath(); x.ellipse(rx, ry, 4.2 * k, 1.9 * k, -.12, 0, 7); x.fill();               // body
+    x.beginPath(); x.moveTo(rx + 3 * k, ry - .5 * k); x.lineTo(rx + 5.4 * k, ry - 3.8 * k); x.lineWidth = 1.2 * k; x.stroke();   // neck
+    x.beginPath(); x.ellipse(rx + 6 * k, ry - 4.2 * k, 1.5 * k, 1 * k, .3, 0, 7); x.fill();   // head
+    x.lineWidth = .6 * k; x.beginPath(); x.moveTo(rx + 5.6 * k, ry - 5 * k); x.lineTo(rx + 4.6 * k, ry - 7.4 * k); x.lineTo(rx + 3.4 * k, ry - 8 * k); x.moveTo(rx + 4.8 * k, ry - 6.8 * k); x.lineTo(rx + 6 * k, ry - 8.2 * k); x.stroke();   // antlers
+    const sw = Math.sin(ph) * 2.4 * k; x.lineWidth = .8 * k; x.beginPath();
+    x.moveTo(rx + 2.5 * k, ry + 1 * k); x.lineTo(rx + 4 * k + sw, ry + 4.6 * k); x.moveTo(rx - 2.5 * k, ry + 1 * k); x.lineTo(rx - 4 * k - sw, ry + 4.4 * k); x.stroke();   // legs
+  }
 }
 
 /* ---------- 2. windows: eased slots, each carrying its own drift ---------- */
@@ -113,8 +197,9 @@ function setTargets(list) {
       cur.push(c); used.add(c); }
   }
   settled = true;
-  for (const c of cur) if (!used.has(c) && c.alive) {           // closed: its drift stays behind and melts
-    c.alive = false; orphans.push({ x: c.x, y: c.y, w: c.w, cols: c.cols, melt: 0, owner: c.owner });
+  for (const c of cur) if (!used.has(c) && c.alive) {           // gone (closed, minimised, Show Desktop): with nothing under it, its snow falls
+    c.alive = false; if (c.owner !== '__icon') { const keep = Float32Array.from(c.cols); shed(c, 1, 0, 40); c.cols = keep; }   // tumbling clumps, not a ledge in mid-air
+    else orphans.push({ x: c.x, y: c.y, w: c.w, cols: c.cols, melt: 0, owner: c.owner });
     if (c.owner !== '__icon') { away.push({ owner: c.owner, w: c.w, cols: Float32Array.from(c.cols), at: now }); if (away.length > 24) away.shift(); }
   }
   cur = cur.filter(c => c.alive);
@@ -139,6 +224,7 @@ let ground = new Float32Array(1), wind = 0, windT = 0;
 function makeFlakes() {
   flakes.length = 0; const R = rng(9), n = Math.round(W * H / 1500);
   for (let i = 0; i < n; i++) { const layer = R() < .45 ? 0 : R() < .65 ? 1 : 2;
+    if (layer === 0 && R() < .45) continue;                                // (far flakes thinned: a cleaner sky)
     flakes.push({ x: R() * W, y: R() * H, layer, size: [1.2, 2.1, 3.4][layer] * (.7 + R() * .7), v: [22, 38, 60][layer] * (.75 + R() * .5), ph: R() * 6.28, sw: .6 + R() * 1.4, a: [.45, .7, .9][layer] }); }
   ground = new Float32Array(Math.ceil(W / COL) + 1); for (let i = 0; i < ground.length; i++) ground[i] = 10 + 14 * vnoise(i * .03, 7);
 }
@@ -293,12 +379,13 @@ function loop0(now) {
   if (lastT && now - lastT < 15.5) { requestAnimationFrame(loop); return; }      // 60 fps is plenty for falling snow
   const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now;
   if (lastT) fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
-  stepWins(dt); stepSnow(dt, now); render();
+  stepWins(dt); stepSnow(dt, now); render(); stepSleigh(now);
   requestAnimationFrame(loop);
 }
 
 /* ---------- boot + host protocol ---------- */
-function build() { W = innerWidth; H = innerHeight; $('gl').width = Math.round(W * K); $('gl').height = Math.round(H * K); drawBackdrop(); makeFlakes(); }
+function build() { W = innerWidth; H = innerHeight; $('gl').width = Math.round(W * K); $('gl').height = Math.round(H * K); drawBackdrop(); makeFlakes(); findMoon(); }
+window.__twSleigh = () => { nextSleigh = 0; };   // (tests: one now)
 let FB = null; function commit() { } function refresh() { }
 let lastWins = null, deskIc = [];
 const handle = m => {
