@@ -408,7 +408,9 @@ void main() {
 /* ---------- targets ---------- */
 let fT = null, fF = null, fw = 1, fh = 1;
 function buildTargets() {
-  const dw = Math.round(W * K), dh = Math.round(H * K); cv.width = dw; cv.height = dh;
+  // three quarters of the display's pixels each way: soft glowing wax shows no difference, and the GPU does about half
+  // the work (Optimize for scales the page's pixel ratio on top of this)
+  const RS = .75, dw = Math.round(W * K * RS), dh = Math.round(H * K * RS); cv.width = dw; cv.height = dh;
   if (fT) gl.deleteTexture(fT); if (fF) gl.deleteFramebuffer(fF);
   fw = Math.ceil(dw / 2); fh = Math.ceil(dh / 2);
   fT = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, fT);

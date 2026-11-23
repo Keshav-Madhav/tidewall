@@ -4,9 +4,12 @@
 label=$1; secs=$2; shift 3
 tools="$(cd "$(dirname "$0")" && pwd)"
 cd "${TIDEWALL_ROOT:-$tools/..}"
-./tidewall --bench --themes "$PWD/themes" --secs $((secs+7)) "$@" > /tmp/tidewall-bench.log 2>&1 &
+# TIDEWALL_BENCH_WARM=<s>: how long the wall runs before measuring starts (default 6; a wall still starting up — fading
+# in, laying out, settling at the full rate — isn't at rest yet: use ~20 to measure resting cost)
+warm=${TIDEWALL_BENCH_WARM:-6}
+./tidewall --bench --themes "$PWD/themes" --secs $((secs+warm+1)) "$@" > /tmp/tidewall-bench.log 2>&1 &
 app=$!
-sleep 6
+sleep $warm
 python3 "$tools/gputime.py" > /tmp/g0.json; t0=$(python3 -c "import time;print(time.time())")
 web=$(grep -o 'webpid=[0-9]*' /tmp/tidewall-bench.log | tail -1 | cut -d= -f2)
 n=0; cpu=0

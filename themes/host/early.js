@@ -11,7 +11,7 @@
   const RES = HOST.res > 0 && HOST.res < 1 ? HOST.res : 1;
   const Q = Object.freeze([
     { tier: 0, res: RES, calm: 20, live: 45, hover: 30, count: .65, sim: .7, fx: 0 },
-    { tier: 1, res: 1, calm: 30, live: 0, hover: 60, count: 1, sim: 1, fx: 1 },
+    { tier: 1, res: 1, calm: 24, live: 0, hover: 60, count: 1, sim: 1, fx: 1 },   // (24 at rest: gentle motion reads smooth at film rate)
     { tier: 2, res: 1, calm: 60, live: 0, hover: 0, count: 1, sim: 1, fx: 2 },
   ][HOST.tier === 0 || HOST.tier === 2 ? HOST.tier : 1]);
   window.__twQ = Q;
@@ -89,7 +89,7 @@
   };
 
   // Frame pacing. Left alone every page would draw at the display's refresh and the slow ambient ones would wake 120
-  // times a second to skip most frames. Instead a page rests at a calm rate (30, or less if it asks: window.__twCalm),
+  // times a second to skip most frames. Instead a page rests at a calm rate (24 in Balanced, or less if it asks: window.__twCalm),
   // gets every frame the display shows while a window is dragged or the scene settles (window.__twSettle: a morph,
   // beds easing, a cross-fade; tools/smooth.sh measures it), and 60 while the pointer is over the wallpaper (120 there
   // cost 3-5 points of CPU, and the pointer can wander for minutes). A rate picked in Settings replaces all of it:
