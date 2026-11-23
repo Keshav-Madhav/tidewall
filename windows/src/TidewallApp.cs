@@ -39,7 +39,7 @@ internal sealed class TidewallApp : ApplicationContext
         tracker = new WindowTracker(loop);
         tracker.Changed += (_, live) => Dispatch(live);
         deskIcons = new DeskIcons();
-        tracker.ItemMoved += deskIcons.ItemMoved;
+        tracker.Released += deskIcons.Released;
         Updates = new Updater();
         Updates.Changed += () => { settings?.PushState(); RebuildMenu(); };
         deskIcons.Changed += () =>
@@ -90,10 +90,15 @@ internal sealed class TidewallApp : ApplicationContext
         Wallpaper.SetPace(power.Pace, walls);
         Log.Write($"power: {(power.OnBattery ? "battery" : "mains")}{(power.Saver ? ", saver" : "")}, pace {power.Pace}{(power.Paused ? ", paused" : "")}");
         menuTimer.Tick += (_, _) => RefreshUsageLines();
+        usageMarks.Tick += (_, _) => menuUsage.Mark(settings is { IsDisposed: false } s ? s.OwnProcesses : null);
+        usageMarks.Start(); menuUsage.Mark();
         clock.Tick += (_, _) => { CheckIdle(); if (++ticks % 10 == 0) CheckPower(); CheckAway(); CheckCovered(); };
         clock.Start();
         pointer.Tick += (_, _) => FollowPointer();
-        Log.Write($"Tidewall {Config.Version} on Windows {Environment.OSVersion.Version}; themes {Config.ThemesRoot}");
+        Log.Write($"Tidewall {Config.Version} on Windows {Environment.OSVersion.Version}; themes {Config.ThemesRoot}{(Args.Has("--restarted") ? " (restarted after a crash)" : "")}");
+        // crashed or hung (after its first minute): Windows starts it again, quietly, as the Mac's login agent does. A
+        // quit, an update or the uninstaller stopping it isn't a crash. (Not for a Windows Update restart: that's login's.)
+        if (!Args.Has("--test")) Native.RegisterApplicationRestart("--background --restarted", 4 | 8);   // RESTART_NO_PATCH | RESTART_NO_REBOOT
     }
 
     /// A wall whose desktop window has gone (Explorer restarted) can't be closed cleanly: WebView2 throws, and it's let go.
@@ -171,12 +176,13 @@ internal sealed class TidewallApp : ApplicationContext
         catch (Exception e) { Log.Write($"JSERR could not start the {wall.Theme} wall: {e.Message}"); }
     }
 
-    /// One world across the displays that show a spanning wall with the same scale (mixed scales: each its own).
-    IReadOnlyList<Display>? WorldFor(Wallpaper w)
+    /// One world across the displays that show a spanning wall, measured in points so displays at different scales
+    /// still join up (a laptop at 150% beside a monitor at 100%), as on the Mac.
+    IReadOnlyList<WorldPart>? WorldFor(Wallpaper w)
     {
         if (!Config.SpanWorlds || !Config.SpanThemes.Contains(w.Theme)) return null;
-        var same = walls.Where(o => o.Theme == w.Theme && o.DeviceDpi == w.DeviceDpi).Select(o => o.Screen).ToList();
-        return same.Count > 1 ? same : null;
+        var same = walls.Where(o => o.Theme == w.Theme).Select(o => (o.Screen, o.PixelScale)).ToList();
+        return same.Count > 1 ? World.Layout(same) : null;
     }
 
     public void Dispatch(bool live)
@@ -193,8 +199,11 @@ internal sealed class TidewallApp : ApplicationContext
             bool rest = Resting || covered;
             // windows off: it carries on as if they weren't there. A wall that comes up resting lays itself out round the
             // windows once first, then rests (as on the Mac), rather than resting on an empty desk
-            if (!rest || live || !w.LaidOut) w.SendWindows(Config.ReactWindows ? windows : Array.Empty<TrackedWindow>(), live);
-            w.SetPaused(rest);
+            bool first = !w.LaidOut;
+            if (!rest || live || first) w.SendWindows(Config.ReactWindows ? windows : Array.Empty<TrackedWindow>(), live);
+            // (its first layout gets 1.5 s to draw before it rests, as on the Mac: paused at once it froze half-drawn)
+            if (rest && first) _ = Task.Delay(1500).ContinueWith(_ => loop.BeginInvoke(() => Dispatch(false)));
+            else w.SetPaused(rest);
         }
         // nothing to follow the pointer for: no ticks at all (it ran 60 times a second all day, paused or not)
         pointer.Enabled = walls.Any(w => w.Ready && !w.Paused && w.WantsCursor) && !Resting;
@@ -360,9 +369,10 @@ internal sealed class TidewallApp : ApplicationContext
 
     readonly Usage menuUsage = new();
     readonly System.Windows.Forms.Timer menuTimer = new() { Interval = 2000 };
-    readonly ToolStripMenuItem[] usageLines = [new("CPU  –") { Enabled = false }, new("GPU  –") { Enabled = false }, new("Memory  –") { Enabled = false }];
+    readonly ToolStripMenuItem[] usageLines = [new("CPU  –") { Enabled = false }, new("GPU  –") { Enabled = false }, new("Memory  –") { Enabled = false }, new("") { Enabled = false, Visible = false }];
+    readonly System.Windows.Forms.Timer usageMarks = new() { Interval = 15000 };
 
-    static string DisplayName(Display d, int i) => d.Primary ? "Main display" : $"Display {i + 1}";
+    static string DisplayName(Display d, int i) => DisplayNames.Of(d) ?? (d.Primary ? "Main display" : $"Display {i + 1}");
     static string LabelOf(string id) => Config.Label(id);
 
     /// "Name · tier": the name, and the tier quietly on the right.
@@ -437,10 +447,14 @@ internal sealed class TidewallApp : ApplicationContext
 
     void RefreshUsageLines()
     {
-        var u = menuUsage.Measure();
-        usageLines[0].Text = $"CPU      {u.Cpu:0.0}%";
-        usageLines[1].Text = u.Gpu < 0 ? "GPU      –" : $"GPU      {u.Gpu:0.0}%";
+        // the walls' cost (over the last minute, once there is one) and, apart, the open window's, as on the Mac
+        var window = settings is { IsDisposed: false } s ? s.OwnProcesses : null;
+        var u = menuUsage.Measure(window);
+        bool minute = u.AvgCpu >= 0;
+        usageLines[0].Text = $"CPU      {(minute ? u.AvgCpu : u.Cpu):0.0}%{(minute ? "  last minute" : "")}";
+        usageLines[1].Text = u.Gpu < 0 ? "GPU      –" : $"GPU      {u.Gpu:0.0}%{(window is { Count: > 0 } ? "  incl. window" : "")}";
         usageLines[2].Text = $"Memory   {u.MemMB:0} MB";
+        { usageLines[3].Text = u.WindowMemMB > 0 ? $"+ window {u.WindowMemMB:0} MB, freed on close" : ""; usageLines[3].Visible = u.WindowMemMB > 0; }
     }
 
     protected override void ExitThreadCore()

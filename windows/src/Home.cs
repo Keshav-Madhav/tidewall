@@ -11,7 +11,9 @@ static class Home
 {
     public readonly record struct Place(string Name, double Lat, double Lon, string Tz, string Cc);
 
-    public static Place? Current { get; } = Find();
+    // (lazy: the tables below must exist first; a static initialised in order hit them before they did)
+    static readonly Lazy<Place?> current = new(Find);
+    public static Place? Current => current.Value;
 
     /// Windows names time zones its own way ("India Standard Time"); .NET maps them to the standard names, but the
     /// mapping (CLDR) keeps some old spellings that zone.tab has since renamed
@@ -36,16 +38,13 @@ static class Home
             string tz = Args.Value("--tz") ?? Iana(TimeZoneInfo.Local) ?? "";
             if (tz.Length == 0) return null;
             if (Renamed.TryGetValue(tz, out var renamed)) tz = renamed;
-            using var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("zone.tab");
-            if (s == null) return null;
-            using var r = new StreamReader(s);
-            for (string? line; (line = r.ReadLine()) != null;)
+            foreach (var line in Lines("zone.tab"))
             {
-                if (line.StartsWith('#')) continue;
                 var f = line.Split('\t');
                 if (f.Length < 3 || f[2] != tz) continue;
                 if (Coordinates(f[1]) is not { } at) return null;
                 var city = tz[(tz.LastIndexOf('/') + 1)..].Replace('_', ' ');
+                Log.Write($"site: {TimeZoneInfo.Local.Id} is {tz}");
                 return new Place(city, at.Lat, at.Lon, tz, f[0]);
             }
             Log.Write($"site: {tz} isn't in the time-zone table");
@@ -54,14 +53,38 @@ static class Home
         return null;
     }
 
+    /// The standard name of a Windows time zone, from CLDR's table (shipped: the app runs without .NET's globalization
+    /// data, so it can't convert them itself). The user's region narrows a shared zone to the right city ("W. Europe
+    /// Standard Time" in Italy is Rome); otherwise the zone's main city.
     static string? Iana(TimeZoneInfo zone)
     {
         if (zone.HasIanaId) return zone.Id;
-        // the region narrows a shared Windows zone to the right city ("W. Europe Standard Time" in Italy is Rome)
-        string region = "001";
-        try { region = RegionInfo.CurrentRegion.TwoLetterISORegionName; } catch (ArgumentException) { }
-        return TimeZoneInfo.TryConvertWindowsIdToIanaId(zone.Id, region, out var id) ? id
-             : TimeZoneInfo.TryConvertWindowsIdToIanaId(zone.Id, out id) ? id : null;
+        string? any = null, mine = null, region = UserRegion();
+        foreach (var line in Lines("windowsZones.tsv"))
+        {
+            var f = line.Split('\t');
+            if (f.Length < 3 || f[0] != zone.Id) continue;
+            if (f[1] == "001") any = f[2];
+            if (f[1] == region) mine = f[2];
+        }
+        return mine ?? any;
+    }
+
+    /// Windows' own idea of where the user is (Settings ▸ Time & language ▸ Region: two letters, "US").
+    static string? UserRegion()
+    {
+        try { var sb = new System.Text.StringBuilder(16); return GetUserDefaultGeoName(sb, sb.Capacity) > 1 ? sb.ToString() : null; }
+        catch (Exception) { return null; }                                   // (before Windows 10 1709)
+    }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern int GetUserDefaultGeoName(System.Text.StringBuilder name, int size);
+
+    static IEnumerable<string> Lines(string resource)
+    {
+        using var s = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource);
+        if (s == null) yield break;
+        using var r = new StreamReader(s);
+        for (string? line; (line = r.ReadLine()) != null;) if (!line.StartsWith('#')) yield return line;
     }
 
     /// zone.tab's "+2232+08822" or "+404251-0740023": ±DDMM[SS] then ±DDDMM[SS].
@@ -86,15 +109,18 @@ static class Home
         : "";
 
     /// Wind Map's default region: the user's own country, if the map has it (its regions are ISO 3166 three-letter codes).
-    public static string? Region { get; } = FindRegion();
+    static readonly Lazy<string?> region = new(FindRegion);
+    public static string? Region => region.Value;
 
     static string? FindRegion()
     {
         try
         {
-            string? iso3 = null;
-            if (Current is { } p) try { iso3 = new RegionInfo(p.Cc).ThreeLetterISORegionName; } catch (ArgumentException) { }
-            iso3 ??= RegionInfo.CurrentRegion.ThreeLetterISORegionName;
+            // the country of your time zone's city (as on the Mac), else Windows' region setting; the map's regions are
+            // three-letter codes (CLDR's table turns the two-letter ones into those)
+            var cc = Current?.Cc ?? UserRegion();
+            var iso3 = cc == null ? null : Lines("countries.tsv").Select(l => l.Split('\t')).FirstOrDefault(f => f.Length == 2 && f[0] == cc)?[1];
+            if (iso3 == null) { Log.Write($"home region: none for {cc ?? "no region"}"); return null; }
             var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(Config.ThemesRoot, "variants.json")));
             foreach (var g in manifest?["wind"]?["groups"]?.AsArray() ?? [])
                 foreach (var o in g?["options"]?.AsArray() ?? [])

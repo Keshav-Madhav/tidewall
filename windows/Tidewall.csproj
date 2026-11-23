@@ -30,6 +30,8 @@
     <EmbeddedResource Include="web\bridge.js" LogicalName="bridge.js" />
     <EmbeddedResource Include="web\frame.js" LogicalName="frame.js" />
     <EmbeddedResource Include="zone.tab" LogicalName="zone.tab" />
+    <EmbeddedResource Include="windowsZones.tsv" LogicalName="windowsZones.tsv" />
+    <EmbeddedResource Include="countries.tsv" LogicalName="countries.tsv" />
   </ItemGroup>
 
 </Project>

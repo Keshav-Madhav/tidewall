@@ -20,9 +20,9 @@ internal sealed class DeskIcons : IDisposable
     readonly System.Windows.Forms.Timer soon = new() { Interval = 350 };
     IntPtr view;
 
-    /// An item moved in some list: if it's the desktop's, read the icons again shortly (as the Mac does after a drag),
-    /// rather than at the next 2-second look.
-    public void ItemMoved(IntPtr list)
+    /// The mouse let go of a window: if it's the desktop's icon list (a drag ended there), read the icons again shortly
+    /// after, as the Mac does, rather than at the next 2-second look.
+    public void Released(IntPtr list)
     {
         if (list != view || view == IntPtr.Zero || !timer.Enabled) return;
         soon.Stop(); soon.Start();

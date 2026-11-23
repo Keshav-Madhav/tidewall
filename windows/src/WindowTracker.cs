@@ -42,6 +42,7 @@ internal sealed class WindowTracker : IDisposable
         Hook(Native.EVENT_OBJECT_DESTROY, Native.EVENT_OBJECT_HIDE);
         Hook(Native.EVENT_OBJECT_LOCATIONCHANGE, Native.EVENT_OBJECT_LOCATIONCHANGE);
         Hook(Native.EVENT_OBJECT_CLOAKED, Native.EVENT_OBJECT_UNCLOAKED);
+        Hook(EVENT_SYSTEM_CAPTURESTART, EVENT_SYSTEM_CAPTUREEND);           // (only on clicks: cheap)
         slow.Tick += (_, _) => Look();
         slow.Start();
         trailing.Tick += (_, _) => { trailing.Stop(); pending = false; Look(); };
@@ -58,9 +59,9 @@ internal sealed class WindowTracker : IDisposable
         set { if (value == !slow.Enabled) return; slow.Enabled = !value; if (!value) Look(); }
     }
 
-    const int OBJID_CLIENT = -4;
-    /// An item moved inside some window's list (the desktop's icon list among them: an icon dragged or arranged).
-    public event Action<IntPtr>? ItemMoved;
+    const uint EVENT_SYSTEM_CAPTURESTART = 0x8, EVENT_SYSTEM_CAPTUREEND = 0x9;
+    /// A window the mouse had captured was let go (a drag ended in it: on the desktop, an icon moved).
+    public event Action<IntPtr>? Released;
 
     void Hook(uint min, uint max) =>
         hooks.Add(Native.SetWinEventHook(min, max, IntPtr.Zero, onEvent, 0, 0, Native.WINEVENT_OUTOFCONTEXT));
@@ -69,7 +70,9 @@ internal sealed class WindowTracker : IDisposable
     {
         if (evt == Native.EVENT_SYSTEM_MOVESIZESTART) moving = true;
         else if (evt == Native.EVENT_SYSTEM_MOVESIZEEND) moving = false;
-        else if (idObject == OBJID_CLIENT && idChild > 0 && evt == Native.EVENT_OBJECT_LOCATIONCHANGE) { ItemMoved?.Invoke(hwnd); return; }   // (an item in a list: the desktop's icons)
+        // the mouse let go of a window it held (the end of a drag): the desktop's icon list among them, after an icon's moved
+        if (evt == EVENT_SYSTEM_CAPTUREEND) { if (hwnd != IntPtr.Zero) Released?.Invoke(hwnd); return; }
+        if (evt == EVENT_SYSTEM_CAPTURESTART) return;
         else if (idObject != Native.OBJID_WINDOW || hwnd == IntPtr.Zero) return;
         if (evt == Native.EVENT_OBJECT_DESTROY) classes.Remove(hwnd);
         // a child window (a browser's page, a video, an Office pane) moving can't move a top-level window
@@ -151,6 +154,7 @@ internal sealed class WindowTracker : IDisposable
             {
                 var info = FileVersionInfo.GetVersionInfo(path);
                 var described = (info.FileDescription ?? "").Trim();
+                if (described.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) described = described[..^4];   // ("Notepad.exe": some describe themselves by their file)
                 if (described.Length is > 0 and < 40) name = described;
                 else if ((info.ProductName ?? "").Trim() is { Length: > 0 and < 40 } product) name = product;
             }

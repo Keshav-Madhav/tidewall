@@ -60,6 +60,7 @@ internal static partial class Native
     [DllImport("user32.dll")] public static extern bool UnregisterPowerSettingNotification(IntPtr handle);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool SystemParametersInfo(int action, int param, StringBuilder value, int flags);
     [DllImport("user32.dll")] public static extern int GetSysColor(int index);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern int RegisterApplicationRestart(string commandLine, int flags);
     [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     public static string Title(IntPtr h) { var sb = new StringBuilder(256); GetWindowText(h, sb, sb.Capacity); return sb.ToString(); }
     /// A process's program file (also for one running as administrator, which Process.MainModule can't open).

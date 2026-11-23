@@ -60,6 +60,7 @@ internal sealed class Wallpaper : Form
     public Wallpaper? Replacing { get; set; }
 
     bool fadeIn;
+    string? hideScript;
     readonly List<DateTime> crashes = [];
     static readonly Color Paper = Color.FromArgb(239, 228, 204);
 
@@ -76,7 +77,10 @@ internal sealed class Wallpaper : Form
 
         await web.EnsureCoreWebView2Async(await EnvironmentAsync());
         var core = web.CoreWebView2;
-        if (fadeIn) await core.AddScriptToExecuteOnDocumentCreatedAsync("document.documentElement.style.opacity='0'");
+        // (the page's root doesn't exist yet when this runs: it's hidden as soon as it does; and only on this first load,
+        // so a reload later, a lost GPU context say, never starts hidden)
+        if (fadeIn) hideScript = await core.AddScriptToExecuteOnDocumentCreatedAsync(
+            "(()=>{const h=()=>{const e=document.documentElement;if(e){e.style.opacity='0';return true}};if(!h())new MutationObserver((_,o)=>{if(h())o.disconnect()}).observe(document,{childList:true})})()");
         core.Settings.AreDefaultContextMenusEnabled = false;
         core.Settings.AreDevToolsEnabled = Args.Has("--devtools");
         core.Settings.IsStatusBarEnabled = false;
@@ -141,6 +145,7 @@ internal sealed class Wallpaper : Form
                 if (Pace != 1) Send($"{{\"t\":\"pace\",\"k\":{Pace}}}");
                 Paused = false; LaidOut = false;                           // (it's told to rest after its first layout: Dispatch)
                 if (fadeIn) { fadeIn = false; FadeIn(); }
+                else Unhide();                                             // (never left hidden, whatever order a busy start took)
                 Log.Write($"[{theme}] ready on {Screen.Name} {Screen.Bounds} scale {PixelScale:0.##} in {(DateTime.UtcNow - started).TotalSeconds:0.0} s");
                 BecameReady?.Invoke(this);
                 break;
@@ -166,21 +171,26 @@ internal sealed class Wallpaper : Form
     public double PixelScale => DeviceDpi / 96.0;
 
     /// Where this display sits among the others, in page pixels.
-    public void SendDesk(IReadOnlyList<Display>? world = null)
+    /// This wall alone: a world of one.
+    WorldPart Alone => new(Screen, PixelScale, new RectangleF(0, 0, (float)(Screen.Bounds.Width / PixelScale), (float)(Screen.Bounds.Height / PixelScale)));
+
+    /// Where this display sits in its world, all in points (the page's own pixels), as the Mac says it.
+    public void SendDesk(IReadOnlyList<WorldPart>? world = null)
     {
-        var frames = (world ?? [Screen]).Select(s => s.Bounds).ToList();
-        var u = frames.Aggregate(frames[0], Rectangle.Union);
-        double k = PixelScale;
-        int Px(double v) => (int)Math.Round(v / k);
+        world ??= [Alone];
+        var frames = world.Select(p => p.Points).ToList();
+        var u = frames.Aggregate(frames[0], RectangleF.Union);
+        static int Px(double v) => (int)Math.Round(v);
         var fr = string.Join(",", frames.Select(f => $"[{Px(f.X - u.X)},{Px(f.Y - u.Y)},{Px(f.Width)},{Px(f.Height)}]"));
-        var me = Screen.Bounds;
-        var main = (world ?? [Screen]).FirstOrDefault(s => s.Primary)?.Bounds ?? me;
-        int i = frames.IndexOf(me);
+        int i = world.ToList().FindIndex(p => p.Screen.Name == Screen.Name);
+        var me = i >= 0 ? frames[i] : frames[0];
+        var main = world.FirstOrDefault(p => p.Screen.Primary)?.Points ?? me;
         var msg = $"{{\"t\":\"desk\",\"fr\":[{fr}],\"x\":{Px(me.X - u.X)},\"y\":{Px(me.Y - u.Y)},\"w\":{Px(me.Width)},\"h\":{Px(me.Height)}," +
                   $"\"uw\":{Px(u.Width)},\"uh\":{Px(u.Height)},\"i\":{Math.Max(0, i)},\"n\":{frames.Count}," +
                   $"\"mx\":{Px(main.X + main.Width / 2.0 - u.X)},\"my\":{Px(main.Y + main.Height / 2.0 - u.Y)},\"mw\":{Px(main.Width)},\"mh\":{Px(main.Height)}}}";
         if (msg == lastDesk) return;
         lastDesk = msg;
+        lastDeskIcons = "";                                                // (pages place icons by their world offset, which may have moved)
         Send(msg);
     }
 
@@ -203,11 +213,23 @@ internal sealed class Wallpaper : Form
     }
 
     /// The desktop icons in this wall's world (screen pixels in), as the page wants them: its own device pixels.
-    public void SendDeskIcons(DeskIcons di, IReadOnlyList<Display>? world = null)
+    /// The desktop's icons across its world, in this display's own device pixels (an icon on a display with another
+    /// scale goes through the world's points to get here).
+    public void SendDeskIcons(DeskIcons di, IReadOnlyList<WorldPart>? world = null)
     {
-        var frames = (world ?? [Screen]).Select(s => s.Bounds).ToList(); var f = Frame;
-        string Enc(IEnumerable<Rectangle> rs) => string.Join(",", rs.Where(r => frames.Any(w => w.IntersectsWith(r)))
-            .Select(r => $"[{r.Left - f.Left},{r.Top - f.Top},{r.Right - f.Left},{r.Bottom - f.Top}]"));
+        world ??= [Alone];
+        var mine = world.FirstOrDefault(p => p.Screen.Name == Screen.Name) ?? Alone;
+        double k = PixelScale;
+        string Local(Rectangle r, WorldPart on)
+        {
+            if (on.Screen.Name == Screen.Name) return $"[{r.Left - Frame.Left},{r.Top - Frame.Top},{r.Right - Frame.Left},{r.Bottom - Frame.Top}]";
+            PointF a = on.ToPoints(new Point(r.Left, r.Top)), b = on.ToPoints(new Point(r.Right, r.Bottom));
+            int X(float v) => (int)Math.Round((v - mine.Points.X) * k);
+            int Y(float v) => (int)Math.Round((v - mine.Points.Y) * k);
+            return $"[{X(a.X)},{Y(a.Y)},{X(b.X)},{Y(b.Y)}]";
+        }
+        string Enc(IEnumerable<Rectangle> rs) => string.Join(",", rs.Select(r => (r, on: world.FirstOrDefault(p => p.Screen.Bounds.IntersectsWith(r))))
+            .Where(x => x.on != null).Select(x => Local(x.r, x.on!)));
         var msg = $"{{\"t\":\"dicons\",\"r\":[{Enc(di.Icons)}],\"c\":[{Enc(di.Clusters)}],\"i\":[{Enc(di.Images)}]}}";
         if (msg == lastDeskIcons) return;
         lastDeskIcons = msg;
@@ -273,9 +295,16 @@ internal sealed class Wallpaper : Form
 
     void FadeIn()
     {
+        if (hideScript != null) { web.CoreWebView2?.RemoveScriptToExecuteOnDocumentCreated(hideScript); hideScript = null; }
         _ = web.CoreWebView2?.ExecuteScriptAsync("{const e=document.documentElement;e.animate([{opacity:0},{opacity:1}],{duration:700,easing:'ease-out'}).onfinish=()=>{e.style.opacity=''};e.style.opacity='1'}");
-        // once it shows, the picture beneath it isn't needed
-        _ = Task.Delay(1500).ContinueWith(_ => BeginInvoke(() => { if (IsDisposed || Frozen) return; var b = BackgroundImage; BackgroundImage = null; b?.Dispose(); web.DefaultBackgroundColor = BackColor = Paper; }));
+        // once it shows, the picture beneath it isn't needed; and whatever happened meanwhile, it's shown
+        _ = Task.Delay(1500).ContinueWith(_ => BeginInvoke(() => { if (IsDisposed || Frozen) return; Unhide(); var b = BackgroundImage; BackgroundImage = null; b?.Dispose(); web.DefaultBackgroundColor = BackColor = Paper; }));
+    }
+
+    void Unhide()
+    {
+        if (hideScript != null) { web.CoreWebView2?.RemoveScriptToExecuteOnDocumentCreated(hideScript); hideScript = null; }
+        _ = web.CoreWebView2?.ExecuteScriptAsync("{const e=document.documentElement;if(e&&e.style.opacity==='0'&&!e.getAnimations().length)e.style.opacity=''}");
     }
 
     public async Task FreezeAsync()

@@ -50,6 +50,8 @@ internal sealed class SettingsWindow : Form
         try { dark = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")?.GetValue("AppsUseLightTheme") is 0; }
         catch (Exception) { }
         web.DefaultBackgroundColor = BackColor = dark ? Color.FromArgb(28, 28, 30) : Color.FromArgb(245, 245, 243);
+        // the page too, from the same setting (the browser can lag behind a change made while it runs)
+        if (web.CoreWebView2 is { } core) core.Profile.PreferredColorScheme = dark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
         int on = dark ? 1 : 0;
         if (IsHandleCreated) Native.DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int));   // DWMWA_USE_IMMERSIVE_DARK_MODE
         else HandleCreated += (_, _) => Native.DwmSetWindowAttribute(Handle, 20, ref on, sizeof(int));
@@ -61,6 +63,7 @@ internal sealed class SettingsWindow : Form
         {
             await web.EnsureCoreWebView2Async(await Wallpaper.EnvironmentAsync());
             var core = web.CoreWebView2;
+            Theme();
             core.Settings.AreDevToolsEnabled = Args.Has("--devtools");
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.IsZoomControlEnabled = false;
@@ -135,7 +138,7 @@ internal sealed class SettingsWindow : Form
                 ? screens.Where(o => Config.ThemeFor(o) == theme).Select(o => (JsonNode)IdOf(o)).ToArray() : [(JsonNode)IdOf(s)];
             list.Add(new JsonObject
             {
-                ["id"] = IdOf(s), ["name"] = s.Primary ? "Main display" : $"Display {IdOf(s)}",
+                ["id"] = IdOf(s), ["name"] = DisplayNames.Of(s) ?? (s.Primary ? "Main display" : $"Display {IdOf(s)}"),
                 ["x"] = b.X / k, ["y"] = b.Y / k, ["w"] = b.Width / k, ["h"] = b.Height / k,
                 ["theme"] = theme, ["own"] = Config.OwnTheme(s.Name) != null, ["main"] = s.Primary, ["world"] = new JsonArray(world),
             });
@@ -172,11 +175,30 @@ internal sealed class SettingsWindow : Form
     }
 
     /// What Tidewall costs (this window shares the walls' browser, so it's counted in, while it's open).
-    void PushUsage()
+    async void PushUsage()
     {
         if (!loaded || web.CoreWebView2 == null) return;
-        var u = usage.Measure();
-        Js(JsonSerializer.Serialize(new { t = "usage", cpu = u.Cpu, gpu = u.Gpu, mem = u.MemMB }));
+        await FindOwnProcesses();
+        if (IsDisposed || web.CoreWebView2 == null) return;
+        var u = usage.Measure(OwnProcesses);
+        // as on the Mac: the walls' cost, and apart from it this window's (it's freed when the window closes)
+        Js(JsonSerializer.Serialize(new { t = "usage", cpu = u.Cpu, gpu = u.Gpu, mem = u.MemMB, winCpu = u.WindowCpu, winMem = u.WindowMemMB }));
+    }
+
+    /// This window's own browser processes (the page and its preview), by the pages they draw.
+    public HashSet<int> OwnProcesses { get; private set; } = [];
+
+    async Task FindOwnProcesses()
+    {
+        try
+        {
+            if (Wallpaper.SharedEnvironment is not { } env) return;
+            var mine = new HashSet<int>();
+            foreach (var p in await env.GetProcessExtendedInfosAsync())
+                if (p.AssociatedFrameInfos.Any(f => f.Source.Contains("/ui/index.html"))) mine.Add(p.ProcessInfo.ProcessId);
+            OwnProcesses = mine;
+        }
+        catch (Exception) { }                                              // (an older WebView2: counted in with the walls)
     }
 
     // MARK: from the page
@@ -301,11 +323,9 @@ internal sealed class SettingsWindow : Form
     {
         try
         {
-            var lines = File.Exists(Log.Path) ? File.ReadLines(Log.Path).TakeLast(200) : [];
-            var text = string.Join(Environment.NewLine, lines).Replace(Environment.UserName, "<user>");
-            Clipboard.SetText($"Tidewall {Config.Version} on Windows {Environment.OSVersion.Version}{Environment.NewLine}{text}");
-            OpenUrl("https://github.com/Keshav-Madhav/tidewall/issues/new?title=" + Uri.EscapeDataString($"Windows {Config.Version}: "));
-            Toast("The end of Tidewall’s log is on your clipboard: paste it into the issue if you’re happy to share it.");
+            ProblemReport.Send(app.Walls);
+            if (Environment.GetEnvironmentVariable("TIDEWALL_REPORT_DRYRUN") is not { Length: > 0 })
+                Toast("The end of Tidewall’s log is on your clipboard: paste it into the issue if you’re happy to share it. Your name, folders and location are already taken out.");
         }
         catch (Exception e) { Log.Write($"report: {e.Message}"); }
     }
