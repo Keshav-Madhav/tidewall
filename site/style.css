@@ -41,7 +41,8 @@
 
   /* hero: one panel; drag it */
   .hero { position: relative; min-height: 860px; height: 100svh; max-height: 1100px; }
-  #head { position: absolute; left: clamp(20px, 9vw, 160px); top: 50%; transform: translateY(-50%); width: min(520px, calc(100% - 40px)); padding: 38px 40px 34px; cursor: grab; touch-action: none; }
+  #head { position: absolute; left: clamp(20px, 9vw, 160px); top: 50%; transform: translateY(-50%); width: min(520px, calc(100% - 40px)); padding: 38px 40px 34px; }
+  @media (hover: hover) and (pointer: fine) { #head { cursor: grab; } }   /* (touch: the panels ride the page, a swipe always scrolls) */
   #head h1 { font-size: clamp(40px, 4.6vw, 62px); line-height: 1; margin: 14px 0 18px; }
   #head p { color: var(--ink-2); font-size: 18px; max-width: 26em; }
   #head .cta { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; margin-top: 30px; }
@@ -120,7 +121,7 @@
 .grip:hover { background: rgba(21, 23, 31, .06); }
 .is-dragging .grip { cursor: grabbing; }
 #head .grip { margin-top: -24px; }
-@media (max-width: 759px) { .grip { display: none; } }
+@media (max-width: 759px), not ((hover: hover) and (pointer: fine)) { .grip { display: none; } }
 .try { margin-top: 10px; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, .7); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer; transition: background .2s ease; }
 .try:hover:not(:disabled) { background: #fff; }
 .try.on { border-color: transparent; background: transparent; color: var(--ink-3); cursor: default; padding-left: 0; }

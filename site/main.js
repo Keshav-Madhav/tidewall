@@ -50,12 +50,16 @@ strip.addEventListener('keydown', e => {
 
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const narrow = innerWidth < 760;
+// panels move only with a mouse or trackpad: on a touch screen a drag would fight the scroll (and moving windows isn't
+// what a phone is for), so there they ride the page
+const drag = !narrow && matchMedia('(hover: hover) and (pointer: fine)').matches;
 const wall = window.tide;
 if (reduce) { let t; addEventListener('scroll', () => { clearTimeout(t); t = setTimeout(() => wall.update(false), 200); }, { passive: true }); }
 
-// the hero panel is a window you can move (on a phone it would trap the scroll, so there it rides the page)
+// the hero panel is a window you can move
 const head = document.getElementById('head'), hint = document.getElementById('hint');
-if (!narrow) {
+if (!drag) hint.lastChild.textContent = '. Try another wall below.';   // (only the words after the wall's name: `live` is held above)
+if (drag) {
   const r = head.getBoundingClientRect(), hero = head.parentElement.getBoundingClientRect();
   head.style.top = (r.top - hero.top) + 'px'; head.style.transform = 'none';   // (centred with a transform: fix it in pixels)
   TW.draggable(head, {
@@ -66,7 +70,7 @@ if (!narrow) {
 }
 // the panels below are windows too: moved by their grip (so the film's controls and the walls' strip still work as
 // they look); a double-click on the grip puts one back
-if (!narrow) for (const id of ['film', 'walls', 'perf', 'end']) {
+if (drag) for (const id of ['film', 'walls', 'perf', 'end']) {
   const el = document.getElementById(id);
   const d = TW.draggable(el, { within: document.body, handle: '.grip', onMove: () => wall.update(true), onDrop: () => wall.update(false) });
   el.style.touchAction = '';                                         // (only the grip takes the pointer: the page still scrolls)
