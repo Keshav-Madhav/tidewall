@@ -234,7 +234,7 @@ extension App {
       if (r < .3) a = { t: 'apply', theme: th };
       else if (r < .4) a = { t: 'applyDisplay', display: ids[Math.floor(Math.random() * ids.length)] || 1, theme: Math.random() < .2 ? null : th };
       else if (r < .5) a = { t: 'set', key: 'spanWorlds', value: Math.random() < .5 };
-      else if (r < .6) a = { t: 'set', key: 'fps', value: [0, 30, 60][Math.floor(Math.random() * 3)] };
+      else if (r < .6) a = Math.random() < .5 ? { t: 'set', key: 'fps', value: [0, 30, 60][Math.floor(Math.random() * 3)] } : { t: 'set', key: 'tier', value: Math.floor(Math.random() * 3) };
       else if (r < .68) a = { t: 'set', key: 'paused', value: Math.random() < .3 };
       else if (r < .76) a = { t: 'set', key: 'margin', value: Math.round(80 + Math.random() * 120) };
       else if (r < .84) a = { t: 'variant', theme: Math.random() < .5 ? 'lava' : 'wind', id: Math.random() < .5 ? 'blue' : 'IND' };
