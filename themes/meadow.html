@@ -374,7 +374,7 @@ const vec3 CLOUD_HI = vec3(1.0, 1.0, 0.99);                                   //
 const vec3 CLOUD_BODY = vec3(0.90, 0.93, 0.96), CLOUD_SH = vec3(0.80, 0.85, 0.90); // 云：主体 / 偏暗的圆（比大海主题少一些蓝；主体不能太白，白色的图标文字要看得清）
 const vec2 LIGHT = vec2(-0.6, -0.8);                                          // 太阳在左上方
 const vec2 SHADOW_OFF = vec2(115.0, 156.0);                                    // 云影落在右下方，离云远 → 云飘得高
-const int CIRC_K = 36;
+const int CIRC_K = 64;   // circles a cell holds (one that overflows drops its smallest and shows a square hole: 36 did on small screens, up to 59 seen; the texture is CIRC_K × cells wide, ≤ 5568 at 3840 px)
 
 float hash2(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -635,7 +635,7 @@ const curS = (x, y) => FB ? sampleArr(FA.s, x, y) * (1 - curMix) + sampleArr(FB.
      → 边全是圆弧；圆的大小各自慢慢呼吸；图标挪动时跟着场平滑地长大 / 缩小
    - 天上的小云：一朵朵完整的云，由大小不一的圆组成（底下一排、上面堆几个，底部较平），整朵随风飘
    ====================================================================== */
-const CELL_G = 48, CIRC_K = 36;
+const CELL_G = 48, CIRC_K = 64;
 let circStats = null, circTex = null, circBuf = null, cgW = 0, cgH = 0;
 const rnd1 = (x, y, k) => hash2(x, y, k);                  // 固定的随机数（和换种子一起变）
 const skyClouds = [];
