@@ -1,5 +1,46 @@
 # Changelog
 
+## [1.4.0]
+
+### Optimize for
+- Settings ▸ Optimize for: Performance, Balanced or Quality, on Mac and Windows. Rather than switching one part of a
+  wall off, each mode makes every part of it a little leaner or richer: resolution, frame rates at rest, while windows
+  move and under the pointer, and each wall's own particles, detail and extra effects. Balanced is the default.
+
+### Lighter at rest, the picture unchanged
+- A wall nobody is looking at rests: with no pointer on the wallpaper and no window changing for 20 s it draws at
+  12 fps (Performance 10), after two minutes at 8 (Performance 6), and a display your windows mostly cover rests at
+  once. The pointer or any window change brings it straight back. Quality never rests deep.
+- Balanced rests at 24 fps, gentle motion at film rate, and Lava draws at three quarters of the resolution.
+- Together: on battery, walls at rest cost about half what they did in 1.3.1 (measured on six walls, 1.86× less).
+
+### Windows, like the Mac
+- Celestial's sky and Wind Map's country follow where you are; Wind Tunnel's model stays clear of your icons; app
+  names, monitor names and What's New as on the Mac; walls reload only what changed and refresh when displays change.
+- The Settings window follows dark mode and remembers its place; walls rest with the displays off and let go of
+  their memory 15 s behind a full-screen app; a wall that crashes restarts (backing off if it keeps crashing), and
+  a problem report gathers the same details as on the Mac.
+- Walls that span displays draw one world across displays at different scales.
+
+### Snowfall
+- Deep snow builds up along the bottom of your desktop, above the Dock or taskbar, with a snowman standing in it.
+  In the Christmas season, now and then a sleigh crosses the moon. Fewer far flakes: a cleaner sky.
+- Snow sits on a window you drag without lagging behind it, follows rounded corners, builds up steadily, stays on a
+  window that comes back, and falls when its window goes instead of hanging in the air.
+
+### Fixed
+- Things that got stuck: Ink Map's boat (blinking away, thrown about, pressed against a shore; it now finds the
+  channels between islands and waits in a closed bay), the railway's express and freight trains, town cars, Garden's
+  gardeners, Marauders' walkers, Ink Map's ship and serpent, Reef's shoals under windows, Beach's kayaks, Meadow's cat,
+  Wind Tunnel's ball.
+- Meadow's clouds and their shadows sometimes ended in a straight line or a square hole (plainly on Windows).
+- Reef's fish swim clear of a window you drag; Meadow's boy and cat keep clear of windows; Marauders', Wind Map,
+  Gallery, Railway and Lava each had a small bug fixed (hidden figures, overlapping cards, frame order, station names,
+  twin pools).
+- Coming back from a full-screen app, the wall could show its catalogue picture with demo windows for a moment.
+- Switching walls very fast could leave one throwing an error.
+- The Mac download is a disk image (Tidewall.dmg): drag the app to Applications.
+
 ## [1.3.1]
 
 ### Windows: like the Mac
