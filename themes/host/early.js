@@ -10,9 +10,9 @@
   // particle counts (count), simulation detail (sim) and optional effects (fx: 0 lean, 1 normal, 2 extra).
   const RES = HOST.res > 0 && HOST.res < 1 ? HOST.res : 1;
   const Q = Object.freeze([
-    { tier: 0, res: RES, calm: 20, live: 45, hover: 30, count: .65, sim: .7, fx: 0 },
-    { tier: 1, res: 1, calm: 24, live: 0, hover: 60, count: 1, sim: 1, fx: 1 },   // (24 at rest: gentle motion reads smooth at film rate)
-    { tier: 2, res: 1, calm: 60, live: 0, hover: 0, count: 1, sim: 1, fx: 2 },
+    { tier: 0, res: RES, calm: 20, deep: 10, live: 45, hover: 30, count: .65, sim: .7, fx: 0 },
+    { tier: 1, res: 1, calm: 24, deep: 12, live: 0, hover: 60, count: 1, sim: 1, fx: 1 },   // (24 at rest: gentle motion reads smooth at film rate)
+    { tier: 2, res: 1, calm: 60, deep: 0, live: 0, hover: 0, count: 1, sim: 1, fx: 2 },
   ][HOST.tier === 0 || HOST.tier === 2 ? HOST.tier : 1]);
   window.__twQ = Q;
 
@@ -98,7 +98,13 @@
   const CALM = pick > 0 ? pick : Q.calm;
   const LIVE = pick > 0 ? pick : Q.live || Math.max(60, HOST.maxHz);
   const HOVER = Math.min(LIVE, Q.hover || LIVE);
-  const calmRate = () => pick >= 60 ? pick : Math.min(CALM, window.__twCalm || CALM);
+  // Deep rest: while you're working in your apps (the pointer hasn't been on the wallpaper, and no window has moved,
+  // opened or closed, for 20 s) a wall rests at Q.deep (12 in Balanced) instead of its calm rate; the pointer arriving or
+  // any window changing brings it straight back. A rate picked in Settings, or Quality, never deep-rests.
+  const DEEP_AFTER = 20000; let attentionAt = performance.now();
+  const calmRate = () => { if (pick >= 60) return pick;
+    const r = Math.min(CALM, window.__twCalm || CALM);
+    return pick <= 0 && Q.deep && performance.now() - attentionAt > DEEP_AFTER ? Math.min(r, Q.deep) : r; };
   let boostUntil = 0, hoverUntil = 0, settleUntil = 0;
   let paceK = 1;   // 2 on battery when Settings says calmer
   const extend = (until, ms) => Math.max(until, performance.now() + ms);
@@ -116,6 +122,7 @@
     const pointer = s.startsWith('{"t":"cursor"') && s.charCodeAt(13) === 44;   // {"t":"cursor", (not cursorOff)
     if (s.startsWith('{"t":"dicons"')) window.__dicons = s;                     // read by the bench probes
     if (pointer) window.__twOver = s.indexOf('"w":1') >= 0;                     // over a window, not the wallpaper
+    if ((pointer && !window.__twOver) || s.startsWith('{"t":"windows"') || window.__live) attentionAt = performance.now();   // (out of deep rest)
     if (window.__live) window.__twBoost(900);
     else if (pointer && !window.__twOver) window.__twHover(900);
     deliver(s);
