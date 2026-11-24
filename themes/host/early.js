@@ -16,6 +16,15 @@
   ][HOST.tier === 0 || HOST.tier === 2 ? HOST.tier : 1]);
   window.__twQ = Q;
 
+  // One display on its own, until span.js replaces it: a page torn down mid-load (switching walls fast) can lose
+  // span.js while its own script still runs, and a wall that spans must then carry on as one display, not throw.
+  window.Span = {
+    world: false, x: 0, y: 0, i: 0, n: 1, get uw() { return innerWidth; }, get uh() { return innerHeight; },
+    get main() { return [0, 0, innerWidth, innerHeight]; }, frames() { return [[0, 0, innerWidth, innerHeight]]; },
+    gaps() { return []; }, edges() { return []; }, leader() { return true; }, secs(wrap = 16384) { return (Date.now() / 1000) % wrap; },
+    desk() { }, paused() { }, post() { }, on() { },
+  };
+
   // The theme's sharpness cap: the page sees a devicePixelRatio no higher than it (the host scales its messages the same).
   // (and Performance's resolution factor on top: every wall sizes its canvases by this, so they all draw fewer pixels)
   if (HOST.cap < 8 || RES < 1) {
