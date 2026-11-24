@@ -10,9 +10,9 @@
   // particle counts (count), simulation detail (sim) and optional effects (fx: 0 lean, 1 normal, 2 extra).
   const RES = HOST.res > 0 && HOST.res < 1 ? HOST.res : 1;
   const Q = Object.freeze([
-    { tier: 0, res: RES, calm: 20, deep: 10, live: 45, hover: 30, count: .65, sim: .7, fx: 0 },
-    { tier: 1, res: 1, calm: 24, deep: 12, live: 0, hover: 60, count: 1, sim: 1, fx: 1 },   // (24 at rest: gentle motion reads smooth at film rate)
-    { tier: 2, res: 1, calm: 60, deep: 0, live: 0, hover: 0, count: 1, sim: 1, fx: 2 },
+    { tier: 0, res: RES, calm: 20, deep: 10, deep2: 6, live: 45, hover: 30, count: .65, sim: .7, fx: 0 },
+    { tier: 1, res: 1, calm: 24, deep: 12, deep2: 8, live: 0, hover: 60, count: 1, sim: 1, fx: 1 },   // (24 at rest: gentle motion reads smooth at film rate)
+    { tier: 2, res: 1, calm: 60, deep: 0, deep2: 0, live: 0, hover: 0, count: 1, sim: 1, fx: 2 },
   ][HOST.tier === 0 || HOST.tier === 2 ? HOST.tier : 1]);
   window.__twQ = Q;
 
@@ -101,10 +101,21 @@
   // Deep rest: while you're working in your apps (the pointer hasn't been on the wallpaper, and no window has moved,
   // opened or closed, for 20 s) a wall rests at Q.deep (12 in Balanced) instead of its calm rate; the pointer arriving or
   // any window changing brings it straight back. A rate picked in Settings, or Quality, never deep-rests.
-  const DEEP_AFTER = 20000; let attentionAt = performance.now();
+  // Two minutes of that, deeper still (Q.deep2). And a display your windows mostly cover (over three quarters of it:
+  // only slivers of the wall show) rests deep at once rather than after 20 s.
+  const DEEP_AFTER = 20000, DEEPER_AFTER = 120000; let attentionAt = performance.now(), covered = 0;
   const calmRate = () => { if (pick >= 60) return pick;
     const r = Math.min(CALM, window.__twCalm || CALM);
-    return pick <= 0 && Q.deep && performance.now() - attentionAt > DEEP_AFTER ? Math.min(r, Q.deep) : r; };
+    if (pick > 0 || !Q.deep) return r;
+    const away = performance.now() - attentionAt;
+    // (deeper only for walls that don't already slow themselves: Ink Map, resting at 12 on its own, cost more at 8)
+    if (away > DEEPER_AFTER && !(window.__twCalm <= Q.deep)) return Math.min(r, Q.deep2 || Q.deep);
+    return away > DEEP_AFTER || covered > .75 ? Math.min(r, Q.deep) : r; };
+  // how much of this display your windows cover, on a coarse grid (their rects are in the page's device pixels)
+  const coverage = s => { try { const m = JSON.parse(s), W = innerWidth * devicePixelRatio, H = innerHeight * devicePixelRatio; let hit = 0;
+      for (let j = 0; j < 12; j++) for (let i = 0; i < 16; i++) { const x = (i + .5) * W / 16, y = (j + .5) * H / 12;
+        if ((m.r || []).some(([l, t, r, b]) => x >= l && x < r && y >= t && y < b)) hit++; }
+      return hit / 192; } catch (_) { return 0; } };
   let boostUntil = 0, hoverUntil = 0, settleUntil = 0;
   let paceK = 1;   // 2 on battery when Settings says calmer
   const extend = (until, ms) => Math.max(until, performance.now() + ms);
@@ -123,6 +134,7 @@
     if (s.startsWith('{"t":"dicons"')) window.__dicons = s;                     // read by the bench probes
     if (pointer) window.__twOver = s.indexOf('"w":1') >= 0;                     // over a window, not the wallpaper
     if ((pointer && !window.__twOver) || s.startsWith('{"t":"windows"') || window.__live) attentionAt = performance.now();   // (out of deep rest)
+    if (s.startsWith('{"t":"windows"')) covered = coverage(s);
     if (window.__live) window.__twBoost(900);
     else if (pointer && !window.__twOver) window.__twHover(900);
     deliver(s);
