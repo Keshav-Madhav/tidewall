@@ -374,7 +374,7 @@ const vec3 CLOUD_HI = vec3(1.0, 1.0, 0.99);                                   //
 const vec3 CLOUD_BODY = vec3(0.90, 0.93, 0.96), CLOUD_SH = vec3(0.80, 0.85, 0.90); // 云：主体 / 偏暗的圆（比大海主题少一些蓝；主体不能太白，白色的图标文字要看得清）
 const vec2 LIGHT = vec2(-0.6, -0.8);                                          // 太阳在左上方
 const vec2 SHADOW_OFF = vec2(115.0, 156.0);                                    // 云影落在右下方，离云远 → 云飘得高
-const int CIRC_K = 64;   // circles a cell holds (one that overflows drops its smallest and shows a square hole: 36 did on small screens, up to 59 seen; the texture is CIRC_K × cells wide, ≤ 5568 at 3840 px)
+const int CIRC_K = 128, CIRC_KW = 32;   // circles a cell holds, laid out 32 × 4 texels per cell (see CIRC_REACH)
 
 float hash2(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -394,13 +394,13 @@ float cloudDist(vec2 q, bool front, inout vec4 fc) {
   ivec2 cell = ivec2(floor(q / uCellG)) + 4;                                      // 格子比屏幕左、上多 4 格（右下方的云影要用到），右、下多 3 格
   if (cell.x < 0 || cell.y < 0 || float(cell.x) >= uCGrid.x || float(cell.y) >= uCGrid.y) return d;
   for (int k = 0; k < CIRC_K; k++) {
-    vec4 c = texelFetch(uCirc, ivec2(cell.x * CIRC_K + k, cell.y), 0);
+    vec4 c = texelFetch(uCirc, ivec2(cell.x * CIRC_KW + k % CIRC_KW, cell.y * (CIRC_K / CIRC_KW) + k / CIRC_KW), 0);
     if (c.z <= 0.0) break;
     float di = length(q - c.xy) - c.z;
     d = smin(d, di, 6.0);
     if (front && di < 0.0 && c.y > fc.y) fc = c;
   }
-  return d;
+  return min(d, 42.0);                                                            // (past 42 nothing reads it: see CIRC_REACH)
 }
 float cloudDist(vec2 q) { vec4 fc = vec4(0.0, -1e9, 0.0, 0.0); return cloudDist(q, false, fc); }
 
@@ -635,7 +635,12 @@ const curS = (x, y) => FB ? sampleArr(FA.s, x, y) * (1 - curMix) + sampleArr(FB.
      → 边全是圆弧；圆的大小各自慢慢呼吸；图标挪动时跟着场平滑地长大 / 缩小
    - 天上的小云：一朵朵完整的云，由大小不一的圆组成（底下一排、上面堆几个，底部较平），整朵随风飘
    ====================================================================== */
-const CELL_G = 48, CIRC_K = 64;
+const CELL_G = 48, CIRC_K = 128, CIRC_KW = 32, CIRC_KH = CIRC_K / CIRC_KW;   // (a cell's circles: 32 × 4 texels, so the texture stays narrow: ≤ 2784 at 3840 px)
+// how far past its edge a circle is listed in the cells it reaches: the shader reads cloud distances up to +42 (a
+// shadow's soft edge: 26 + 15 of noise; a cloud's airy rim: 12 + 15) and blends circles 6 apart; past 42 it caps the
+// distance, so every cell agrees there (listed only to +6 before, a cloud or its shadow ended in a straight line at a
+// cell edge)
+const CIRC_REACH = 48;
 let circStats = null, circTex = null, circBuf = null, cgW = 0, cgH = 0;
 const rnd1 = (x, y, k) => hash2(x, y, k);                  // 固定的随机数（和换种子一起变）
 const skyClouds = [];
@@ -709,7 +714,7 @@ function stepSkyClouds(dt) {
   }
 }
 const sstep = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
-let massList = null, massT = -1e9;
+let massList = null, massT = -1e9; let cellFar = null, cellCover = null;
 function buildMassCircles() {
   const list = [];
   // 图标周围的云团：三层圆（大 / 小 / 很小），每层是一张固定的格子，每格随机放一个圆。
@@ -765,10 +770,10 @@ function uploadCircles(t) {
     if (circTex) gl.deleteTexture(circTex);
     circTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, circTex);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, gw * CIRC_K, gh);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, gw * CIRC_KW, gh * CIRC_KH);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    circBuf = new Float32Array(gw * CIRC_K * gh * 4);
+    circBuf = new Float32Array(gw * CIRC_KW * gh * CIRC_KH * 4);
   }
   // 图标周围云团的圆：只在图标挪动时（场在过渡）每帧重算，平时每 0.5 秒重算一次（呼吸很慢，看不出跳）
   const morphing = curMix < 1 || !massList || massList.W !== W || massList.H !== H || massList.v !== fieldV;   // (and whenever the field itself changed)
@@ -787,27 +792,42 @@ function uploadCircles(t) {
     });
   }
   // 分到格子里（圆盖到的每个格子都放一份；一个格子放不下就留大的）
+  // A circle is listed in every cell within CIRC_REACH of its edge, except where another circle is nearer by 12 or more
+  // everywhere in the cell (it can't change the blended distance there: smin blends only within 6) and it can't be the
+  // front circle that tints a pixel: it holds none of the cell, or a circle covering the whole cell sits lower (the
+  // front one is the lowest that holds the pixel). Two passes: each cell's nearest far corner and lowest cover, then
+  // the listing.
   circBuf.fill(0);
-  const cnt = new Uint8Array(gw * gh);
+  const cnt = new Uint8Array(gw * gh), far = cellFar && cellFar.length === gw * gh ? cellFar.fill(1e9) : (cellFar = new Float32Array(gw * gh).fill(1e9));
+  const cover = cellCover && cellCover.length === gw * gh ? cellCover.fill(-1e9) : (cellCover = new Float32Array(gw * gh).fill(-1e9));
   const order = [];
   for (let i = 0; i < list.length; i += 4) order.push(i);
   order.sort((a, b) => list[b + 2] - list[a + 2]);
-  for (const i of order) {
-    const x = list[i], y = list[i + 1], r = list[i + 2] + 6;
+  for (let pass = 0; pass < 2; pass++) for (const i of order) {
+    const x = list[i], y = list[i + 1], rc = list[i + 2], r = rc + CIRC_REACH;
     const x0 = Math.max(0, Math.floor((x - r) / CELL_G) + 4), x1 = Math.min(gw - 1, Math.floor((x + r) / CELL_G) + 4);
     const y0 = Math.max(0, Math.floor((y - r) / CELL_G) + 4), y1 = Math.min(gh - 1, Math.floor((y + r) / CELL_G) + 4);
     for (let gy = y0; gy <= y1; gy++) for (let gx = x0; gx <= x1; gx++) {
-      const ci = gy * gw + gx;
-      const nx = Math.max((gx - 4) * CELL_G, Math.min(x, (gx - 3) * CELL_G)), ny = Math.max((gy - 4) * CELL_G, Math.min(y, (gy - 3) * CELL_G));
-      if ((nx - x) * (nx - x) + (ny - y) * (ny - y) > r * r) continue;   // 圆碰不到这个格子
+      const ci = gy * gw + gx, L = (gx - 4) * CELL_G, T = (gy - 4) * CELL_G;
+      const nx = Math.max(L, Math.min(x, L + CELL_G)) - x, ny = Math.max(T, Math.min(y, T + CELL_G)) - y;
+      const near = Math.sqrt(nx * nx + ny * ny) - rc;                       // the circle's distance at the cell's nearest point
+      if (near > CIRC_REACH) continue;                                      // 圆碰不到这个格子
+      if (pass === 0) {
+        const fx = Math.max(Math.abs(L - x), Math.abs(L + CELL_G - x)), fy = Math.max(Math.abs(T - y), Math.abs(T + CELL_G - y));
+        const fd = Math.sqrt(fx * fx + fy * fy) - rc;                       // ... and at its farthest
+        if (fd < far[ci]) far[ci] = fd;
+        if (fd < 0 && y > cover[ci]) cover[ci] = y;                        // holds the whole cell
+        continue;
+      }
+      if (near > far[ci] + 12 && (near > 0 || y < cover[ci])) continue;   // another circle is nearer everywhere here, and in front
       if (cnt[ci] >= CIRC_K) continue;
-      const o = ((gy * gw + gx) * CIRC_K + cnt[ci]++) * 4;
-      circBuf[o] = x; circBuf[o + 1] = y; circBuf[o + 2] = list[i + 2]; circBuf[o + 3] = list[i + 3];
+      const n = cnt[ci]++, o = (((gy * CIRC_KH + (n / CIRC_KW | 0)) * gw * CIRC_KW) + gx * CIRC_KW + n % CIRC_KW) * 4;
+      circBuf[o] = x; circBuf[o + 1] = y; circBuf[o + 2] = rc; circBuf[o + 3] = list[i + 3];
     }
   }
   circStats = { circles: list.length / 4, maxPerCell: Math.max(...cnt) };
   gl.bindTexture(gl.TEXTURE_2D, circTex);
-  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gw * CIRC_K, gh, gl.RGBA, gl.FLOAT, circBuf);
+  gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gw * CIRC_KW, gh * CIRC_KH, gl.RGBA, gl.FLOAT, circBuf);
 }
 
 /* ======================================================================
