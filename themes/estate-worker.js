@@ -180,6 +180,7 @@ function buildTown({ W, H, K, seed, t: tNow = 1, OX = 0, OY = 0, WW = W, WH = H,
       if (FR && !onOne(cx - r - 30, cy - r - 30, cx + r + 30, cy + r + 50)) continue;      // a tower stands wholly on one display
       if (wins.some(w => cx + r > w.x - 60 && cx - r < w.x + w.w + 60 && cy + r > w.y - 60 && cy - r < w.y + w.h + 60)) continue;
       if (rings.some(o => Math.hypot(o.cx - cx, o.cy - cy) < o.r + r + 80)) continue;
+      if (Math.hypot(cx - CX, cy - CY) < r + 100) continue;                          // nor on the compass rose (it can stand in any corner now)
       rings.push({ cx, cy, r });
       const pts = []; for (let a = 0; a <= 64; a++) pts.push([cx + Math.cos(a / 64 * Math.PI * 2) * (r + 18), cy + Math.sin(a / 64 * Math.PI * 2) * (r + 18)]);
       roads.push({ pts, width: 9, ring: true }); break;
@@ -270,6 +271,7 @@ function buildTown({ W, H, K, seed, t: tNow = 1, OX = 0, OY = 0, WW = W, WH = H,
   for (let n = 0; n < WW * WH / 9000; n++) {
     const DR = rng(seed * 31 + n * 7919 + 13), px = DR() * WW, py = DR() * WH, gx = Math.round((px - X0) / C), gy = Math.round((py - Y0) / C);
     if (gx < 0 || gy < 0 || gx >= gw || gy >= gh) continue;
+    if (Math.hypot(px - CX, py - CY) < 80) continue;                    // (scribbles ran into the compass rose)
     const gi = gy * gw + gx;
     if (!(f[gi] < -14) || dRoad[gi] < 14) continue;
     if (wins.some(w => px > w.x - 34 && px < w.x + w.w + 34 && py > w.y - 34 && py < w.y + w.h + 34)) continue;
@@ -283,7 +285,13 @@ function buildTown({ W, H, K, seed, t: tNow = 1, OX = 0, OY = 0, WW = W, WH = H,
     else { x.fillStyle = INK_SOFT; x.beginPath(); x.arc(px, py, .9, 0, 7); x.fill(); }
   }
   const SR = rng(seed + 21);
-  for (let n = 0; n < (2 + Math.floor(SR() * 3)) * (FR ? FR.length : 1); n++) splat(x, 60 + SR() * (WW - 120), 60 + SR() * (WH - 120), 6 + SR() * 12, SR);
+  // ink splats on open paper: never on a tower, the rose or under a window (a few tries each, then it's left out)
+  for (let n = 0; n < (2 + Math.floor(SR() * 3)) * (FR ? FR.length : 1); n++) {
+    for (let k = 0; k < 6; k++) { const sx = 60 + SR() * (WW - 120), sy = 60 + SR() * (WH - 120), sr = 6 + SR() * 12, reach = sr * 4;
+      if (rings.some(rg => Math.hypot(sx - rg.cx, sy - rg.cy) < rg.r + reach) || Math.hypot(sx - CX, sy - CY) < 70 + reach
+        || wins.some(w => sx > w.x - reach && sx < w.x + w.w + reach && sy > w.y - reach && sy < w.y + w.h + reach)) continue;
+      splat(x, sx, sy, sr, SR); break; }
+  }
   const spots = [], PR = rng(seed + 31 + Math.round(OX) * 7 + Math.round(OY) * 13);   // each display its own label spots
   for (let k = 0; k < 900 && spots.length < 160; k++) {
     const px = OX + 60 + PR() * (W - 120), py = OY + 40 + PR() * (H - 80), gi = Math.round((py - Y0) / C) * gw + Math.round((px - X0) / C);   // this display's own open ground
@@ -291,12 +299,15 @@ function buildTown({ W, H, K, seed, t: tNow = 1, OX = 0, OY = 0, WW = W, WH = H,
   }
   spots.sort((a, b) => b[2] - a[2]);
   const bitmap = cv.transferToImageBitmap();
-  self.postMessage({ town: true, gen: G.gen, bitmap, spots, roads: roads.filter(r => !r.ring).map(r => r.pts.filter((_, i) => i % 3 === 0)), rings,
-    ms: Math.round(performance.now() - t0) }, [bitmap]);
+  // the plan, coarsely (every 4th cell), for your walker to keep to the streets with
+  const S4 = 4, fw = Math.ceil(gw / S4), fh = Math.ceil(gh / S4), ff = new Float32Array(fw * fh);
+  for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) ff[j * fw + i] = f[Math.min(gh - 1, j * S4) * gw + Math.min(gw - 1, i * S4)];
+  self.postMessage({ town: true, gen: G.gen, bitmap, spots, roads: roads.filter(r => !r.ring).map(r => r.pts.filter((_, i) => i % 3 === 0)), rings, CX, CY,
+    field: { f: ff, w: fw, h: fh, c: C * S4, x0: X0, y0: Y0 }, ms: Math.round(performance.now() - t0) }, [bitmap, ff.buffer]);
 }
 
 /* ---------- one animation frame ---------- */
-let F = null, LK = null, TOUCH = null, VIS = null, INST = new Float32Array(6 * 60000);
+let F = null, LK = null, TOUCH = null, VIS = null, INST = new Float32Array(6 * 60000), KEEP = [], LOOPKEEP = [];
 const POOL = [];        // instance buffers ping-pong with the page (no per-frame 1.4 MB allocations)
 function sampleBase(x, y, t) {
   const { gw, gh, C, A, B } = G;
@@ -308,8 +319,8 @@ function sampleBase(x, y, t) {
   return a + (b - a) * t;
 }
 let e_sent = 0;
-function frame({ wins, t, sent, gen }) {
-  e_sent = sent;
+function frame({ wins, t, sent, gen, keep = [] }) {
+  e_sent = sent; KEEP = keep;
   if (gen !== undefined && gen !== G.gen) t = 0;      // the page hasn't seen this town yet: show where it starts
   if (!G.B || !G.adv) return self.postMessage({ frame: true, inst: new Float32Array(0), n: 0 });
   const t0 = performance.now(), { gw, gh, C, A, B, X0 = 0, Y0 = 0 } = G, N = gw * gh;
@@ -359,6 +370,8 @@ function frame({ wins, t, sent, gen }) {
     let ar = 0; for (let i = 0; i < loop.length; i++) { const p = loop[i], q = loop[(i + 1) % loop.length]; ar += p[0] * q[1] - q[0] * p[1]; }
     if (ar < 0) loop = [loop[0]].concat(loop.slice(1).reverse());
     const alpha = Math.min(1, Math.max(0, (per - 60) / 90)) * .9;
+    { let a0 = 1e9, b0 = 1e9, a1 = -1e9, b1 = -1e9; for (const [px, py] of loop) { if (px < a0) a0 = px; if (px > a1) a1 = px; if (py < b0) b0 = py; if (py > b1) b1 = py; }
+      LOOPKEEP = KEEP.filter(k => k[4] > .01 && k[0] < a1 && k[2] > a0 && k[1] < b1 && k[3] > b0); }   // (only the boxes this wall comes near)
     n = layLetters(loop, 4.6, alpha, n);
     if (n > 59000) break;
   }
@@ -382,8 +395,11 @@ function layLetters(loop, size, alpha, n) {
     for (; t < len; t += sp) {
       const px = a[0] + ux * t, py = a[1] + uy * t, qx = Math.round(px / 3), qy = Math.round(py / 3);
       if (lhash(qx, qy, 11) < .12) continue;             // gaps between words
+      let ka = alpha;                                     // under a banner, a tower or the rose: thinned away as its sheet inks in
+      for (const k of LOOPKEEP) if (px > k[0] && px < k[2] && py > k[1] && py < k[3]) ka *= 1 - k[4];
+      if (ka < .01) continue;
       const o = n * 6; INST[o] = px; INST[o + 1] = py; INST[o + 2] = ang;
-      INST[o + 3] = Math.floor(lhash(qx, qy, 5) * NG); INST[o + 4] = alpha; INST[o + 5] = size; n++;
+      INST[o + 3] = Math.floor(lhash(qx, qy, 5) * NG); INST[o + 4] = ka; INST[o + 5] = size; n++;
       if (n > 59990) return n;
     }
     carry = t - len;

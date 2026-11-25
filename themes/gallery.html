@@ -26,6 +26,8 @@
     box-shadow: 0 1px 2px rgba(0,0,0,.35), 5px 12px 22px rgba(35,20,8,.30), 14px 30px 60px rgba(35,20,8,.20); }
   .frame { position: absolute; box-sizing: border-box; border-style: solid; background: #16120e; background-clip: padding-box; }
   .art { position: absolute; display: block; object-fit: cover; }
+  /* the spotlight's fall on the canvas itself: warm at the top, gone by the middle (soft-light keeps the darks dark) */
+  .glow { position: absolute; inset: 0; pointer-events: none; mix-blend-mode: soft-light; background: linear-gradient(180deg, rgba(255,220,170,.34), rgba(255,220,170,0) 58%); }
   .mat { position: absolute; background: #f3eee4; box-shadow: inset 0 0 0 1px rgba(0,0,0,.06), inset 1px 2px 4px rgba(0,0,0,.18); }
   .light { position: absolute; mix-blend-mode: screen; transition: opacity 1.2s ease; pointer-events: none;
     background: radial-gradient(ellipse 50% 50% at 50% 50%, rgba(255,214,160,.85) 0%, rgba(255,214,160,.6) 34%, rgba(255,214,160,.22) 66%, rgba(255,214,160,0) 100%); }
@@ -52,12 +54,14 @@
 <body>
 <script src="span.js"></script>
 <div id="room">
+<!-- the spotlights light the wall round each frame, under it (screened over the paintings, they washed dark canvases
+     milky and at night fogged them); after hours the wall and the shadows go dark, the lit works and their labels don't -->
 <div class="layer" id="Lniche"></div>
 <div class="layer" id="Lshadow"></div>
-<div class="layer" id="Lframe"></div>
-<div class="layer" id="Lplate"></div>
 <div id="night"></div>
 <div class="layer" id="Llight"></div>
+<div class="layer" id="Lframe"></div>
+<div class="layer" id="Lplate"></div>
 </div>
 <script>
 'use strict';
@@ -124,9 +128,9 @@ const LABELS = [
   [/preview|photos/, ['Still Life'], 'Pixels'],
 ];
 function labelFor(app, nth) {
-  const a = (app || 'Unknown').toLowerCase();
+  const a = (app || '').toLowerCase();
   for (const [re, titles, medium] of LABELS) if (re.test(a)) return { artist: app, title: `${titles[nth % titles.length]}${nth >= titles.length ? ` No. ${nth + 1}` : ''}, ${YEAR}`, medium };
-  return { artist: app || 'Unknown', title: `Untitled${nth ? ` No. ${nth + 1}` : ''}, ${YEAR}`, medium: 'Pixels on glass' };
+  return { artist: app || 'Artist unknown', title: `Untitled${nth ? ` No. ${nth + 1}` : ''}, ${YEAR}`, medium: 'Pixels on glass' };
 }
 
 /* ======================= a hung piece: shadow, frame (+ painting), spotlight, plate ======================= */
@@ -143,10 +147,15 @@ function fadeIn(p) {
   for (const e of els) e.style.opacity = 0;
   requestAnimationFrame(() => requestAnimationFrame(() => { if (p.gone) return; els.forEach((e, i) => { if (e.style.opacity === '0') e.style.opacity = want[i]; }); p.plate.style.opacity = p.plateBox ? 1 : 0; }));
 }
-function removePiece(p, lift) {
+function removePiece(p, lift, quick) {
   const els = [p.shadow, p.frame, p.light, p.plate]; p.gone = true;
-  if (lift) { for (const e of els) { e.style.opacity = 0; e.style.transform = 'translateY(-14px)'; } setTimeout(() => els.forEach(e => e.remove()), 1300); }
-  else { p.frame.style.background = 'none'; for (const e of els) e.style.opacity = 0; setTimeout(() => els.forEach(e => e.remove()), 850); }   // the window's gone: its frame fades with it (an empty frame, not a dark slab)
+  // (quick: a window has come over it, so it is lifted up and out before the window's own frame has faded in)
+  if (lift) { for (const e of els) { if (quick) e.style.transition = 'opacity .45s ease, transform .5s cubic-bezier(.4,0,.6,1)'; e.style.opacity = 0; e.style.transform = `translateY(${quick ? -22 : -14}px)`; } setTimeout(() => els.forEach(e => e.remove()), quick ? 600 : 1300); }
+  // the window's gone: its light dims first, then its empty frame is taken down as a work is, lifted off its hook (a plain
+  // fade through the light left a pale double-edged slab hanging there for most of a second)
+  else { p.frame.style.background = 'none'; p.light.style.transition = 'opacity .3s ease'; p.light.style.opacity = 0;
+    for (const e of [p.shadow, p.frame, p.plate]) { e.style.transition = 'opacity .45s ease .15s, transform .5s cubic-bezier(.4,0,.6,1) .15s'; e.style.opacity = 0; e.style.transform = 'translateY(-12px) scale(.985)'; }
+    setTimeout(() => els.forEach(e => e.remove()), 750); }
 }
 // geometry: the inner rect is what shows (a window, or a painting); the frame wraps it; the plate hangs beside it
 function frameWidth(w, h, kind) { return Math.round(clamp(Math.min(w, h) * (kind === 'art' ? .075 : .05), 16, 58)); }
@@ -160,23 +169,32 @@ function setFrame(p, x, y, w, h, opt) {
   if (p.style !== opt.style || p.F !== F) { styleFrame(p.frame, opt.style, F); p.style = opt.style; p.F = F; } p.Fv = F - tuck;   // (Fv: how much of it shows)
   Object.assign(p.frame.style, { left: fx + 'px', top: fy + 'px', width: fw + 'px', height: fh + 'px' });
   Object.assign(p.shadow.style, { left: fx + 'px', top: fy + 'px', width: fw + 'px', height: fh + 'px' });
-  const lw = fw * 1.35 + 140, lh = fh * 1.4 + 160;                     // the spotlight: brightest just above the frame's top, where the light lands
+  const lw = opt.small ? fw * 1.2 + 40 : fw * 1.35 + 140, lh = opt.small ? fh * 1.25 + 46 : fh * 1.4 + 160;   // the spotlight: brightest just above the frame's top, where the light lands (a small work's, its own size)
   Object.assign(p.light.style, { left: fx + fw / 2 - lw / 2 + 'px', top: fy + fh * .3 - lh / 2 + 'px', width: lw + 'px', height: lh + 'px', opacity: opt.lit });
   p.box = [fx, fy, fx + fw, fy + fh];
 }
 // a label goes where it fits: below the frame, else above, else beside it — never over anything else on the wall
-function setPlate(p, label, claimed) {
+function setPlate(p, label, claimed, frames = null, small = null) {
   p.plateBox = null;
   if (label) { const [a, t, m] = p.plate.children;                     // only when it changed: each write re-laid and repainted the label
     if (a.textContent !== label.artist) a.textContent = label.artist; if (t.textContent !== label.title) t.textContent = label.title; if (m.textContent !== label.medium) m.textContent = label.medium; }
   if (!label) { p.plate.style.opacity = 0; return; }
   const [fx, fy, fx1, fy1] = p.box, fw = fx1 - fx, g = 14, PF = frameOf(p.box) || [0, 0, W, H], X0 = PF[0], X1 = PF[0] + PF[2], Y0 = PF[1], Y1 = PF[1] + PF[3];
+  if (small) {                                                         // a small work's card, where its footprint kept room for it
+    const [pw, ph] = SMALL_PLATE, [px, py] = small === 'beside' ? [fx1 + 14, fy1 - (fy1 - fy) / 2 - ph / 2] : [(fx + fx1) / 2 - pw / 2, fy1 + 16];
+    Object.assign(p.plate.style, { left: px + 'px', top: py + 'px', width: pw + 'px', height: ph + 'px', opacity: 1 });
+    p.plate.classList.add('sm'); p.plateBox = [px, py, px + pw, py + ph]; return;
+  }
+  // a label must be nearer its own frame than any other, or nobody can tell whose it is (a window's plate sat right
+  // under a painting's, and with many windows plates floated between them)
+  const bd = (a, b) => Math.hypot(Math.max(b[0] - a[2], a[0] - b[2], 0), Math.max(b[1] - a[3], a[1] - b[3], 0));
+  const mine = b => !frames || frames.every(o => bd(b, p.box) < bd(b, o) - 8);
   for (const sc of [1, .84, .72]) {
     const pw = clamp(fw * .3, 170, 240) * sc, ph = pw * .4, mid = clamp(fx + fw / 2 - pw / 2, X0 + 8, X1 - pw - 8);
     const cands = [[mid, fy1 + g], [mid, fy - g - ph], [fx1 + g, fy1 - ph], [fx - g - pw, fy1 - ph], [fx1 + g, fy], [fx - g - pw, fy]];
     for (const [px, py] of cands) {
       const b = [px, py, px + pw, py + ph];
-      if (px < X0 + 8 || px + pw > X1 - 8 || py < Y0 + 8 || py + ph > FLOOR(PF) || hit(b, claimed)) continue;
+      if (px < X0 + 8 || px + pw > X1 - 8 || py < Y0 + 8 || py + ph > FLOOR(PF) || hit(b, claimed) || !mine(b)) continue;
       glide(p, sc + ':' + cands.findIndex(c => c[0] === px && c[1] === py));
       Object.assign(p.plate.style, { left: px + 'px', top: py + 'px', width: pw + 'px', height: ph + 'px', opacity: 1, fontSize: '' });
       p.plate.classList.toggle('sm', sc < .8); p.plate.classList.remove('rail');
@@ -207,7 +225,7 @@ function glide(p, cand) {
   const g = now < (p.glideUntil || 0);
   if (g !== !!p.gliding) { p.gliding = g; p.plate.style.transition = g ? 'opacity .8s ease, left .4s cubic-bezier(.45,0,.25,1), top .4s cubic-bezier(.45,0,.25,1), width .4s ease, height .4s ease' : ''; }
 }
-function place(p, x, y, w, h, opt) { setFrame(p, x, y, w, h, opt); setPlate(p, opt.label, opt.claimed || []); }
+function place(p, x, y, w, h, opt) { setFrame(p, x, y, w, h, opt); setPlate(p, opt.label, opt.claimed || [], null, opt.small); }
 
 /* ======================= your windows ======================= */
 let wins = [];                                                         // one piece per window, matched by app and position
@@ -294,17 +312,21 @@ function setWindows(all) {
   const others = it => [...fixed, ...items.filter(o => o !== it).map(o => ({ box: [o.t.x, o.t.y, o.t.x + o.t.w, o.t.y + o.t.h], framed: true }))];
   for (const it of items) {
     const F = roomFor(it.t, it.small ? 10 : frameWidth(it.t.w, it.t.h, 'win'), others(it));
-    setFrame(it.p, it.t.x, it.t.y, it.t.w, it.t.h, { kind: 'win', F, style: it.small || F < 12 ? 'black' : frameFor(it.t.app), lit: it.i === 0 ? 1 : .55 });
+    // (a small window: a slim silver mount, not a black slab behind its rounded corners)
+    setFrame(it.p, it.t.x, it.t.y, it.t.w, it.t.h, { kind: 'win', F: it.small ? Math.min(F, 8) : F, style: it.small ? 'silver' : F < 12 ? 'black' : frameFor(it.t.app), lit: it.i === 0 ? 1 : .55, small: it.small });
   }
   const claimed = [...all.map(t => [t.x - 4, t.y - 4, t.x + t.w + 4, t.y + t.h + 4]), ...items.map(it => it.p.box), ...niches.map(n => n.box), ...stands.map(s => s.box)];
-  for (const it of items) setPlate(it.p, it.small ? null : labelFor(it.t.app, it.nth), claimed);
+  // (only your windows' frames: the paintings make room for the labels, so a label never moves on their account)
+  const frames = items.map(it => it.p.box);
+  for (const it of items) setPlate(it.p, it.small ? null : labelFor(it.t.app, it.nth), claimed, frames.filter(b => b !== it.p.box));
   // the front window's frame and label over those behind it, and every window's over the paintings (the paintings hung
   // after a window used to cover its frame and label: the newest element won)
   for (const it of items) { const z = String(100 + items.length - it.i); for (const e of [it.p.shadow, it.p.frame, it.p.plate]) if (e.style.zIndex !== z) e.style.zIndex = z;
     if (it.p.fresh) { it.p.fresh = false; fadeIn(it.p); } }
   // the Stage Manager label last: below its niche, else above, else not at all
+  // (no wider than the niche, down to 110: wider, beside a window, it hit that window's frame and was left off)
   for (const n of niches) {
-    const pw = clamp(n.box[2] - n.box[0] + 10, 130, 200), ph = pw * .38, px = clamp((n.box[0] + n.box[2]) / 2 - pw / 2, 8, W - pw - 8);
+    const pw = clamp(n.box[2] - n.box[0], 110, 200), ph = pw * .38, px = clamp((n.box[0] + n.box[2]) / 2 - pw / 2, 8, W - pw - 8);
     const NF = frameOf(n.box); const spot = [[px, n.box[3] + 10], [px, n.box[1] - 10 - ph]].find(([x, y]) => y > (NF ? NF[1] : 0) + 8 && y + ph < FLOOR(NF) && !hit([x, y, x + pw, y + ph], claimed));
     if (spot) { Object.assign(n.plate.style, { left: spot[0] + 'px', top: spot[1] + 'px', width: pw + 'px', height: ph + 'px', opacity: 1 }); claimed.push([spot[0], spot[1], spot[0] + pw, spot[1] + ph]); n.plateBox = [spot[0], spot[1], spot[0] + pw, spot[1] + ph]; }
     else n.plate.style.opacity = 0;
@@ -322,11 +344,16 @@ function shelveIcons() {
   // built only when the icons change (this runs on every window update, a drag included)
   const key = JSON.stringify([deskIc, deskIcons]); if (key === shelfKey) return; shelfKey = key;
   for (const s of stands) if (s.icon) s.els.forEach(e => e.remove()); stands = stands.filter(s => !s.icon);
-  for (const c of deskIc) {
-    const x0 = c.x - 14, y0 = c.y - 12, x1 = c.x + c.w + 14, y1 = c.y + c.h + 14, els = [];
+  // clusters whose alcoves would touch share one (one bookcase, not a ladder of overlapping alcoves with double edges)
+  const units = deskIc.map(c => ({ b: [c.x - 14, c.y - 12, c.x + c.w + 14, c.y + c.h + 14], cs: [c] }));
+  for (let merged = true; merged;) { merged = false;
+    for (let i = 0; i < units.length && !merged; i++) for (let j = i + 1; j < units.length; j++) { const a = units[i].b, b = units[j].b;
+      if (a[0] <= b[2] + 2 && a[2] >= b[0] - 2 && a[1] <= b[3] + 2 && a[3] >= b[1] - 2) { units[i] = { b: [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])], cs: units[i].cs.concat(units[j].cs) }; units.splice(j, 1); merged = true; break; } } }
+  for (const { b: [x0, y0, x1, y1], cs } of units) {
+    const els = [];
     const al = $('div', 'niche', L.niche); Object.assign(al.style, { left: x0 + 'px', top: y0 + 'px', width: x1 - x0 + 'px', height: y1 - y0 + 'px' }); els.push(al);
     // a row is the icons whose images line up (labels of one or two lines end at different heights): one shelf under it
-    const mine = deskIcons.filter(r => r.x >= c.x - 1 && r.x + r.w <= c.x + c.w + 1 && r.y >= c.y - 1 && r.y + r.h <= c.y + c.h + 1).sort((a, b) => a.iy - b.iy), rows = [];
+    const mine = deskIcons.filter(r => cs.some(c => r.x >= c.x - 1 && r.x + r.w <= c.x + c.w + 1 && r.y >= c.y - 1 && r.y + r.h <= c.y + c.h + 1)).sort((a, b) => a.iy - b.iy), rows = [];
     for (const r of mine) { const row = rows[rows.length - 1]; if (row && r.iy - row.iy < 20) row.b = Math.max(row.b, r.y + r.h); else rows.push({ iy: r.iy, b: r.y + r.h }); }
     for (const { b } of rows) { const sh = $('div', 'shelf', L.niche); Object.assign(sh.style, { left: x0 + 6 + 'px', top: Math.round(b) + 1 + 'px', width: x1 - x0 - 12 + 'px' }); els.push(sh); }
     stands.push({ els, box: [x0, y0, x1, y1 + 10], icon: true });
@@ -336,30 +363,37 @@ function shelveIcons() {
 /* ======================= the collection: masterpieces hung in the free wall ======================= */
 let ART = [], hung = [], DESK = { i: 0, n: 1 };
 const ART_FRAME = { 45434: 'black', 437654: 'silver', 438817: 'silver', 436532: 'oak' };   // the Hokusai print gets a black frame and a mat
-function boxes() {                                                     // where nothing may hang: windows (with their frames and plates), plus a margin
-  const m = 36, out = [];
+function boxes(m = 36) {                                               // where nothing may hang: windows (with their frames and plates), plus a margin
+  const out = [];
   for (const n of niches) { out.push([n.box[0] - m, n.box[1] - m, n.box[2] + m, n.box[3] + m]); if (n.plateBox) out.push([n.plateBox[0] - m, n.plateBox[1] - m, n.plateBox[2] + m, n.plateBox[3] + m]); }
   for (const s of stands) out.push([s.box[0] - m, s.box[1] - m, s.box[2] + m, s.box[3] + m]);
   for (const r of lastAll) out.push([r.x - m, r.y - m, r.x + r.w + m, r.y + r.h + m]);
   for (const c of wins) { out.push([c.box[0] - m, c.box[1] - m, c.box[2] + m, c.box[3] + m]); if (c.plateBox) out.push([c.plateBox[0] - m, c.plateBox[1] - m, c.plateBox[2] + m, c.plateBox[3] + m]); }
   return out;
 }
-// the whole footprint of a hung painting of height h at (x, y): frame + plate below it
-function footprint(art, x, y, h) {
+// the whole footprint of a hung painting of height h at (x, y): frame + plate below it (a small work's plate is a small
+// card, below it or, in a low strip, beside it)
+const SMALL_PLATE = [122, 49];
+function footprint(art, x, y, h, small = null) {
   const w = h * art.w / art.h, F = frameWidth(w, h, 'art'), mat = ART_FRAME[art.id] === 'black' ? Math.round(h * .07) : 0;
-  const fw = w + 2 * (F + mat), fh = h + 2 * (F + mat), pw = clamp(fw * .3, 170, 240), ph = pw * .4;
-  return { w, h, F, mat, fw, fh, box: [x - F - mat, y - F - mat, x + w + F + mat, y + h + F + mat + 16 + ph] };
+  const fw = w + 2 * (F + mat), fh = h + 2 * (F + mat), [pw, ph] = small ? SMALL_PLATE : [clamp(fw * .3, 170, 240), clamp(fw * .3, 170, 240) * .4];
+  const x0 = x - F - mat, y0 = y - F - mat;
+  if (small === 'beside') return { w, h, F, mat, fw, fh, small, box: [x0, y0, x0 + fw + 14 + pw, y0 + Math.max(fh, ph)] };
+  return { w, h, F, mat, fw, fh, small, box: [Math.min(x0, x0 + fw / 2 - pw / 2), y0, Math.max(x0 + fw, x0 + fw / 2 + pw / 2), y0 + fh + 16 + ph] };
 }
-function bestSpot(art, obstacles, F) {
+// big works first; where none fits, the small ones museums hang in narrow places (studies, prints, miniatures), with
+// a tighter margin: beside two ordinary windows the strips left were never big enough, and the wall stayed bare
+function bestSpot(art, obstacles, F, obsSmall) {
   const [FX, FY, FW, FH] = F, top = FY + FH * .07, floor = Math.min(FY + FH * .935, floorOf(F)), step = 14; let best = null;
-  for (const hf of [.42, .37, .32, .28, .24, .2]) {
-    const h = FH * hf, fp0 = footprint(art, 0, 0, h), fw = fp0.box[2] - fp0.box[0], fh = fp0.box[3] - fp0.box[1];
+  for (const [hf, small] of [[.42], [.37], [.32], [.28], [.24], [.2], [.16, 'below'], [.16, 'beside'], [.12, 'below'], [.12, 'beside'], [.09, 'beside'], [.09, 'below']]) {
+    const h = FH * hf, fp0 = footprint(art, 0, 0, h, small), fw = fp0.box[2] - fp0.box[0], fh = fp0.box[3] - fp0.box[1];
+    if (small) obstacles = obsSmall;
     if (fw > FW - 60 || fh > floor - top) continue;
     // prefer a spot near the display's comfortable eye line, then its centre
     for (let y = top; y + fh <= floor; y += step) for (let x = FX + 30; x + fw <= FX + FW - 30; x += step) {
       const b = [x, y, x + fw, y + fh]; if (hit(b, obstacles)) continue;
       const score = h * 10 - Math.abs((y + fh * .45) - (FY + FH * .45)) * .6 - Math.abs((x + fw / 2) - (FX + FW / 2)) * .15;
-      if (!best || score > best.score) best = { score, x: x - fp0.box[0], y: y - fp0.box[1], h, box: b };
+      if (!best || score > best.score) best = { score, x: x - fp0.box[0], y: y - fp0.box[1], h, small, box: b };
     }
     if (best) return best;
   }
@@ -372,30 +406,37 @@ function order() {                                                     // which 
 }
 function hangCollection() {
   if (!ART.length || !FRAMES) return;
-  const obstacles = boxes(), keep = [];
+  const obstacles = boxes(), obsSmall = boxes(18), keep = [];
   // works already on the wall stay where they are if they're still clear; otherwise they're taken down
-  for (const h of hung) { if (!hit(h.box, obstacles) && within(h.box, frameOf(h.box), 0)) { keep.push(h); obstacles.push(pad(h.box)); } else removePiece(h.p, true); }
+  for (const h of hung) { if (!hit(h.box, h.small ? obsSmall : obstacles) && within(h.box, frameOf(h.box), 0)) { keep.push(h); obstacles.push(pad(h.box)); obsSmall.push(padS(h.box)); } else removePiece(h.p, true); }
   hung = keep;
   for (const F of FR) for (const art of order()) {
     if (hung.filter(h => frameOf(h.box) === F).length >= 4) break;        // up to four works on each display
     if (hung.some(h => h.art.id === art.id)) continue;
-    const s = bestSpot(art, obstacles, F); if (!s) continue;
-    const p = makePiece('art'), fp = footprint(art, s.x, s.y, s.h);
-    const img = $('img', 'art', p.frame); img.src = art.file; img.decoding = 'async';
+    const s = bestSpot(art, obstacles, F, obsSmall); if (!s) continue;
+    const p = makePiece('art'), fp = footprint(art, s.x, s.y, s.h, s.small);
+    const img = $('img', 'art', p.frame); img.src = art.file; img.decoding = 'async'; $('div', 'glow', p.frame);
     if (fp.mat) { const m = $('div', 'mat', p.frame); m.style.inset = '0'; p.frame.insertBefore(m, img); Object.assign(img.style, { left: fp.mat + 'px', top: fp.mat + 'px', width: fp.w + 'px', height: fp.h + 'px' }); }
     else Object.assign(img.style, { left: 0, top: 0, width: fp.w + 'px', height: fp.h + 'px' });
-    place(p, s.x - fp.mat, s.y - fp.mat, fp.w + 2 * fp.mat, fp.h + 2 * fp.mat, { kind: 'art', F: fp.F, style: ART_FRAME[art.id] || 'gold', lit: .8,
+    place(p, s.x - fp.mat, s.y - fp.mat, fp.w + 2 * fp.mat, fp.h + 2 * fp.mat, { kind: 'art', F: fp.F, style: ART_FRAME[art.id] || 'gold', lit: s.small ? .6 : .8, small: s.small,
       label: { artist: art.artist, title: `${art.title}, ${art.date}`, medium: `${art.medium} · ${art.credit}` } });   // the full credit lines are in THIRD_PARTY_NOTICES
     // it's hung: lowered gently onto its hook
     for (const e of [p.shadow, p.frame, p.light, p.plate]) { e.style.opacity = 0; e.style.transform = 'translateY(-14px)'; }
     // lowered once its picture is ready (an empty frame used to come down first, and its label ahead of it)
-    const lower = () => requestAnimationFrame(() => requestAnimationFrame(() => { if (p.gone) return; for (const e of [p.shadow, p.frame, p.plate]) { e.style.opacity = ''; e.style.transform = ''; } p.plate.style.opacity = p.plateBox ? 1 : 0; p.light.style.opacity = .8; p.light.style.transform = ''; }));
+    const lower = () => requestAnimationFrame(() => requestAnimationFrame(() => { if (p.gone) return; for (const e of [p.shadow, p.frame, p.plate]) { e.style.opacity = ''; e.style.transform = ''; } p.plate.style.opacity = p.plateBox ? 1 : 0; p.light.style.opacity = s.small ? .6 : .8; p.light.style.transform = ''; }));
     if (img.decode) img.decode().then(lower, lower); else lower();
-    const h = { art, p, box: fp.box.map((v, i) => v + (i % 2 ? 0 : 0)) }; h.box = [s.box[0], s.box[1], s.box[2], s.box[3]];
-    hung.push(h); obstacles.push(pad(h.box));
+    const h = { art, p, small: s.small, box: [s.box[0], s.box[1], s.box[2], s.box[3]] };
+    hung.push(h); obstacles.push(pad(h.box)); obsSmall.push(padS(h.box));
   }
 }
-const pad = b => [b[0] - 30, b[1] - 30, b[2] + 30, b[3] + 30];
+const pad = b => [b[0] - 30, b[1] - 30, b[2] + 30, b[3] + 30], padS = b => [b[0] - 16, b[1] - 16, b[2] + 16, b[3] + 16];
+// a window opened or brought back over a hung work: it comes down now, not at the next re-hang (for a second or so its
+// frame and label peeked out between the windows' frames)
+function liftCovered() {
+  if (!hung.length) return;
+  const over = lastAll.map(r => [r.x - 4, r.y - 4, r.x + r.w + 4, r.y + r.h + 4]).concat(wins.map(c => c.box), wins.filter(c => c.plateBox).map(c => c.plateBox));
+  hung = hung.filter(h => { if (!hit(h.box, over)) return true; removePiece(h.p, true, true); return false; });
+}
 
 /* ======================= after hours ======================= */
 function houseLights() {
@@ -418,7 +459,7 @@ const handle = m => {
     setWindows(lastAll); clearTimeout(settle); settle = setTimeout(hangCollection, 350); return; }
   if (m.t === 'windows') {
     lastRaw = m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, app: (m.n || [])[i] || '', sm: (m.sm || [])[i] === 1 }));
-    lastAll = lastRaw.map(toWorld); setWindows(lastAll);
+    lastAll = lastRaw.map(toWorld); liftCovered(); setWindows(lastAll); liftCovered();
     clearTimeout(settle); settle = setTimeout(hangCollection, m.live ? 900 : 200);   // re-hang once you've stopped moving things
   }
 };

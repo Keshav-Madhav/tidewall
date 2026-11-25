@@ -42,11 +42,23 @@ let W = innerWidth, H = innerHeight, K = devicePixelRatio, fpsEMA = 0, fieldMs =
 let OX = 0, OY = 0;
 const FRS = () => Span.frames();
 const onOneW = (b, m = 0) => FRS().some(([fx, fy, fw, fh]) => b[0] >= fx + m && b[1] >= fy + m && b[2] <= fx + fw - m && b[3] <= fy + fh - m);
-// the compass rose: top-left of the main display
-const compassAt = () => { if (!Span.world) return [W * .09, H * .15]; const [mx, my, mw, mh] = Span.main; return [mx - mw / 2 + mw * .09, my - mh / 2 + mh * .15]; };
+// the compass rose: top-left of the main display. Alone, the first corner no big window covers (fixed at the top-left,
+// a window there hid it whole); one world keeps the main display's top-left, where every display agrees it is
+let roseAt = null;                                       // where the standing town's rose is (set when the town arrives)
+function pickRose() {
+  if (Span.world) { const [mx, my, mw, mh] = Span.main; return [mx - mw / 2 + mw * .09, my - mh / 2 + mh * .15]; }
+  const all = cur.filter(c => c.alive).map(c => ({ x: c.tx, y: c.ty, w: c.tw, h: c.th }));   // (any window: a widget in a corner hid it too)
+  return [[.09, .15], [.91, .15], [.09, .85], [.91, .85]].map(([u, v]) => [W * u, H * v])
+    .find(([x, y]) => !all.concat(deskIc).some(w => x > w.x - 80 && x < w.x + w.w + 80 && y > w.y - 80 && y < w.y + w.h + 80)) || [W * .09, H * .15];
+}
+const compassAt = () => roseAt || pickRose();
+// your big windows where they are going (the still parts of a town are laid clear of them: towers, street names and
+// banners sat half under the windows that made the town). Alone only: in one world each display hears only its own
+// windows, and every display must grow the same town.
+const bigWins = () => Span.world ? [] : cur.filter(c => c.alive && c.owner !== '__icons' && c.tw * c.th >= 60000).map(c => ({ x: c.tx, y: c.ty, w: c.tw, h: c.th }));
 const onMain = () => { const [cx, cy] = compassAt(); return cx >= OX && cy >= OY && cx < OX + W && cy < OY + H; };
 function worldArgs() {
-  const [CX, CY] = compassAt(), FR = Span.world ? FRS() : null, E = [];
+  const [CX, CY] = pickRose(), FR = Span.world ? FRS() : null, E = [];
   if (FR) for (const F of FR) for (const e of Span.edges(F)) { const [x, y, w, h] = F; E.push(e.side === 'top' ? [e.a, y, e.b, y] : e.side === 'bottom' ? [e.a, y + h, e.b, y + h] : e.side === 'left' ? [x, e.a, x, e.b] : [x + w, e.a, x + w, e.b]); }
   return { OX, OY, WW: Span.uw, WH: Span.uh, CX, CY, FR, E: FR ? E : null };
 }
@@ -102,13 +114,13 @@ worker.onmessage = e => {
     f.getContext('2d').drawImage(d.paper, 0, 0); d.paper.close(); f.style.transition = 'none'; f.style.opacity = 1; f.style.zIndex = 1; return; }
   if (d.town && d.failed) { building = false; try { webkit.messageHandlers.host.postMessage('JSERR town ' + d.failed); } catch (_) {} return; }
   if (d.town) {
-    building = false; fieldMs = d.ms; townGen = d.gen || 0;
+    building = false; fieldMs = d.ms; townGen = d.gen || 0; roseAt = [d.CX, d.CY]; meField = d.field;
     if (growQueued) { const q = growQueued.seed; growQueued = null; setTimeout(() => grow(q), 0); }
     // labels, round towers, splats: cross-fade between the old and new decor (after any cross-fade still running)
     const apply = () => {
     const back = decorFront === $('decorA') ? $('decorB') : $('decorA');
     back.width = d.bitmap.width; back.height = d.bitmap.height;
-    const x = back.getContext('2d'); x.drawImage(d.bitmap, 0, 0); d.bitmap.close(); decorate(x, d.rings, d.spots); drawHalls();   // the worker's picture comes on its parchment
+    const x = back.getContext('2d'); x.drawImage(d.bitmap, 0, 0); d.bitmap.close(); decorate(x, d.rings, d.spots, [d.CX, d.CY]); drawHalls();   // the worker's picture comes on its parchment
     // the new sheet fades in on top of the old one (both opaque: nothing shows through mid-fade), then the old one goes
     const old = decorFront; old.style.zIndex = 1; back.style.zIndex = 2; back.style.transition = 'none'; back.style.opacity = 0; void back.offsetWidth;
     back.style.transition = ''; back.style.opacity = 1; decorFront = back;
@@ -129,13 +141,13 @@ function grow(seed) {
   if (building) { growQueued = { seed }; return; } building = true; buildT0 = performance.now();
   townSeed = seed ?? hash(`${citySeed}:${generation++}`);
   const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS); tFrozen = easeMorph(tm);
-  worker.postMessage(Object.assign({ town: true, W, H, K, seed: townSeed, t: tFrozen, paperSeed: citySeed, icons: deskIc.map(d => ({ x: d.x, y: d.y, w: d.w, h: d.h })) }, worldArgs()));
+  worker.postMessage(Object.assign({ town: true, W, H, K, seed: townSeed, t: tFrozen, paperSeed: citySeed, icons: deskIc.map(d => ({ x: d.x, y: d.y, w: d.w, h: d.h })).concat(bigWins()) }, worldArgs()));
 }
 let growQueued = null, tFrozen = 0, townGen = 0, buildT0 = 0;
 // labels go only into open ground the town reported, and never overlap each other, the towers or the compass
-function decorate(x, rings, spots = []) {
+function decorate(x, rings, spots = [], rose = compassAt()) {
   x.setTransform(K, 0, 0, K, 0, 0);
-  const [ccx, ccy] = compassAt(), cpx = ccx - OX, cpy = ccy - OY, mine = !Span.world || onMain();
+  const [ccx, ccy] = rose, cpx = ccx - OX, cpy = ccy - OY, mine = !Span.world || onMain();
   const boxes = mine ? [[cpx - 70, cpy - 70, cpx + 70, cpy + 70]] : [];
   rings = rings.map(rg => ({ cx: rg.cx - OX, cy: rg.cy - OY, r: rg.r, wcx: rg.cx })).filter(rg => rg.cx > -rg.r && rg.cy > -rg.r && rg.cx < W + rg.r && rg.cy < H + rg.r);   // this display's towers
   for (const rg of rings) boxes.push([rg.cx - rg.r - 8, rg.cy - rg.r - 8, rg.cx + rg.r + 8, rg.cy + rg.r + 8]);
@@ -143,21 +155,35 @@ function decorate(x, rings, spots = []) {
     x.font = `${size}px ${SCRIPT}`; const w = x.measureText(text).width + size * 4.6, h = size * 2.6;
     const b = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
     if (b[0] < 8 || b[1] < 8 || b[2] > W - 8 || b[3] > H - 8) return null;
-    if (deskIc.some(d => b[0] < d.x - OX + d.w + 12 && b[2] > d.x - OX - 12 && b[1] < d.y - OY + d.h + 12 && b[3] > d.y - OY - 12)) return null;   // never over your desktop icons
+    if (deskIc.concat(bigWins()).some(d => b[0] < d.x - OX + d.w + 12 && b[2] > d.x - OX - 12 && b[1] < d.y - OY + d.h + 12 && b[3] > d.y - OY - 12)) return null;   // never over your desktop icons or big windows
     return boxes.some(o => b[0] < o[2] + 14 && b[2] > o[0] - 14 && b[1] < o[3] + 14 && b[3] > o[1] - 14) ? null : b;
   };
   for (const rg of rings) {                          // a tower's name sits just beneath it
     const name = placeName(rng(hash(`ring${townSeed}${rg.wcx | 0}`))), cy = rg.cy + rg.r + 22, b = fits(rg.cx, cy, name, 11);
     if (b) { boxes.push(b); banner(x, name, rg.cx, cy, 11); }
   }
-  let placed = 0; const want = Math.round(W * H / 260000);
+  // the banners well apart, each with its own slight tilt and size, as if pinned by hand (taken in the worker's order
+  // with only the boxes' gap between them, three or four stacked into a tidy column: a list, not places)
+  let placed = 0; const want = Math.round(W * H / 260000), at = [];
   for (const [px, py] of spots) {
     if (placed >= want) break;
-    const name = placeName(rng(hash(`b${townSeed}${(px + OX) | 0}:${(py + OY) | 0}`))), b = fits(px, py, name, 11.5);
-    if (!b) continue; boxes.push(b); banner(x, name, px, py, 11.5); placed++;
+    if (at.some(([ax, ay]) => Math.hypot(ax - px, ay - py) < 180)) continue;
+    const HR = rng(hash(`b${townSeed}${(px + OX) | 0}:${(py + OY) | 0}`)), name = placeName(HR), size = 10.5 + HR() * 2, tilt = (HR() - .5) * .14;
+    const b = fits(px, py, name, size);
+    if (!b) continue; boxes.push(b); at.push([px, py]);
+    x.save(); x.translate(px, py); x.rotate(tilt); banner(x, name, 0, 0, size); x.restore(); placed++;
   }
   if (mine) compassRose(x, cpx, cpy, 44);
-  decorBoxes = boxes.map(b => [b[0] + OX, b[1] + OY, b[2] + OX, b[3] + OY]);   // (the halls' scrolls keep off them: one sat on the compass rose)
+  keepOld = decorBoxes; decorBoxes = boxes.map(b => [b[0] + OX, b[1] + OY, b[2] + OX, b[3] + OY]);   // (the halls' scrolls keep off them: one sat on the compass rose)
+  keepAt = performance.now(); needFrame = true; wake();
+}
+// the wall letters keep out from under the banners, the towers and the rose (the ink layer is above the decor, so its
+// letters ran across a banner's end and into the rose); a sheet's boxes fade in and out with it, so letters thin away
+// under a new banner as it inks in rather than vanishing at once
+let keepOld = [], keepAt = -1e9;
+function keepBoxes(now) {
+  const k = Math.min(1, Math.max(0, (now - keepAt) / 1600)), e = k * k * (3 - 2 * k);
+  return decorBoxes.map(b => [...b, e]).concat(e < 1 ? keepOld.map(b => [...b, 1 - e]) : []);
 }
 let decorBoxes = [];
 
@@ -279,20 +305,24 @@ function drawHalls() {   // a red scroll naming each app's hall: a small sprite 
     let el = hallTags.get(c.owner);
     if (!el) {
       const name = placeName(rng(hash('hall:' + c.owner))), m = document.createElement('canvas').getContext('2d'); m.font = `14px ${SCRIPT}`;
-      const tw = Math.ceil(m.measureText(name).width) + 52, th = 34; el = document.createElement('canvas');
+      const tw = Math.ceil(m.measureText(name).width + 14 * 4.6 + 4), th = 34; el = document.createElement('canvas');   // (room for banner()'s tails: at +52 both ends were cut off square)
       el.width = tw * K; el.height = th * K; el.style.cssText = `position:fixed;left:0;top:0;z-index:5;width:${tw}px;height:${th}px;pointer-events:none;will-change:transform,opacity`;
       const x = el.getContext('2d'); x.scale(K, K); banner(x, name, tw / 2, th / 2, 14, RED); el._w = tw; el._h = th;
       document.body.appendChild(el); hallTags.set(c.owner, el);
     }
     const spots = [[c.x + c.w / 2, c.y - 26], [c.x + c.w / 2, c.y + c.h + 28], [c.x + 20 + el._w / 2, c.y - 26], [c.x + c.w - 20 - el._w / 2, c.y + c.h + 28],
                    [c.x + c.w - 20 - el._w / 2, c.y - 26], [c.x + 20 + el._w / 2, c.y + c.h + 28]];
-    const box = ([x, y]) => [x - el._w / 2 + 14, y - el._h / 2 + 6, x + el._w / 2 - 14, y + el._h / 2 - 6];   // the scroll's ends may tuck in
+    const box = ([x, y]) => [x - el._w / 2 + 22, y - el._h / 2 + 6, x + el._w / 2 - 22, y + el._h / 2 - 6];   // the scroll's ends may tuck in
     let k = el._spot != null && clear(box(spots[el._spot])) ? el._spot : spots.findIndex(sp => clear(box(sp)));
+    // mid-drag with nowhere clear: it rides along where it was (it faded out and back in on the drop); placed afresh
+    // once the window settles
+    if (k < 0 && el._spot != null && performance.now() < liveUntil && el.style.opacity !== '0') k = el._spot;
     const hide = k < 0; if (hide) k = el._spot ?? 0;
     // a scroll that has to change sides (its spot is no longer clear) slides there instead of jumping
     const now = performance.now(); if (!hide && el._spot != null && k !== el._spot && el.style.opacity !== '0') el._slideUntil = now + 400;
     el._spot = hide ? el._spot : k;
     const [cx, cy] = spots[k]; if (!hide) taken.push(box(spots[k]));
+    el._box = hide ? null : [cx - el._w / 2 + 10, cy - el._h / 2 + 4, cx + el._w / 2 - 10, cy + el._h / 2 - 4];   // (the walkers' names keep off it)
     if (el._leaving) { clearTimeout(el._leaving); el._leaving = 0; el.style.transition = ''; }
     el.style.transition = el._slideUntil > now ? 'opacity .4s ease, transform .38s cubic-bezier(.2, .7, .3, 1)' : 'opacity .4s ease';
     el.style.transform = `translate3d(${(cx - el._w / 2 - OX).toFixed(1)}px,${(cy - el._h / 2 - OY).toFixed(1)}px,0)`; el.style.opacity = hide ? 0 : c.life.toFixed(3);
@@ -312,12 +342,13 @@ function maybeNewTown() {
   // never while a window is still under your hand (held still mid-drag, the town used to regrow beneath it); a hand
   // that never says it let go counts as gone after 3 s
   const nw = performance.now(); if (heldAt && nw - heldAt < 3000 || nw - settledAt < 450) { if (!maybeNewTown.t) maybeNewTown.t = setTimeout(() => { maybeNewTown.t = 0; maybeNewTown(); }, 700); return; }
-  const key = cur.filter(c => c.alive && c.w * c.h >= 60000 && c.owner !== '__icons').map(c => `${c.owner}@${Math.round((c.x + c.w / 2) / 260)},${Math.round((c.y + c.h / 2) / 260)}:${Math.round(c.w / 300)}x${Math.round(c.h / 300)}`).sort().join('|');
+  const key = winKey();
   if (key === layoutKey) return;
   if (Span.world && !Span.leader()) return;                         // one world: the leader decides when the town changes
   const first = layoutKey === ''; layoutKey = key;
-  if (!first) { grow(hash(`${citySeed}|${key}`)); Span.post('town', { seed: townSeed }); }
+  if (!first || !Span.world) { const sd = hash(`${citySeed}|${key}`); if (sd !== townSeed) { grow(sd); Span.post('town', { seed: townSeed }); } }
 }
+const winKey = () => cur.filter(c => c.alive && c.w * c.h >= 60000 && c.owner !== '__icons').map(c => `${c.owner}@${Math.round((c.x + c.w / 2) / 260)},${Math.round((c.y + c.h / 2) / 260)}:${Math.round(c.w / 300)}x${Math.round(c.h / 300)}`).sort().join('|');
 // the leader says which town is standing (now and then, so a display that has just come back grows the same one)
 Span.on('town', m => { if (Span.leader() && m.from > Span.i) return;    // two leaders for a moment: the lower one's town wins
   if (booted && m.seed !== townSeed && !(growQueued && growQueued.seed === m.seed)) grow(m.seed); });
@@ -337,7 +368,7 @@ function loop0(now) {
   // 1) show the newest finished frame — exactly once per display refresh
   if (pending) { drawGlyphs(pending.inst, pending.n); worker.postMessage({ recycle: pending.inst }, [pending.inst.buffer]); pending = null; }
   // 2) advance the eased state and ask for the next frame right away, so it lands before the next refresh
-  const moving = stepWins(dt), morphing = (now - morphStart) < MORPH_MS;
+  const moving = stepWins(dt), morphing = (now - morphStart) < MORPH_MS || now - keepAt < 1700;   // (a new sheet's keep-out boxes fading in)
   animating = moving || morphing;
   if (moving) window.__twSettle && window.__twSettle(150);   // windows easing play at the full rate until they've settled
   // window motion: every refresh; a slow town morph on its own: every other refresh (looks identical, half the work)
@@ -355,7 +386,7 @@ function requestFrame() {
   if (inflight) { needFrame = true; return; }
   inflight = true; inflightT0 = performance.now();
   const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS);
-  worker.postMessage({ frame: true, sent: performance.now(), t: building ? tFrozen : easeMorph(tm), gen: townGen, wins: cur.map(c => ({ x: c.x, y: c.y, w: c.w, h: c.h, life: c.life })) });
+  worker.postMessage({ frame: true, sent: performance.now(), t: building ? tFrozen : easeMorph(tm), gen: townGen, wins: cur.map(c => ({ x: c.x, y: c.y, w: c.w, h: c.h, life: c.life })), keep: keepBoxes(performance.now()) });
 }
 
 /* ---------- shoeprints, walkers ---------- */
@@ -374,10 +405,12 @@ function shoe(left) {
 const SHOES = [shoe(true), shoe(false)];
 function makeTag(name, color) {
   const c = document.createElement('canvas'), m = c.getContext('2d'); m.font = `12px ${SCRIPT}`;
-  const tw = Math.ceil(m.measureText(name).width) + 44, th = 28; c.width = tw * K; c.height = th * K; c.style.width = tw + 'px'; c.style.height = th + 'px'; c.className = 'tag';
+  // (wide enough for the swallowtails: at +44 both ends were cut off square)
+  const tw = Math.ceil(m.measureText(name).width + 12 * 4.6 + 4), th = 28; c.width = tw * K; c.height = th * K; c.style.width = tw + 'px'; c.style.height = th + 'px'; c.className = 'tag';
   const x = c.getContext('2d'); x.scale(K, K); banner(x, name, tw / 2, th / 2, 12, color); document.body.appendChild(c); return c;
 }
 const SPREAD = 3.4;
+let tagBoxes = [];                                       // [walker, world box] of the names showing
 let liveSteps = 0;
 class Walker {
   constructor(name, color, { stride = 32, trail = 0, mine = false } = {}) {
@@ -396,9 +429,24 @@ class Walker {
       this.prints.push(img);
       while (this.prints.length > this.trail) { const old = this.prints.shift(); old.style.setProperty('--from', getComputedStyle(old).opacity); old.style.animation = 'gone .9s ease forwards'; }
     }
-    this.tag.style.opacity = 1; const tw = parseFloat(this.tag.style.width) || 120, th = parseFloat(this.tag.style.height) || 28;   // the name stays on the page, whatever the walker does
-    this.tag.style.transform = `translate3d(${Math.min(px - OX + 14, W - tw - 6).toFixed(1)}px,${Math.min(py - OY + 10, H - th - 6).toFixed(1)}px,0)`;
-    clearTimeout(this.timer); this.timer = setTimeout(() => this.tag.style.opacity = 0, 3000);
+    const tw = parseFloat(this.tag.style.width) || 120, th = parseFloat(this.tag.style.height) || 28;   // the name stays on the page, whatever the walker does
+    // the name hangs on whichever side of the walker is clear of your windows, the banners and towers and the other
+    // names (always below-right, it slid under windows and onto towers); it keeps its side while that stays clear
+    const sides = [[14, 10], [-14 - tw, 10], [14, -10 - th], [-14 - tw, -10 - th]].map(([dx, dy]) =>
+      [Math.max(6, Math.min(px - OX + dx, W - tw - 6)), Math.max(6, Math.min(py - OY + dy, H - th - 6))]);
+    const hit = (a, b) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
+    const free = ([x0, y0]) => { const b = [x0 + OX + 10, y0 + OY + 4, x0 + OX + tw - 10, y0 + OY + th - 4];
+      return !cur.some(c => c.alive && hit(b, [c.x, c.y, c.x + c.w, c.y + c.h])) && !decorBoxes.some(o => hit(b, o))
+        && !tagBoxes.some(([w, o]) => w !== this && hit(b, o)) && ![...hallTags.values()].some(el => el._box && hit(b, el._box)); };
+    if (!(this.tagSide >= 0 && free(sides[this.tagSide]))) { const k = sides.findIndex(free); if (k >= 0) this.tagSide = k; else this.tagSide ??= 0; }
+    const [tx, ty] = sides[this.tagSide];
+    tagBoxes = tagBoxes.filter(([w]) => w !== this); tagBoxes.push([this, [tx + OX, ty + OY, tx + OX + tw, ty + OY + th]]);
+    // a name that was put away unrolls where it's wanted (it faded in while flying over from where it last was)
+    if (this.tag.style.opacity !== '1') { this.tag.style.transition = 'none'; this.tag.style.transform = `translate3d(${tx.toFixed(1)}px,${ty.toFixed(1)}px,0) scaleX(.04)`; void this.tag.offsetWidth; this.tag.style.transition = ''; }
+    this.tag.style.opacity = 1;
+    this.tag.style.transform = `translate3d(${tx.toFixed(1)}px,${ty.toFixed(1)}px,0) scaleX(1)`;
+    clearTimeout(this.timer); this.timer = setTimeout(() => { this.tag.style.opacity = 0; this.tag.style.transform = this.tag.style.transform.replace('scaleX(1)', 'scaleX(.04)');   // rolled up as it goes
+      tagBoxes = tagBoxes.filter(([w]) => w !== this); }, 3000);
   }
   // walk in a straight segment to (nx, ny), laying prints every stride
   move(nx, ny) {
@@ -413,6 +461,17 @@ class Walker {
     this.dist = (this.dist + d) % this.stride; this.sm = { x: nx, y: ny };
   }
 }
+// the standing town's plan, coarsely (from the worker, with the town): > 2.5 inside a building. Your windows' courts are
+// open ground, as the walls drawn round them are
+let meField = null;
+function fieldAt(x, y) {
+  const F = meField; if (!F) return -99;
+  for (const c of cur) if (c.alive && x > c.x - 16 && x < c.x + c.w + 16 && y > c.y - 16 && y < c.y + c.h + 16) return -99;
+  const fx = (x - F.x0) / F.c, fy = (y - F.y0) / F.c; if (fx < 0 || fy < 0 || fx >= F.w - 1 || fy >= F.h - 1) return -99;
+  const ix = fx | 0, iy = fy | 0, tx = fx - ix, ty = fy - iy, i = iy * F.w + ix, a = F.f;
+  return (a[i] * (1 - tx) + a[i + 1] * tx) * (1 - ty) + (a[i + F.w] * (1 - tx) + a[i + F.w + 1] * tx) * ty;
+}
+const inside = (x, y) => fieldAt(x, y) > 1;
 // you: a walker who follows the cursor at walking pace, leaving a short trail
 let me = null, target = null, chasing = false, chaseT = 0;
 function chase(now) {
@@ -421,7 +480,17 @@ function chase(now) {
   const dx = target.x - me.sm.x, dy = target.y - me.sm.y, d = Math.hypot(dx, dy);
   if (d < 1) { chasing = false; chaseT = 0; return; }
   const step = Math.min(d * (1 - Math.exp(-dt * 6)), 170 * dt);     // eased, but never faster than a brisk walk
-  me.move(me.sm.x + dx / d * step, me.sm.y + dy / d * step); sendWalk();
+  let sx = dx / d * step, sy = dy / d * step;
+  // your prints keep to the streets as the strangers' do: a step that would go into a building slides along its wall
+  // instead (they marched straight through the lettered walls); into the building you're pointing at, you may go
+  if (inside(me.sm.x + sx, me.sm.y + sy) && !inside(me.sm.x, me.sm.y) && !(d < 50 && inside(target.x, target.y))) {
+    const e = 6, gx = fieldAt(me.sm.x + e, me.sm.y) - fieldAt(me.sm.x - e, me.sm.y), gy = fieldAt(me.sm.x, me.sm.y + e) - fieldAt(me.sm.x, me.sm.y - e), l = Math.hypot(gx, gy);
+    if (l > 1e-3) { const into = (sx * gx + sy * gy) / l; if (into > 0) { sx -= gx / l * into; sy -= gy / l * into; } }
+    if (inside(me.sm.x + sx, me.sm.y + sy)) { sx = 0; sy = 0; }
+    if (Math.hypot(sx, sy) < .05) { if (!(me.blockT > 0)) me.blockT = now; if (now - me.blockT > 900) { sx = dx / d * step; sy = dy / d * step; } }   // cornered: through, as before
+    else me.blockT = 0;
+  } else me.blockT = 0;
+  if (sx || sy) me.move(me.sm.x + sx, me.sm.y + sy); sendWalk();
   requestAnimationFrame(chase);
 }
 // one world: the leader walks everyone, the other displays lay the same prints from where they are
@@ -518,7 +587,10 @@ const handle0 = m => {
     if (lastWinMsg) handle0(lastWinMsg); return; }
   if (m.t === 'me') {
     meSeed = m.seed; citySeed = ((m.seed >>> 0) ^ Math.imul(deskI, 0x9E3779B9)) >>> 0 || 1;   // each display grows its own town (one world: one town)
-    if (!booted) { booted = true; worker.postMessage(paperMsg()); grow();
+    if (!booted) { booted = true; worker.postMessage(paperMsg());
+      // alone, the boot town is the one this arrangement of windows grows, as every later one is (it was another town
+      // each boot, so a hide and show came back to a different town than you had)
+      if (Span.world) grow(); else setTimeout(() => { layoutKey = winKey(); grow(hash(`${citySeed}|${layoutKey}`)); }, lastWinMsg ? 0 : 300);
     }
     if (!me) { me = new Walker(personName(rng(citySeed)), RED, { stride: 30, trail: 9, mine: true }); startStrangers(citySeed + 7); }
     return;
