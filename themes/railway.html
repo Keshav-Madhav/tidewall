@@ -24,14 +24,15 @@
   canvas.board { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
   .lamp { position: fixed; left: 0; top: 0; pointer-events: none; z-index: 2; opacity: 0; transition: opacity 380ms cubic-bezier(.45,0,.25,1); }
   .sprite { position: fixed; left: 0; top: 0; pointer-events: none; will-change: transform; z-index: 2; }
-  .puff { position: fixed; left: 0; top: 0; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; pointer-events: none; z-index: 3;
+  .puff { position: fixed; left: 0; top: 0; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; pointer-events: none; z-index: 3; opacity: 0;
     background: radial-gradient(circle at 38% 34%, #fff 0%, #f6f6f3 38%, #dcdcd6 64%, rgba(215,215,208,0) 71%);
     animation: puff 2.3s cubic-bezier(.2,.7,.3,1) forwards; }
   .xl { position: fixed; left: 0; top: 0; width: 3.4px; height: 3.4px; margin: -1.7px 0 0 -1.7px; border-radius: 50%; pointer-events: none; z-index: 3; background: #ff4b3a; box-shadow: 0 0 4px 1.5px rgba(255,75,58,.7); opacity: 0; transition: opacity .3s; }
   .xl.on { animation: blink .9s steps(1) infinite; }
   .xl.on.b { animation-delay: .45s; }
   @keyframes blink { 0% { opacity: 1; } 50% { opacity: .08; } }
-  @keyframes puff { from { opacity: 1; transform: translate(var(--x0), var(--y0)) scale(.45); } to { opacity: 0; transform: translate(var(--x1), var(--y1)) scale(2.2); } }
+  /* (a puff starts half see-through: at full white it sat on the chimney like a ball) */
+  @keyframes puff { from { opacity: .58; transform: translate(var(--x0), var(--y0)) scale(.45); } to { opacity: 0; transform: translate(var(--x1), var(--y1)) scale(2.2); } }
 </style>
 </head>
 <body>
@@ -78,6 +79,10 @@ function setTargets(list) {
   const sm = list.filter(t => t.sm), rest = list.filter(t => !t.sm && t.owner !== '__gap' && t.owner !== '__icons' && t.w >= 50 && t.h >= 40 && Math.min(t.x + t.w, W) - Math.max(t.x, 0) >= 50 && Math.min(t.y + t.h, H) - Math.max(t.y, 0) >= 40);   // (a window half off the left edge counts, as one half off any other edge always did)
   if (sm.length) { const x0 = Math.min(...sm.map(t => t.x)), y0 = Math.min(...sm.map(t => t.y)), x1 = Math.max(...sm.map(t => t.x + t.w)), y1 = Math.max(...sm.map(t => t.y + t.h));
     rest.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, owner: 'Stage Manager', stage: true }); }
+  // a window over (nearly) the whole display hides the board: keep the land as it is under it. Laying it out again for
+  // that window flattened everything, so un-maximising faded the whole board up from a bare green ghost.
+  const da = SW * SH, covers = t => (Math.max(0, Math.min(t.x + t.w, OX + SW) - Math.max(t.x, OX)) * Math.max(0, Math.min(t.y + t.h, OY + SH) - Math.max(t.y, OY))) >= .95 * da;
+  if (slots.length && rest.some(covers)) return;
   const used = new Set();
   for (const t of rest.slice(0, 16).concat(obs)) {
     let best = null, bd = 1e9;
@@ -244,6 +249,7 @@ function buildWorld() {
 /* ---------- the road network, routed for the current layout: villages, towns (their ring roads), exits ---------- */
 let roadKey = null, roadJob = null, oldRoads = [], roadFade = 1, lastMoveT = 0;
 const OM = VERGE + ROAD / 2;                                          // the ring road's centre line, out from its window
+const SQ_R = 15;                                                      // where a village's roads meet its square
 const isVis = v => kAt(v.x, v.y) > HOUSE_GAP + 34 && nsAt(v.x, v.y) > 30;
 // where a road from (ox, oy) meets a town's ring road: on the facing side, clear of the corners
 function ringEnd(s, ox, oy) {
@@ -288,7 +294,18 @@ function stepRoadJob(budget) {
     if (!path) continue;
     let mid = [ea.route, ...path.filter((p, k) => k % 3 === 1), eb.route];
     mid = resample(chaikinOpen(mid, 3), 6, false); mid = laplace(mid, 24, .5, false, 1, 1);
-    const pts = resample([...ea.pts, ...mid, ...eb.pts.slice().reverse()], STEP, false);
+    let pts = resample([...ea.pts, ...mid, ...eb.pts.slice().reverse()], STEP, false);
+    // a village's road stops at the rim of its square (to its middle, cars drove over the fountain and turned on it)
+    const rim = (N, p) => N.kind === 'vil' && Math.hypot(p[0] - N.x, p[1] - N.y) < SQ_R;
+    while (pts.length > 4 && rim(A, pts[0])) pts.shift(); while (pts.length > 4 && rim(B, pts[pts.length - 1])) pts.pop();
+    // a road that dives under a window and leaves only a stub in sight (a short run, or one that never gets clear of a
+    // town's ring) is a road to nowhere: not laid. (A short road that's all in view is a real one.)
+    const open = runs(pts.map(p => twAt(p[0], p[1]) > OM - .5), false); let longest = null, shown = 0; for (const o of open) { shown += o[1]; if (!longest || o[1] > longest[1]) longest = o; }
+    if (!longest) continue;
+    if (shown < pts.length * .9 && longest[1] * STEP < 80) continue;
+    { let far = 0; for (let k = longest[0]; k < longest[0] + longest[1]; k++) far = Math.max(far, twAt(pts[k][0], pts[k][1])); if (far < 50) continue;
+      const p0 = pts[longest[0]], p1 = pts[longest[0] + longest[1] - 1];   // a hairpin: off a ring and straight back onto it close by
+      if (twAt(p0[0], p0[1]) < OM + 10 && twAt(p1[0], p1[1]) < OM + 10 && Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) < 70) continue; }
     const r = { pts, len: (pts.length - 1) * STEP, a, b, closed: false };
     for (const p of pts) { const i = Math.round(p[0] / J.C), j = Math.round(p[1] / J.C); for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const ii = i + di, jj = j + dj; if (ii >= 0 && jj >= 0 && ii < J.nx && jj < J.ny) J.used[jj * J.nx + ii] = 1; } }
     J.out.push(r);
@@ -401,8 +418,10 @@ function traceMain() {
 /* ---------- stations (with passing loops) on the main line; branch lines to the towns away from it ---------- */
 const SUFFIX = ['Junction', 'Central', 'Road', 'Parkway', 'Halt', 'Street', 'Town', 'Bridge'];
 let stations = [], branches = [], ghosts = [];
-const stName = s => `${(s.owner || 'Town').replace(/\.app$/, '').split(' ')[0]} ${SUFFIX[s.id % SUFFIX.length]}`;
+// (a window with no owner's name comes as '?': it borrows a village name, not "? Central")
+const stName = s => `${s.owner && s.owner !== '?' ? s.owner.replace(/\.app$/, '').split(' ')[0] : ['Fernleigh', 'Ashcombe', 'Kettlewell', 'Oakhurst', 'Pennycross', 'Elderwick'][s.id % 6]} ${SUFFIX[s.id % SUFFIX.length]}`;
 const loopF = u => sstep(LOOP_HALF, LOOP_HALF - 40, Math.abs(u));    // 0 at the switches, 1 alongside the platform
+const NB = 28.5;                                                      // the nameboard, out from the track: clear of the platform (18) and its shadow
 function layNetwork() {
   const out = [], newB = []; BRD = [];
   const C = 12, mx = Math.ceil(W / C) + 1, my = Math.ceil(H / C) + 1, MM = new Uint8Array(mx * my);
@@ -422,8 +441,9 @@ function layNetwork() {
         const p = L.pts[i], e = tw.kind === 'win' ? sdRB(p[0], p[1], tw.x, tw.y, tw.s.w / 2, tw.s.h / 2, 10) : Math.hypot(p[0] - tw.x, p[1] - tw.y) - 40; if (e > (tw.kind === 'win' ? Math.max(TT + 18, HOUSE_GAP + 2 * ROW2 + 60) : Math.max(TT + 18, 84))) continue;
         if (out.some(o => o.L === mainL && Math.abs(rel(mainL, o.s - i * STEP)) < 2 * LOOP_HALF + 70)) continue;
         let bad = false; for (let k = -40; k <= 40; k += 4) { const q = (i + k + n) % n; if (L.tun[q] || L.br[q]) { bad = true; break; } } if (bad) continue;
-        const ta = tangent(L, i * STEP), sd = ((tw.x - p[0]) * -Math.sin(ta) + (tw.y - p[1]) * Math.cos(ta)) > 0 ? 1 : -1, bxp = p[0] - Math.sin(ta) * sd * 26, byp = p[1] + Math.cos(ta) * sd * 26;
+        const ta = tangent(L, i * STEP), sd = ((tw.x - p[0]) * -Math.sin(ta) + (tw.y - p[1]) * Math.cos(ta)) > 0 ? 1 : -1, bxp = p[0] - Math.sin(ta) * sd * NB, byp = p[1] + Math.cos(ta) * sd * NB;
         if (Math.min(bxp, W - bxp, H - byp) < FRAME + 40 || byp < TOP + 12) continue;   // its nameboard must stand on the board
+        if (villages.some(v => isVis(v) && [-28, 0, 28].some(u => Math.hypot(bxp + Math.cos(ta) * u - v.x, byp + Math.sin(ta) * u - v.y) < 24))) continue;   // and not on a village square
         if (rdAt(p[0] - Math.sin(ta) * sd * 13, p[1] + Math.cos(ta) * sd * 13) < 9) continue;   // and the platform not on a road
         const a0 = tangent(L, i * STEP - 50), a1 = tangent(L, i * STEP + 50), bend = Math.abs(Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0)));
         const score = e + bend * 120;
@@ -486,8 +506,8 @@ function buildBranch(tw, others, sts, ctx) {
   if ([pNear, pFar, A].some(p => ewAt(p[0], p[1]) < T - 8 || Math.min(p[0], p[1], W - p[0], H - p[1]) < FRAME + 20 || rdAt(p[0], p[1]) < 9)) { BRD.push(tw.name + ':platform'); return null; }
   // try junction points along the main line; from each, one smooth curve that leaves the main line along it and arrives
   // straight into the platform. Keep the shortest with no tight bends, no crossing of other lines, clear of towns and villages.
-  const free = i => { for (let k = -30; k <= 30; k += 3) { const q = (i + k + n0) % n0; if (L0.tun[q] || L0.br[q]) return false; }
-    return !sts.some(o => o.L === L0 && Math.abs(rel(L0, o.s - i * STEP)) < LOOP_HALF + 90) && !others.some(b => Math.abs(rel(L0, b.jS - i * STEP)) < 150); };
+  const free = (i, gap) => { for (let k = -30; k <= 30; k += 3) { const q = (i + k + n0) % n0; if (L0.tun[q] || L0.br[q]) return false; }
+    return !sts.some(o => o.L === L0 && Math.abs(rel(L0, o.s - i * STEP)) < LOOP_HALF + 90) && !others.some(b => Math.abs(rel(L0, b.jS - i * STEP)) < gap); };
   const tryCurve = (i, dJ) => {
     const p = L0.pts[i], D = Math.hypot(A[0] - p[0], A[1] - p[1]); if (D < 110 || D > 950) return null;
     const a = tangent(L0, i * STEP) + (dJ < 0 ? Math.PI : 0), t0 = [Math.cos(a), Math.sin(a)];
@@ -506,7 +526,8 @@ function buildBranch(tw, others, sts, ctx) {
     return { pts, len: n * STEP };
   };
   let bestC = null;
-  for (let i = 0; i < n0; i += 4) { if (!free(i)) continue; for (const dJ of [1, -1]) { const r = tryCurve(i, dJ); if (r && (!bestC || r.len < bestC.len)) bestC = Object.assign(r, { i, dJ }); } }
+  // (junctions well apart; if that leaves a village with no line at all, they may stand a little closer)
+  for (const gap of [150, 110]) { for (let i = 0; i < n0; i += 4) { if (!free(i, gap)) continue; for (const dJ of [1, -1]) { const r = tryCurve(i, dJ); if (r && (!bestC || r.len < bestC.len)) bestC = Object.assign(r, { i, dJ }); } } if (bestC) break; }
   if (!bestC) { BRD.push(tw.name + ':nocurve'); return null; }
   const sJ = bestC.i * STEP, dJ = bestC.dJ, pts = bestC.pts, aj = tangent(L0, sJ);
   const sg = ((A[0] - pts[0][0]) * -Math.sin(aj) + (A[1] - pts[0][1]) * Math.cos(aj)) > 0 ? 1 : -1;
@@ -570,13 +591,13 @@ function buildVillageScen() {
     if (!(v.node >= 0) || !isVis(v)) continue; const nd = rnodes[v.node]; let k = 0, church = false;
     const add = (x, y, nm, dw) => villageScen.push({ id: `vh${v.i}:${k++}`, x, y, src: 'houses', r: ATLAS.H[nm], dw });
     for (const rd of nd.roads) { const fromA = rd.a === v.node;                       // houses facing each road out of the village
-      for (const side of [-1, 1]) { let u = 28;
-        while (u < 112 && u < rd.len - 24) { const n = v.i * 131 + k * 7.7 + side * 3.1, [nm, dw0] = TOWN[Math.floor(h1(n) * TOWN.length)], dw = dw0 * .9, r = ATLAS.H[nm], dh = dw * r[3] / r[2];
+      for (const side of [-1, 1]) { let u = 12;                     // (the road starts at the square's rim now)
+        while (u < 96 && u < rd.len - 24) { const n = v.i * 131 + k * 7.7 + side * 3.1, [nm, dw0] = TOWN[Math.floor(h1(n) * TOWN.length)], dw = dw0 * .9, r = ATLAS.H[nm], dh = dw * r[3] / r[2];
           const sp = fromA ? u : rd.len - u, p = at(rd, sp), a = tangent(rd, sp), nx = -Math.sin(a) * side, ny = Math.cos(a) * side;
           const ext = Math.abs(nx) * dw + Math.abs(ny) * dh, cx = p[0] + nx * (7 + ext / 2), cy = p[1] + ny * (7 + ext / 2);
           add(cx, cy + dh / 2, nm, dw);
           u += Math.abs(Math.cos(a)) * dw + Math.abs(Math.sin(a)) * dh + 3 + (h1(n + .5) < .2 ? 12 : 0); } } }
-    const dirs = nd.roads.map(rd => { const p = at(rd, rd.a === v.node ? 14 : rd.len - 14); return Math.atan2(p[1] - v.y, p[0] - v.x); });
+    const dirs = nd.roads.map(rd => { const p = at(rd, rd.a === v.node ? 2 : rd.len - 2); return Math.atan2(p[1] - v.y, p[0] - v.x); });
     for (let q = 0; q < 10; q++) { const th = q / 10 * 6.2832 + .3;                // round the square: the church first
       if (dirs.some(d0 => Math.abs(Math.atan2(Math.sin(d0 - th), Math.cos(d0 - th))) < .5)) continue;
       const [nm, dw] = !church ? ['church', 28] : TOWN[Math.floor(h1(v.i * 7 + q) * TOWN.length)], r = ATLAS.H[nm], dw2 = dw * .9, dh = dw2 * r[3] / r[2]; church = true;
@@ -654,7 +675,8 @@ function layScenery() {
       if (clearOf(x0, y0, x0 + dw, by, 8, .5, 4) && !overlaps(x0, y0, x0 + dw, by) && (sd !== st.side || walk(q[0], by - 3, p[0] - Math.sin(a) * sd * 14, p[1] + Math.cos(a) * sd * 14))) placed = { q, x0, y0, by, sd, u }; }
     if (!placed) continue;
     out.push({ id: 'sb' + st.id, x: placed.q[0], y: placed.by, src: 'houses', r, dw, ok: true }); addFoot([placed.x0, placed.y0, placed.x0 + dw, placed.by]);
-    if (placed.sd !== st.side) footbridges.push({ L: st.L, s: st.s + placed.u * .5 + (placed.u ? 0 : 20) });
+    if (placed.sd !== st.side) { const half = (st.name.length * 4.6 + 12) / 2;      // past the platform's end and its nameboard (about 4.6 pt a letter)
+      footbridges.push({ id: st.id, L: st.L, s: st.s + (placed.u < 0 ? -1 : 1) * Math.max(54, half + 10) }); }
     // the station's own little place: houses on its side, reachable from it; or one landmark if only that fits
     const sd = placed.sd; let nb = 0;
     for (const [u, off] of [[-62, 38], [62, 38], [-90, 34], [90, 34], [-36, 70], [36, 70], [0, 72]]) { if (nb >= 4) break;
@@ -791,13 +813,6 @@ function drawBoard(ctx) {
   for (const b of branches) junctionBox(b);
   drawCrossings();
   for (const st of stations) drawPlatform(st);
-  for (const fb of footbridges) { const p = at(fb.L, fb.s), a = tangent(fb.L, fb.s);
-    bx.save(); bx.translate(p[0], p[1]); bx.rotate(a);
-    bx.fillStyle = 'rgba(30,60,20,.3)'; bx.fillRect(-2.5, -30 + 3, 7, 60);
-    bx.fillStyle = '#3f6fa8'; bx.fillRect(-3.5, -24, 7, 48); bx.fillStyle = '#e9edf2'; bx.fillRect(-2.2, -24, 4.4, 48);
-    bx.fillStyle = '#c9cdd4'; for (let k = -22; k <= 22; k += 3) bx.fillRect(-2.2, k, 4.4, .6);
-    bx.fillStyle = '#3f6fa8'; for (const e of [-1, 1]) { bx.fillRect(-4.5, e * 24 - 4, 9, 8); bx.fillStyle = '#e9edf2'; bx.fillRect(-3.2, e * 24 - 2.8, 6.4, 5.6); bx.fillStyle = '#3f6fa8'; }
-    bx.restore(); }
   drawSprites();
   for (const st of stations) drawNameboard(st);
   drawFrame();
@@ -838,9 +853,9 @@ function drawGreen(s) {
   // a village green the shape of your icons (a patch round each, run together), pasture-coloured and mown in soft
   // stripes, edged by a hedge of the board's own bushes along its outer edge only
   const pad = 18, a = clamp(s.life * 1.3 - .15, 0, 1);   // wide enough that neighbouring icons share one green
-  let rs = deskIcR.filter(([l, t, r, b]) => (l + r) / 2 > s.x - 30 && (l + r) / 2 < s.x + s.w + 30 && (t + b) / 2 > s.y - 30 && (t + b) / 2 < s.y + s.h + 30);
-  if (!rs.length) rs = [[s.x, s.y, s.x + s.w, s.y + s.h]];
-  rs = rs.map(([l, t, r, b]) => [l - pad, t - pad, r + pad, b + pad]);
+  const all = deskIcR.map(([l, t, r, b]) => [l - pad, t - pad, r + pad, b + pad]);
+  let rs = all.filter(([l, t, r, b]) => (l + r) / 2 > s.x - 30 && (l + r) / 2 < s.x + s.w + 30 && (t + b) / 2 > s.y - 30 && (t + b) / 2 < s.y + s.h + 30);
+  if (!rs.length) rs = [[s.x - pad, s.y - pad, s.x + s.w + pad, s.y + s.h + pad]];
   const lawn = new Path2D(); for (const [l, t, r, b] of rs) lawn.roundRect(l, t, r - l, b - t, 7);
   const X0 = Math.min(...rs.map(q => q[0])), Y0 = Math.min(...rs.map(q => q[1])), X1 = Math.max(...rs.map(q => q[2])), Y1 = Math.max(...rs.map(q => q[3]));
   bx.save(); bx.globalAlpha = a; bx.fillStyle = '#9fd06e'; bx.fill(lawn);
@@ -848,7 +863,8 @@ function drawGreen(s) {
   if (X1 - X0 >= Y1 - Y0) for (let sy = Y0; sy < Y1; sy += 20) bx.fillRect(X0, sy, X1 - X0, 10); else for (let sx = X0; sx < X1; sx += 20) bx.fillRect(sx, Y0, 10, Y1 - Y0);
   bx.restore();
   if (!ATLAS || !IMG.trees.complete || !ATLAS.T.bush.length) return;
-  const inside = (px, py, me) => rs.some((q, i) => i !== me && px >= q[0] - 1 && px <= q[2] + 1 && py >= q[1] - 1 && py <= q[3] + 1);   // on or in another patch: inside the green
+  // on or in another patch, this group's or a neighbour's: inside the green (one hedge round the lot, not a row across the lawn)
+  const inside = (px, py, me) => all.concat(rs === all ? [] : rs).some(q => q !== rs[me] && px >= q[0] - 1 && px <= q[2] + 1 && py >= q[1] - 1 && py <= q[3] + 1);
   const pts = [];
   rs.forEach(([l, t, r, b], i) => { const w = r - l, h = b - t, per = 2 * (w + h), n = Math.max(8, Math.round(per / 7));   // a bush every ~7 px round the edge
     for (let k = 0; k < n; k++) { let d = k / n * per, px, py;
@@ -862,17 +878,6 @@ function drawGreen(s) {
     if (!e) { bx.drawImage(IMG.trees, rr[0], rr[1], rr[2], rr[3], px - dw / 2, py - dh, dw, dh); continue; }
     const w = e.sw / K, h = e.sh / K; bx.drawImage(SC.cv, e.sx, e.sy, e.sw, e.sh, Math.round((px - w / 2) * K) / K, Math.round((py - h) * K) / K, w, h); }
   bx.restore();
-}
-function drawRoad(s) {
-  const a = clamp(s.life * 1.4 - .2, 0, 1); if (a <= 0 || !s.town) return;
-  bx.globalAlpha = a; const k = .5 + .5 * s.life, o1 = VERGE * k, o2 = (VERGE + ROAD) * k, om = (o1 + o2) / 2;
-  const rect = o => { const p = new Path2D(); p.roundRect(s.x - o, s.y - o, s.w + 2 * o, s.h + 2 * o, Math.max(4, o + 4)); return p; };
-  const ring = rect(o2); ring.addPath(rect(o1));
-  bx.save(); bx.translate(1.2, 2); bx.fillStyle = 'rgba(30,60,20,.2)'; bx.fill(ring, 'evenodd'); bx.restore();
-  bx.fillStyle = '#7c8390'; bx.fill(ring, 'evenodd');
-  bx.strokeStyle = '#eee8dc'; bx.lineWidth = 1.5; bx.stroke(rect(o2)); bx.stroke(rect(o1));
-  bx.setLineDash([4, 4]); bx.strokeStyle = 'rgba(255,250,235,.85)'; bx.lineWidth = .8; bx.stroke(rect(om)); bx.setLineDash([]);
-  bx.globalAlpha = 1;
 }
 
 // the country roads: kerbs, asphalt, centre dashes; stone parapets where they bridge the river; the village squares
@@ -925,6 +930,15 @@ function drawRails(pts, closed, tun, br, alpha) {
   bx.lineJoin = 'round'; bx.lineCap = 'butt';
   const lenOf = l => closed ? Math.min(l, n) : Math.max(0, l - 1);
   const open = runs(tun.map(v => !v), closed), ground = runs(tun.map((v, i) => !v && !br[i]), closed), bridges = runs(br, closed);
+  // where the line crosses a hill layer's edge it runs in a cutting: a short bed in that layer's cut-foam side colour,
+  // wider than the ballast (laid flat over the terraces, the track floated across their cliff lines)
+  const lvOf = i => { const p = pts[i], h = hAt(p[0], p[1]); let k = 0; while (k < LV.length && h > LV[k]) k++; return k; };
+  bx.lineCap = 'round';
+  for (const [i, l] of ground) { let prev = lvOf(ix(i));
+    for (let k = 1; k < l; k++) { const q = ix(i + k), lv = lvOf(q); if (lv === prev) continue;
+      const e = Math.min(lv, prev), a = Math.max(0, k - 7), b = Math.min(l - 1, k + 7); prev = lv; if (b - a < 4) continue;
+      path(ix(i + a), b - a, 0); bx.strokeStyle = LV_SIDE[e]; bx.lineWidth = 20; bx.stroke(); } }
+  bx.lineCap = 'butt';
   for (const [i, l] of ground) { const ln = lenOf(l);
     path(i, ln, 0, .8, 1.3); bx.strokeStyle = 'rgba(40,70,25,.2)'; bx.lineWidth = 13; bx.stroke();
     path(i, ln, 0); bx.strokeStyle = '#b8ad9a'; bx.lineWidth = 11.5; bx.stroke(); bx.strokeStyle = '#d6cdbb'; bx.lineWidth = 8.6; bx.stroke(); }
@@ -1030,12 +1044,18 @@ function drawPlatform(st) {
   strip(7.5, 8.8, -44, 44); bx.fillStyle = '#f6d65a'; bx.fill();
   strip(10, 16, -28, 28); bx.fillStyle = '#d2604b'; bx.fill(); strip(10, 12.6, -28, 28); bx.fillStyle = 'rgba(255,255,255,.25)'; bx.fill();
   bx.fillStyle = '#4b4f58'; for (const u of [-38, -6, 22, 38]) { const p = at(L, st.s + u), a = tangent(L, st.s + u); bx.beginPath(); bx.arc(p[0] - Math.sin(a) * side * 16.5, p[1] + Math.cos(a) * side * 16.5, .8, 0, 7); bx.fill(); }   // lamp posts
+  // a few people waiting on the platform (an empty one read as unfinished): toy figures, a dot with a shadow
+  const nP = 3 + Math.floor(h1(st.s * .13 + st.id.length) * 3);
+  for (let q = 0; q < nP; q++) { const n = st.s * .71 + q * 13.7, u = -40 + 80 * h1(n), o = 9.8 + 1.4 * h1(n + .3), p = at(L, st.s + u), a = tangent(L, st.s + u), x = p[0] - Math.sin(a) * side * o, y = p[1] + Math.cos(a) * side * o;
+    bx.fillStyle = 'rgba(30,60,20,.3)'; bx.beginPath(); bx.arc(x + .6, y + .9, 1.1, 0, 7); bx.fill();
+    bx.fillStyle = CAR_COLORS[Math.floor(h1(n + .6) * CAR_COLORS.length)]; bx.beginPath(); bx.arc(x, y, 1.1, 0, 7); bx.fill();
+    bx.fillStyle = '#f1d3b3'; bx.beginPath(); bx.arc(x - .2, y - .3, .5, 0, 7); bx.fill(); }
   bx.globalAlpha = 1;
 }
 function drawNameboard(st) {
   const v = (VIS.get(st.id) || 0) * (st.L.closed ? 1 : st.L.vis ?? 1); if (v <= 0) return;
   const L = st.L, p = at(L, st.s), a = tangent(L, st.s), side = st.side || 1, nx = -Math.sin(a), ny = Math.cos(a);
-  const tx = p[0] + nx * side * 25, ty = p[1] + ny * side * 25;
+  const tx = p[0] + nx * side * NB, ty = p[1] + ny * side * NB;
   bx.save(); bx.globalAlpha = v; bx.translate(tx, ty); let r = a; if (Math.cos(r) < 0) r += Math.PI; bx.rotate(r);
   bx.font = '700 7px "Avenir Next", "Helvetica Neue", sans-serif'; const label = st.name.toUpperCase(), w = bx.measureText(label).width + 12;
   bx.fillStyle = 'rgba(30,50,20,.25)'; bx.beginPath(); bx.roundRect(-w / 2 + 1, -5.5 + 1.6, w, 11, 5.5); bx.fill();
@@ -1118,6 +1138,7 @@ let BLEND = 380; const blendF = (gen, now) => gen !== presentGen ? 0 : (t => t *
 let lampsT = 0;
 function present(blend) {
   BLEND = dragging() ? 240 : 380;                                       // while your hand is on a window: shorter blends, so the land keeps closer to it
+  syncFootbridges();
   clearTimeout(lampsT); lampsT = setTimeout(lampsCaughtUp, blend ? BLEND + 60 : 0);
   if (!blend) { drawBoard(cv.getContext('2d')); return; }
   if (!back) { back = document.createElement('canvas'); back.className = 'board'; document.body.insertBefore(back, cv); }
@@ -1141,6 +1162,22 @@ const place = (el, x, y, a, o) => { x -= OX; y -= OY;                // world â†
   el.style.transform = `translate3d(${(x - el._w / 2).toFixed(1)}px,${(y - el._h / 2).toFixed(1)}px,0) rotate(${a.toFixed(3)}rad)`;
   if (o !== el._o && (Math.abs(o - el._o) > .02 || o === 0 || o === 1)) { el._o = o; el.style.opacity = o.toFixed(2); } };
 const rr = (x, X, Y, w, h, r) => { x.beginPath(); x.roundRect(X, Y, w, h, r); };
+
+/* ---------- footbridges: over the line, so the trains pass under them (painted on the board, the express slid over) ---------- */
+const fbPic = x => { x.fillStyle = 'rgba(30,60,20,.3)'; x.fillRect(-2.5, -30 + 3, 7, 60);
+  x.fillStyle = '#3f6fa8'; x.fillRect(-3.5, -24, 7, 48); x.fillStyle = '#e9edf2'; x.fillRect(-2.2, -24, 4.4, 48);
+  x.fillStyle = '#c9cdd4'; for (let k = -22; k <= 22; k += 3) x.fillRect(-2.2, k, 4.4, .6);
+  x.fillStyle = '#3f6fa8'; for (const e of [-1, 1]) { x.fillRect(-4.5, e * 24 - 4, 9, 8); x.fillStyle = '#e9edf2'; x.fillRect(-3.2, e * 24 - 2.8, 6.4, 5.6); x.fillStyle = '#3f6fa8'; } };
+const fbEls = new Map();
+function syncFootbridges() {                                           // with each new picture: they glide and fade with the board's blend
+  const seen = new Set(), ms = BLEND + 'ms';
+  for (const fb of footbridges) { seen.add(fb.id); let el = fbEls.get(fb.id), fresh = !el;
+    if (fresh) { el = sprite(12, 64, fbPic); el.style.zIndex = 3; el.style.opacity = 0; el._o = 0; fbEls.set(fb.id, el); }
+    const p = at(fb.L, fb.s); el.style.transition = fresh ? 'none' : `transform ${ms} cubic-bezier(.45,0,.25,1), opacity ${ms}`;
+    place(el, p[0], p[1], tangent(fb.L, fb.s), fresh ? 0 : 1);
+    if (fresh) { void el.offsetWidth; el.style.transition = `opacity ${ms}`; place(el, p[0], p[1], tangent(fb.L, fb.s), 1); } }
+  for (const [id, el] of fbEls) if (!seen.has(id)) { el.style.transition = `opacity ${ms}`; el.style.opacity = 0; fbEls.delete(id); setTimeout(() => el.remove(), BLEND + 100); }
+}
 
 /* ---------- the trains: toy rolling stock seen from above, facing +x ---------- */
 const shade = (x, len, wid) => { x.fillStyle = 'rgba(30,55,20,.3)'; rr(x, -len / 2 + 1.2, -wid / 2 + 1.8, len, wid, 2.5); x.fill(); };
@@ -1201,12 +1238,13 @@ function reassign() {
   trains = keep;
 }
 let puffs = 0;
-function puff(x, y, a, big) {
+const WIND = [-4.2, -1.4];                                             // one breeze for every puff, and steam rises toward the upper left (shadows fall lower right)
+function puff(x, y, a, size) {
   if (puffs > 40) return; puffs++;
-  const d = document.createElement('div'); d.className = 'puff'; if (big) d.style.width = d.style.height = '16px';
-  const dx = (Math.random() - .5) * 7 - Math.cos(a) * 7, dy = (Math.random() - .5) * 7 - Math.sin(a) * 7;
+  const d = document.createElement('div'); d.className = 'puff'; if (size !== 13) { d.style.width = d.style.height = size + 'px'; d.style.margin = `${-size / 2}px 0 0 ${-size / 2}px`; }
+  const mv = size < 13 ? .5 : 1, dx = ((Math.random() - .5) * 3 - Math.cos(a) * 4) * mv + WIND[0] - 1.5, dy = ((Math.random() - .5) * 3 - Math.sin(a) * 4) * mv + WIND[1] - 3;
   x -= OX; y -= OY;                                                    // world â†’ this display
-  d.style.setProperty('--x0', `${x}px`); d.style.setProperty('--y0', `${y}px`); d.style.setProperty('--x1', `${x + dx}px`); d.style.setProperty('--y1', `${y + dy - 5}px`);
+  d.style.setProperty('--x0', `${x}px`); d.style.setProperty('--y0', `${y}px`); d.style.setProperty('--x1', `${x + dx}px`); d.style.setProperty('--y1', `${y + dy}px`);
   d.addEventListener('animationend', () => { d.remove(); puffs--; }); document.body.appendChild(d);
 }
 const zoneOf = s => stations.find(st => st.ok && st.kind === 'main' && Math.abs(rel(mainL, s - st.s)) < LOOP_HALF);
@@ -1264,7 +1302,8 @@ function placeCars(t) {
   t.els.forEach((el, i) => { const sc = s - spec.len[i] / 2; let [x, y, a] = posOf(t, sc);
     if (O && f < 1) { const s0 = O.s + trav - (t.s - sc), p0 = at(O.L, s0), a0 = tangent(O.L, s0); x = p0[0] + (x - p0[0]) * f; y = p0[1] + (y - p0[1]) * f; a = a0 + Math.atan2(Math.sin(a - a0), Math.cos(a - a0)) * f; }
     const o = vis * clamp(1 - (L.depth[idxOf(L, sc)] - 2) / 12, 0, 1); place(el, x, y, a, o); s -= spec.len[i] + 2; });
-  if (spec.steam && L.depth[idxOf(L, t.s - 5)] === 0 && vis > .5) { t.puffT -= frameDT; if (t.puffT <= 0) { const [x, y, a] = posOf(t, t.s - 5); puff(x, y, a, t.v > 18); t.puffT = t.v > 2 ? clamp(14 / (t.v + 6), .22, .7) : 1.5; } }
+  // (standing or creeping: a small wisp; a full puff on a still engine read as a white ball)
+  if (spec.steam && L.depth[idxOf(L, t.s - 5)] === 0 && vis > .5) { t.puffT -= frameDT; if (t.puffT <= 0) { const [x, y, a] = posOf(t, t.s - 5); puff(x, y, a, t.v > 18 ? 16 : t.v < 2 ? 8 : 13); t.puffT = t.v > 2 ? clamp(14 / (t.v + 6), .22, .7) : 1.5; } }
 }
 // a branch shuttle: runs to the buffers at the terminus, waits, propels back to the junction, waits, and so on
 function stepShuttle(t, dt, now, layoutMoving) {
@@ -1378,10 +1417,12 @@ function stepRoadCars(dt) {
     for (const o of rcars) if (o !== c && o.r === c.r && o.dir === c.dir) { const d = (o.s - c.s) * c.dir - 13; if (d > -10) limit = Math.min(limit, Math.max(0, d)); }
     const target = Math.min(c.vmax, Math.sqrt(2 * 26 * limit));
     c.v += clamp(target - c.v, -40 * dt, 10 * dt); c.s += c.v * c.dir * dt;
-    if (c.s < 0 || c.s > c.r.len) {                                    // at a village (or the board's edge): take another road
+    if (c.sq) { c.ss += c.v * dt; if (c.ss >= c.sq.len) { c.s = c.dir > 0 ? c.ss - c.sq.len : c.r.len - (c.ss - c.sq.len); c.sq = null; } }
+    else if (c.s < 0 || c.s > c.r.len) {                               // at a village (or the board's edge): take another road
       const node = rnodes[c.s < 0 ? c.r.a : c.r.b], opts = node.kind === 'vil' ? node.roads.filter(r => r !== c.r) : [];
       if (!opts.length) { c.dir = -c.dir; c.s = clamp(c.s, 0, c.r.len); }
-      else { const nr = opts[Math.floor(Math.random() * opts.length)], fromA = nr.a === node.i; c.r = nr; c.dir = fromA ? 1 : -1; c.s = fromA ? 0 : nr.len; } }
+      else { const nr = opts[Math.floor(Math.random() * opts.length)], fromA = nr.a === node.i, over = c.s < 0 ? -c.s : c.s - c.r.len;
+        c.sq = squarePath(node, c.r, nr); c.sqFrom = c.r; c.ss = over; c.r = nr; c.dir = fromA ? 1 : -1; c.s = fromA ? 0 : nr.len; } }
     c.f = Math.min(1, (c.f || 0) + dt * 1.5); placeRcar(c);
   }
 }
@@ -1393,7 +1434,24 @@ const boatPic = (hull, sail) => x => { x.scale(.85, .85);
   x.fillStyle = hull; x.beginPath(); x.moveTo(7, 0); x.quadraticCurveTo(3, -3.4, -6, -2.8); x.lineTo(-6, 2.8); x.quadraticCurveTo(3, 3.4, 7, 0); x.fill();
   x.fillStyle = '#c99a62'; x.beginPath(); x.moveTo(5, 0); x.quadraticCurveTo(2, -2.2, -4.8, -1.8); x.lineTo(-4.8, 1.8); x.quadraticCurveTo(2, 2.2, 5, 0); x.fill();
   x.fillStyle = sail; x.beginPath(); x.moveTo(1, -.5); x.lineTo(-4, -6.5); x.lineTo(-4.5, -.5); x.closePath(); x.fill(); };
+// from the end of one road round the village square to the start of the next, anticlockwise (the cars keep right):
+// one smooth little path round the fountain, rim to rim
+const endAt = (r, node, k) => r.a === node.i ? r.pts[Math.min(k, r.pts.length - 1)] : r.pts[Math.max(0, r.pts.length - 1 - k)];
+function squarePath(node, r0, r1) {
+  const p0 = endAt(r0, node, 0), p1 = endAt(r1, node, 0), q0 = endAt(r0, node, 2), q1 = endAt(r1, node, 2);
+  const a0 = Math.atan2(p0[1] - node.y, p0[0] - node.x), a1 = Math.atan2(p1[1] - node.y, p1[0] - node.x);
+  let da = ((a0 - a1) % 6.2832 + 6.2832) % 6.2832; if (da < .6) da += 6.2832;          // how far round, anticlockwise
+  const pts = [q0, p0], R = 10.5, n = Math.max(3, Math.ceil(da * R / 5));
+  for (let k = 1; k < n; k++) { const th = a0 - da * k / n; pts.push([node.x + Math.cos(th) * R, node.y + Math.sin(th) * R]); }
+  pts.push(p1, q1);
+  const sm = resample(chaikinOpen(pts, 3), 1, false), near = (p, from, to) => { let bi = from, bd = 1e9; for (let k = from; k < to; k++) { const d = Math.hypot(sm[k][0] - p[0], sm[k][1] - p[1]); if (d < bd) { bd = d; bi = k; } } return bi; };
+  const out = sm.slice(near(p0, 0, sm.length >> 1), near(p1, sm.length >> 1, sm.length) + 1);   // (q0, q1 only shape the turn in and out: the path runs rim to rim)
+  return { pts: out, len: Math.max(1, out.length - 1), closed: false };
+}
 function placeRcar(c) {
+  if (c.sq) { const S = c.sq, f = clamp(c.ss, 0, S.len), i = Math.min(S.pts.length - 2, f | 0), u = f - i, A = S.pts[i], B = S.pts[i + 1], A0 = S.pts[Math.max(0, i - 3)], B0 = S.pts[Math.min(S.pts.length - 1, i + 4)];
+    const x = A[0] + (B[0] - A[0]) * u, y = A[1] + (B[1] - A[1]) * u, a = Math.atan2(B0[1] - A0[1], B0[0] - A0[0]);
+    place(c.el, x - Math.sin(a) * 2, y + Math.cos(a) * 2, a, c.f); return; }
   const p = at(c.r, c.s), a = tangent(c.r, c.s) + (c.dir < 0 ? Math.PI : 0), ex = Math.min(p[0], p[1], W - p[0], H - p[1]);
   place(c.el, p[0] - Math.sin(a) * 2, p[1] + Math.cos(a) * 2, a, c.f * clamp((ex - 8) / 16, 0, 1) * clamp((twAt(p[0], p[1]) - OM + 2) / 6, 0, 1));
 }
@@ -1411,7 +1469,7 @@ function stepBoats(dt) {
   }
 }
 function clearMovers() { for (const b of boats) b.el.remove(); boats = []; for (const c of rcars) c.el.remove(); rcars = []; for (const [, sp] of crSprites) { sp.arms.forEach(e => e.remove()); sp.lights.forEach(e => e.remove()); } crSprites.clear(); crossings = [];
-  for (const [, el] of lamps) el.remove(); lamps.clear(); }
+  for (const [, el] of lamps) el.remove(); lamps.clear(); for (const [, el] of fbEls) el.remove(); fbEls.clear(); }
 
 /* ---------- a balloon, now and then ---------- */
 const balPic = x => { x.scale(.85, .85);
@@ -1449,18 +1507,21 @@ function drawSignal(red) {
   lamp(-5.5, red, '#ff4b3a', 'rgba(255,75,58,.35)'); lamp(1.5, !red, '#4ee08a', 'rgba(78,224,138,.35)');
   x.fillStyle = '#6a6e78'; x.fillRect(-1, 9, 2, 4);
 }
-sigEl.style.opacity = 0; sigEl.style.transition = 'opacity .5s';
+// it rises from its base as it fades in, and sinks back as it goes (a plain fade, before)
+const SIG_T = 'opacity .5s, transform .5s cubic-bezier(.3,1.3,.5,1)'; let sigAt = '';
+sigEl.style.opacity = 0; sigEl.style.transformOrigin = '6px 22px'; sigEl.style.transition = SIG_T;
 function stepSignal() {
   const now = performance.now();
   if (!signal && cur.on && now - cur.t > 1200) {
     let best = null; for (const L of (mainL ? [mainL] : []).concat(branches)) { const n = nearestS(L, cur.x, cur.y); if (n.d < 34 && !L.tun[n.i] && (!best || n.d < best.d)) best = { L, s: n.s, d: n.d }; }
     if (best) { signal = { L: best.L, s: best.s, red: true, until: now + 7000, ax: cur.x, ay: cur.y }; drawSignal(true);
       const p = at(best.L, best.s), a = tangent(best.L, best.s), side = ((cur.x - p[0]) * -Math.sin(a) + (cur.y - p[1]) * Math.cos(a)) > 0 ? 1 : -1;
-      sigEl.style.transform = `translate3d(${(p[0] - Math.sin(a) * side * 12 - 6 - OX).toFixed(1)}px,${(p[1] + Math.cos(a) * side * 12 - 12 - OY).toFixed(1)}px,0)`; sigEl.style.opacity = 1; }
+      sigAt = `translate3d(${(p[0] - Math.sin(a) * side * 14 - 6 - OX).toFixed(1)}px,${(p[1] + Math.cos(a) * side * 14 - 12 - OY).toFixed(1)}px,0)`;   // (14: at 12 it stood on the ballast on curves)
+      sigEl.style.transition = 'none'; sigEl.style.transform = sigAt + ' scale(.6)'; void sigEl.offsetWidth; sigEl.style.transition = SIG_T; sigEl.style.transform = sigAt + ' scale(1)'; sigEl.style.opacity = 1; }
   }
   if (signal) {
     if (signal.red && now > signal.until) { signal.red = false; signal.until = now + 4000; drawSignal(false); }
-    else if (!signal.red && now > signal.until) { sigEl.style.opacity = 0; signal = null; }
+    else if (!signal.red && now > signal.until) { sigEl.style.opacity = 0; sigEl.style.transform = sigAt + ' scale(.6)'; signal = null; }
     if (signal && cur.on && Math.hypot(cur.x - signal.ax, cur.y - signal.ay) > 120 && signal.red) { signal.red = false; signal.until = now + 2500; drawSignal(false); }
   }
 }
@@ -1470,7 +1531,7 @@ const trainKey = t => t.spec.kind === 'shuttle' ? 'b' + t.bid : t.spec.kind;
 let remote = null, sentAt = 0;
 function sendMovers(now) {
   if (!Span.world || now - sentAt < 30) return; sentAt = now;
-  Span.post('movers', { lk: layoutKey(), tr: trains.map(t => [trainKey(t), t.s, t.v, t.dir]), rc: rcars.map(c => [roads.indexOf(c.r), c.s, c.dir, c.f || 0]),
+  Span.post('movers', { lk: layoutKey(), tr: trains.map(t => [trainKey(t), t.s, t.v, t.dir]), rc: rcars.map(c => [roads.indexOf(c.r), c.s, c.dir, c.f || 0, c.sq ? roads.indexOf(c.sqFrom) : -1, c.ss || 0]),
     bt: boats.map(b => [b.s, b.dir]), bl: balloon && { x: balloon.x, y: balloon.y, vx: balloon.vx, vy: balloon.vy, t: balloon.t } });
 }
 Span.on('movers', m => { remote = m; });
@@ -1481,7 +1542,9 @@ function applyMovers() {
   const have = new Set();
   for (const [k, s_, v, dir] of m.tr) { const t = trains.find(t => trainKey(t) === k); if (t) { have.add(t); t.s = s_; t.v = v; t.dir = dir; placeCars(t); } }
   for (const t of trains) if (!have.has(t)) t.els.forEach(el => place(el, -9e3, -9e3, 0, 0));   // the leader has no such train (yet)
-  ensureRcars(); m.rc.forEach(([ri, s_, dir, f], i) => { const c = rcars[i]; if (!c || !roads[ri]) return; c.r = roads[ri]; c.s = s_; c.dir = dir; c.f = f; placeRcar(c); });
+  ensureRcars(); m.rc.forEach(([ri, s_, dir, f, fi, ss], i) => { const c = rcars[i]; if (!c || !roads[ri]) return;
+    if (fi >= 0 && roads[fi]) { if (c.sqFrom !== roads[fi] || c.r !== roads[ri]) { const r0 = roads[fi], r1 = roads[ri], nd = rnodes[[r0.a, r0.b].find(k => k === r1.a || k === r1.b)]; c.sq = nd ? squarePath(nd, r0, r1) : null; c.sqFrom = r0; } c.ss = ss; } else c.sq = null;
+    c.r = roads[ri]; c.s = s_; c.dir = dir; c.f = f; placeRcar(c); });
   ensureBoats(); m.bt.forEach(([s_, dir], i) => { const b = boats[i]; if (!b) return; b.s = s_; b.dir = dir; placeBoat(b); });
   balloon = m.bl; placeBalloon();
 }
