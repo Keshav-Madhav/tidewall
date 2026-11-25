@@ -242,12 +242,12 @@ void main() {
   // type (it ran through the words, and city names sat under them), following each report as it is inked on and off
   vec2 px = vec2(vUV.x, 1. - vUV.y) * uRes; float kc = 0.;
   for (int i = 0; i < 10; i++) { if (i >= uNC) break; vec4 r = uCard[i]; vec2 d = max(r.xy - px, px - r.zw);
-    kc = max(kc, uCardA[i] * (1. - smoothstep(-3., 10., length(max(d, 0.)) + min(max(d.x, d.y), 0.)))); }
+    kc = max(kc, uCardA[i] * (1. - smoothstep(-10., 18., length(max(d, 0.)) + min(max(d.x, d.y), 0.)))); }   // (a wide feather: a hard-edged hole read as a panel)
   vec3 c = mix(uBg, uLand, m.g);
   c = mix(c, uGrat, m.b * .55 * (1. - h) * (1. - kc));
-  float t = (1. - exp(-tr.r * 1.5)) * (1. - .92 * h) * (1. - .7 * hn.g) * (1. - kc), sp = tr.r > 1e-3 ? clamp(tr.g / tr.r, 0., 1.) : 0.;   // (names: held back, not cut out)
+  float t = (1. - exp(-tr.r * 1.5)) * (1. - .92 * h) * (1. - .4 * hn.g) * (1. - .8 * kc), sp = tr.r > 1e-3 ? clamp(tr.g / tr.r, 0., 1.) : 0.;   // (names: held back, not cut out)
   c = mix(c, mix(uLine, uFast, smoothstep(.4, .95, sp)), t * mix(.58, .6, uDayF));   // light lines on a dark map read stronger: hold them back at night
-  c = mix(c, uInk, min(1., m.r * mix(1.15, .85, uDayF)) * (1. - .6 * h) * (1. - .8 * kc));   // and let the ink come through at full strength
+  c = mix(c, uInk, min(1., m.r * mix(1.15, .85, uDayF)) * (1. - .6 * h) * (1. - .6 * kc));   // and let the ink come through at full strength
   c *= .985 + .03 * hash(floor(gl_FragCoord.xy));                     // a whisper of paper grain
   vec2 q = uWorld.xy + vec2(vUV.x, 1. - vUV.y) * uWorld.zw - .5; c *= 1. - .08 * smoothstep(.35, .9, length(q * vec2(1.2, 1.)));   // darker toward the map's edges, not each display's
   o = vec4(c, 1.);
