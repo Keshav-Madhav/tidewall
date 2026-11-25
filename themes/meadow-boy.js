@@ -158,7 +158,8 @@ function meadowBoyPose(time,tug={active:false,reach:0,pull:0}) {
 // Is he (and his kite) clear of every window and desktop icon there? 0 = clear, 1 = only the kite overlaps, 2 = he does.
 // (the cloud bank around the windows counts as theirs: under it he'd be hidden just the same)
 function meadowCloudOver(x,y) {
-  return typeof FB!=='undefined'&&FB&&P.adaptive&&sampleArr(FB.s,x,y)-P.edge<36;
+  // (48: the bank's puffs reach past the field's edge and breathe; at 36 he often ran in under the skirt beside a window)
+  return typeof FB!=='undefined'&&FB&&P.adaptive&&sampleArr(FB.s,x,y)-P.edge<48;
 }
 function meadowBoyBlocked(x,y,s,pad=10) {
   if(typeof icons==='undefined'||!icons.length)return 0;
@@ -382,7 +383,8 @@ void main() {
       gl.activeTexture(unit);gl.bindTexture(gl.TEXTURE_2D,targetTexture);
       gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,sprite);
       gl.generateMipmap(gl.TEXTURE_2D);
-      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+      // (the mips are made to be used: a 384 px sprite drawn at 40-60 px with plain LINEAR stair-stepped and speckled)
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
       gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);

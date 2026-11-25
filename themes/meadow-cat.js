@@ -32,9 +32,9 @@ function meadowCatRunLanes(state,width,height,taskbar) {
 }
 function meadowCatChoosePlace(state,width,height,taskbar,sceneSeed,desktopIcons,cloudSize,near=null) {
   const {lanes,kites,scale}=meadowCatRunLanes(state,width,height,taskbar);
-  const size=Math.max(28,Math.min(90,Math.min(width/1379,(height-taskbar)/1141)*78))*.578;
+  const size=Math.max(28,Math.min(90,Math.min(width/1379,(height-taskbar)/1141)*78))*.665;   // (15% bigger than it was: at 1x it read as a dark smudge)
   const radius=size*.58,pad=radius+12,clearance=radius+96*scale+14;
-  if(width<=pad*2||height-taskbar<=pad*2)return null;
+  if(width<=pad*2||height-taskbar<=pad*2+40)return null;
   let randomState=(sceneSeed|0)^0x71a43d25;
   const random=()=>{
     randomState=(randomState+0x6d2b79f5)|0;
@@ -46,7 +46,8 @@ function meadowCatChoosePlace(state,width,height,taskbar,sceneSeed,desktopIcons,
   for(let i=0;i<337;i++){
     const x=i<256?random():((i-256)%9+.5)/9;
     const y=i<256?random():(Math.floor((i-256)/9)+.5)/9;
-    const p={x:pad+x*(width-pad*2),y:pad+y*(height-taskbar-pad*2)};
+    // (the top 40 pt kept clear too: under the macOS menu bar and its notch the cat was lost)
+    const top=pad+40,p={x:pad+x*(width-pad*2),y:top+y*(height-taskbar-pad-top)};
     const routeDistance=Math.min(...lanes.map(([a,b])=>meadowCatSegmentDistance(p,a,b)));
     if(routeDistance<clearance)continue;
     if(kites.some(([a,b])=>meadowCatSegmentDistance(p,a,b)<radius+18))continue;

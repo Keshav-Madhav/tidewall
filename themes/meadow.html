@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Deskland · 草地（原型）</title>
+<title>Meadow</title>
 <!--
   Deskland · 草地主题原型（俯视；纯 WebGL2，2D，每帧直接计算）
   画风参考：钢笔淡彩的插画——黄绿色的草地上一簇簇墨绿的短线，大朵的云飘在上空，云影是一块块深绿
@@ -239,7 +239,9 @@ function mineCells() {
 /* ======================================================================
    CPU 噪声 + 可平铺噪声纹理
    ====================================================================== */
-let seed = (Math.random() * 1e6) | 0;
+// a fixed seed: the same meadow and the same cloud bank every time the wall loads (a random one made the bank round
+// a window a lottery: thick on one load, a thin sliver the next). The settings' "refresh" still picks a new one.
+let seed = 4242;
 function hash2(x, y, k = 0) {
   let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(seed + k, 2246822519);
   h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -328,7 +330,36 @@ function computeField(rects) {
     s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
   }
   fieldMs = performance.now() - t0;
-  return { s };
+  return { s, ring: ringPuffs(rects) };
+}
+// Every window gets a bank of puffs round its edge: on a fixed grid, a puff wherever a cell's spot lies near a window's
+// edge (centred about 10 outside it), sized by how near. The mass's own puffs only poke out past a window where a random
+// cell happens to fall near its rim, so some windows got a full bank and others a bare grey rim. Kept per field and
+// blended with it (by cell), so a window arriving, leaving or moving grows and shrinks its puffs in place.
+const RING_G = 52;
+function ringPuffs(rects) {
+  const m = new Map();
+  for (const r of rects) {
+    if (r.hw < 6 || r.hh < 6) continue;
+    const x0 = Math.floor((r.cx - r.hw - 40 + OX) / RING_G), x1 = Math.floor((r.cx + r.hw + 40 + OX) / RING_G);
+    const y0 = Math.floor((r.cy - r.hh - 40 + OY) / RING_G), y1 = Math.floor((r.cy + r.hh + 40 + OY) / RING_G);
+    for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) {
+      const x = (cx + 0.1 + 0.8 * rnd1(cx, cy, 31)) * RING_G - OX, y = (cy + 0.1 + 0.8 * rnd1(cx, cy, 32)) * RING_G - OY;
+      const dx = Math.abs(x - r.cx) - r.hw, dy = Math.abs(y - r.cy) - r.hh;
+      const sd = Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0);   // to the window's edge (<0 inside)
+      const w = sstep(-34, -8, sd) * (1 - sstep(16, 34, sd));
+      if (w <= 0) continue;
+      const rad = (30 + 22 * rnd1(cx, cy, 33)) * w, k = cx + ',' + cy, o = m.get(k);
+      if (!o || rad > o[2]) m.set(k, [x, y, rad, rnd1(cx, cy, 34)]);
+    }
+  }
+  return m;
+}
+function blendRing(a, b, t) {                     // (a field caught mid-morph: its puffs as they were at that moment)
+  const m = new Map();
+  for (const [k, o] of a || []) m.set(k, [o[0], o[1], o[2] * (1 - t), o[3]]);
+  for (const [k, o] of b || []) { const p = m.get(k); m.set(k, [o[0], o[1], (p ? p[2] : 0) + o[2] * t, o[3]]); }
+  return m;
 }
 function sampleArr(a, x, y) {
   const fx = Math.min(Math.max((x + MG) / STEP, 0), Gw - 1.001), fy = Math.min(Math.max((y + MG) / STEP, 0), Gh - 1.001);
@@ -349,7 +380,7 @@ const FS = `#version 300 es
 precision highp float;
 uniform sampler2D uNoise, uFA, uFB, uGrass;   // Tidewall: uGrass = a painted meadow (generated for this theme), tiling
 uniform vec2 uRes, uGrid, uOff, uWorld;
-uniform float uScale, uSeed, uStep, uMix, uTime, uDebug, uEdge;
+uniform float uScale, uSeed, uStep, uMix, uTime, uDebug, uEdge, uFlow;
 #ifdef MEADOW_ACTOR
 uniform sampler2D uActor, uActorShadow;
 uniform vec4 uActorRect;
@@ -373,7 +404,7 @@ const vec3 SHADOW = vec3(0.56, 0.66, 0.52);                                   //
 const vec3 CLOUD_HI = vec3(1.0, 1.0, 0.99);                                   // 云：朝光外沿的亮白
 const vec3 CLOUD_BODY = vec3(0.90, 0.93, 0.96), CLOUD_SH = vec3(0.80, 0.85, 0.90); // 云：主体 / 偏暗的圆（比大海主题少一些蓝；主体不能太白，白色的图标文字要看得清）
 const vec2 LIGHT = vec2(-0.6, -0.8);                                          // 太阳在左上方
-const vec2 SHADOW_OFF = vec2(115.0, 156.0);                                    // 云影落在右下方，离云远 → 云飘得高
+const vec2 SHADOW_OFF = vec2(70.0, 95.0);                                      // the shadow falls lower right; nearer than it was (115, 156), it reads as that cloud's
 const int CIRC_K = 128, CIRC_KW = 32;   // circles a cell holds, laid out 32 × 4 texels per cell (see CIRC_REACH)
 
 float hash2(vec2 p) {
@@ -453,7 +484,10 @@ void main() {
   // ---------- 草地：黄绿和绿的大块水彩晕染，几片颜色深一点，左上（向阳）稍亮；纸的颗粒 ----------
   // Tidewall: the meadow is painted — two samplings of one gouache texture at different scales and angles, blended
   // by large slow noise so the tile never repeats visibly; big soft washes of light and shade on top
-  float w1 = N(pw, 1900.0).b, w2 = N(pw + 311.0, 650.0).g;
+  // the sweeps roll slowly with the clouds' drift: wind over the grass. Speeds are whole noise tiles per turn of the
+  // clock (uTime wraps at 16384 s), so the wrap moves nothing (about 4 and 5.5 pt a second)
+  float wt = uTime * floor(uFlow * 4.0 + 0.5) / 4.0;
+  float w1 = N(pw - vec2(36.0, 12.0) * 1900.0 / 16384.0 * wt, 1900.0).b, w2 = N(pw + 311.0 - vec2(140.0, 16.0) * 650.0 / 16384.0 * wt, 650.0).g;
   vec3 gA = texture(uGrass, pw / 820.0).rgb, gB = texture(uGrass, mat2(0.8, 0.6, -0.6, 0.8) * pw / 1130.0 + 0.37).rgb;
   vec3 col = mix(gA, gB, ss(0.3, 0.7, N(pw + 53.0, 1500.0).r));
   col *= mix(0.9, 1.07, ss(0.25, 0.8, w1 * 0.7 + w2 * 0.3));                 // sunlit and shaded sweeps across the field
@@ -485,7 +519,7 @@ void main() {
 
   // ---------- 云投在草地上的影子（右下方）：一整块深绿 ----------
   float sd = cloudDist(p - SHADOW_OFF);
-  col = mix(col, col * vec3(0.52, 0.6, 0.62), ss(26.0, -34.0, sd + (N(pw, 260.0).r - 0.5) * 30.0) * 0.8);   // a cloud's shadow is soft-edged and cool
+  col = mix(col, col * vec3(0.52, 0.6, 0.62), ss(26.0, -34.0, sd + (N(pw, 260.0).r - 0.5) * 30.0) * 0.9);   // a cloud's shadow is soft-edged and cool
 
   // ---------- 云：卡通画法（和大海主题一样）——一个个圆合起来，每个圆色调略有不同，
   //            只有朝光（左上）的外轮廓一道亮白，里面没有亮面；边缘干净 ----------
@@ -495,13 +529,16 @@ void main() {
   // faces the sun, a soft blue shade on the far side), its edge is billowy rather than a clean circle, and its body has
   // the cauliflower texture of real cumulus
   float bill = (N(pw, 210.0).r - 0.5) * 22.0 + (N(pw + 71.0, 90.0).g - 0.5) * 8.0;
-  float de = d + bill * ss(-50.0, 0.0, d);                                   // only the rim billows; the middle stays whole
+  // only the rim billows; the middle stays whole. Weighted by the smooth body too: between puffs inside a thick cloud
+  // the blended distance is shallow, and billowing by it alone opened see-through holes (more of them as a bank faded)
+  float body = mix(fieldS(uFA, p), fieldS(uFB, p), uMix) - uEdge + 0.6 * 95.0;
+  float de = d + bill * ss(-50.0, 0.0, d) * ss(-40.0, -8.0, body);
   if (de < 12.0) {
     // near the rim: which way the cloud's surface faces the sun, from its outline
     float edgeW = ss(-55.0, -14.0, d), litEdge = 0.6;
     if (edgeW > 0.0) { float dl = cloudDist(p + LIGHT * 26.0), dd = cloudDist(p - LIGHT * 26.0); litEdge = clamp((dl - dd) / 52.0 * 0.5 + 0.5, 0.0, 1.0); }
     // inside: the soft bumpy relief of a cumulus top, lit from the same side
-    float rel = ss(0.2, 0.8, N(pw, 420.0).r) * 0.22 + ss(0.25, 0.75, N(pw + 37.0, 160.0).g) * 0.12 - 0.17;
+    float rel = ss(0.2, 0.8, N(pw, 420.0).r) * 0.22 + ss(0.25, 0.75, N(pw + 37.0, 160.0).g) * 0.05 - 0.14;   // (the fine 160 term mottled it like dirty cotton: kept faint)
     float lit = clamp(mix(0.62 + rel, litEdge, edgeW), 0.0, 1.0);
     vec3 shade = vec3(0.74, 0.79, 0.88), body = vec3(0.93, 0.95, 0.98), sun = vec3(1.0, 0.995, 0.975);
     vec3 cc = mix(shade, body, ss(0.12, 0.6, lit));
@@ -594,6 +631,7 @@ const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h 
 // Tidewall: window updates are laid once a frame (the host's drag shortcut used to snap the field on each one, and the
 // cloud puffs, rebuilt only every half second when nothing morphs, then jumped to catch up); a new shape mid-morph
 // carries on from where the clouds are, at speed, so the bank follows a dragged window
+let liveDrag = false;                              // a window under your hand: the bank keeps up closer (800 ms behind, it trailed far)
 let chase = false, pendingCommit = false, fieldV = 0, growing = false, laidKey = '';
 function mixAt(t) { const e = Math.min(Math.max((t - morphT0) / morphDur, 0), 1); return chase ? 1 - (1 - e) * (1 - e) : e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2; }
 function commit(fromEmpty = false) {
@@ -605,13 +643,13 @@ function commit(fromEmpty = false) {
   if (fromEmpty) { FA = computeField([]); uploadField(toI, FA); }
   else if (FA && FB && FA !== FB && m < 1 && FA.s.length === FB.s.length) {   // where the clouds are right now
     const s = new Float32Array(FB.s.length), a = FA.s, b = FB.s; for (let i = 0; i < s.length; i++) s[i] = a[i] + (b[i] - a[i]) * m;
-    FA = Object.assign({}, FB, { s }); uploadField(toI, FA);
+    FA = Object.assign({}, FB, { s, ring: blendRing(FA.ring, FB.ring, m) }); uploadField(toI, FA);
   } else FA = FB;
   FB = nf;
   uploadField(target, FB);
   const going = t - morphT0 < morphDur, rising = going && growing;    // (not out of the clouds' first slow growth)
   chase = !fromEmpty && going && !rising;
-  morphDur = fromEmpty ? 2600 : chase ? 800 : rising ? Math.max(MORPH_MS, morphDur - (t - morphT0)) : MORPH_MS;
+  morphDur = fromEmpty ? 2600 : chase ? (liveDrag ? 300 : 800) : rising ? Math.max(MORPH_MS, morphDur - (t - morphT0)) : MORPH_MS;
   growing = fromEmpty || rising;
   fromI = toI; toI = target;
   morphT0 = t;
@@ -756,6 +794,11 @@ function buildMassCircles() {
   layer(34, 11, [0.5, 0.9], [0, -1.0 * R, ci => sstep(-0.05 * R, -0.3 * R, ci) * (1 - sstep(-0.7 * R, -1.0 * R, ci))], false);
   // 很小的圆：贴着云边一圈，让轮廓上的小鼓包更多
   layer(24, 21, [0.45, 0.8], [0, -0.6 * R, ci => sstep(0, -0.15 * R, ci) * (1 - sstep(-0.4 * R, -0.6 * R, ci))], false);
+  // the bank round each window (see ringPuffs), between the old field's and the new one's as the clouds morph
+  // (each also held to the cloud mass as it is now: a closing window's puffs go with its bank, not left floating as balls)
+  if (FB && FB.ring) { const a = FA && FA !== FB ? FA.ring : FB.ring, b = FB.ring, m = a === b ? 1 : curMix, hold = (x, y) => sstep(40, 0, curS(x, y) - P.edge);
+    for (const [k, o] of b) { const p = a.get(k), r = ((p ? p[2] : 0) * (1 - m) + o[2] * m) * hold(o[0], o[1]); if (r * sstep(5, 11, r) >= 0.5) list.push(o[0], o[1], r * sstep(5, 11, r) * (1 + 0.04 * Math.sin(flowT * (0.09 + 0.035 * o[3]) + o[3] * 6.283)), o[3]); }
+    if (a !== b) for (const [k, p] of a) if (!b.has(k)) { const r = p[2] * (1 - m) * hold(p[0], p[1]); if (r * sstep(5, 11, r) >= 0.5) list.push(p[0], p[1], r * sstep(5, 11, r) * (1 + 0.04 * Math.sin(flowT * (0.09 + 0.035 * p[3]) + p[3] * 6.283)), p[3]); } }
   return list;
 }
 // 云里的圆在动：每个圆绕着原来的位置慢慢转一个小圈（约 6~15px，大圆动得多一点，一圈 20~30 秒）。
@@ -837,7 +880,6 @@ const desktop = document.getElementById('desktop');
 let icons = [], layoutKind = 'mine', selected = null, drag = null, extraIdx = 0, layoutCapacity = 0;
 const grid = { cols: 1, rows: 1 };
 let DW = innerWidth, DH = innerHeight - TASKBAR;
-const ripples = [];
 function computeGrid() {
   DW = innerWidth; DH = innerHeight - TASKBAR;
   grid.cols = Math.max(1, Math.floor((DW - GRID_X0) / CELL_W));
@@ -854,11 +896,6 @@ function nearestFreeCell(cx, cy, self) {
     if (dd < bd) { bd = dd; best = pos; }
   }
   return best;
-}
-const isWater = (x, y) => curS(x, y) > 4;
-function addRipple(x, y, str = 1) {
-  ripples.push({ x, y, t0: performance.now(), str });
-  if (ripples.length > 6) ripples.shift();
 }
 function addIcon([name, type], pos, born = false) {
   const el = document.createElement('div');
@@ -970,7 +1007,7 @@ function frame(now) {
   curMix = mixAt(now);
   stepSkyClouds(dt);
   draw(now);
-  if (++frameN % 10 === 0) updateStats();
+  if (++frameN % 10 === 0 && !WALL && !PREVIEW) updateStats();    // (the panel is hidden on the wall: no DOM writes there, forever)
 }
 const isMainDisplay = () => { const [mx, my] = Span.main; return mx >= OX && my >= OY && mx < OX + W && my < OY + H; };
 let circAt = -1e9, redraw = true, lastBoxes = null;                          // Tidewall: when the clouds were last rebuilt; something else needs a frame
@@ -990,7 +1027,7 @@ function draw(now) {
   // moments, so the frame isn't drawn at all
   const morphing = curMix < 1, circDue = morphing || !circTex || now - circAt >= 66;
   if (morphing && window.__twSettle) window.__twSettle(150);         // a morph plays at the full rate until it has settled
-  window.__twCalm = actor || cat ? 30 : 15;                 // only the clouds moving: 15 frames a second is plenty
+  window.__twCalm = actor ? 30 : cat ? 20 : 15;            // only the clouds moving: 15 frames a second is plenty (the cat's tail sways slowly: 20)
   if (!actor && !cat && !circDue && !redraw) return;
   if (circDue) { uploadCircles((now - T0) / 1000); circAt = now; }
   // Between cloud updates nothing changes but the boy (and the cat, drawn in its own pass below): only the box he was in
@@ -998,7 +1035,7 @@ function draw(now) {
   // picture is exactly what it would draw.
   const k = cv._scale, box = r => r && [Math.max(0, Math.floor(r[0] * k) - 1), Math.max(0, Math.floor(r[1] * k) - 1), Math.min(cv.width, Math.ceil((r[0] + r[2]) * k) + 1), Math.min(cv.height, Math.ceil((r[1] + r[3]) * k) + 1)];
   const aBox = box(actor && actor.rect), cBox = box(cat && cat.bounds);
-  const part = !circDue && !redraw && !!aBox && !!lastBoxes;
+  const part = !circDue && !redraw && !!(aBox || cBox) && !!lastBoxes;   // (the cat alone, too: it forced the whole screen at 30 fps for a tail)
   let clip = null;
   if (part) for (const b of [aBox, cBox, ...lastBoxes]) if (b) clip = clip ? [Math.min(clip[0], b[0]), Math.min(clip[1], b[1]), Math.max(clip[2], b[2]), Math.max(clip[3], b[3])] : b.slice();
   lastBoxes = [aBox, cBox];
@@ -1018,7 +1055,7 @@ function draw(now) {
     gl.uniform1f(U.uSeed, (seed % 997) * 0.37);
     gl.uniform1f(U.uStep, STEP);
     gl.uniform1f(U.uMix, curMix);
-    gl.uniform1f(U.uTime, Span.secs(16384));
+    gl.uniform1f(U.uTime, Span.secs(16384)); if (U.uFlow) gl.uniform1f(U.uFlow, P.flow);
     gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, circTex); gl.uniform1i(U.uCirc, 3);
     gl.uniform2f(U.uCGrid, cgW, cgH); gl.uniform1f(U.uCellG, CELL_G);
@@ -1114,13 +1151,9 @@ document.getElementById('btnAdd').addEventListener('click', () => {
   if (!pos) return;
   const ic = addIcon(f, pos, true);
   select(ic);
-  if (isWater(pos.x + ic.w / 2, pos.y + ic.h / 2)) addRipple(pos.x + ic.w / 2, pos.y + ic.h / 2, 1.3);
   commit();
 });
-desktop.addEventListener('pointerdown', e => {
-  select(null);
-  if (isWater(e.clientX, e.clientY)) addRipple(e.clientX, e.clientY);
-});
+desktop.addEventListener('pointerdown', () => select(null));
 addEventListener('keydown', e => {
   if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
     const ic = selected; select(null); ic.el.remove(); icons = icons.filter(x => x !== ic); commit();
@@ -1141,10 +1174,11 @@ function tickClock() {
   const d = new Date(), z = n => String(n).padStart(2, '0');
   document.getElementById('clock').innerHTML = `${z(d.getHours())}:${z(d.getMinutes())}<br>${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }
-setInterval(tickClock, 15000); tickClock();
+if (!WALL && !PREVIEW) { setInterval(tickClock, 15000); tickClock(); }   // (the prototype's taskbar clock: not on the wall)
 
 /* ---------- 启动 ---------- */
-window.__dbg = {
+// a status line, as every other wall's __dbg() gives the lab and the host's probes (P, applyLayout, bench still on it)
+window.__dbg = Object.assign(() => `seed=${seed} icons=${icons.length} circles=${circStats ? circStats.circles + '/' + circStats.maxPerCell : '-'} ring=${FB && FB.ring ? FB.ring.size : 0} mix=${curMix.toFixed(2)} fps=${fpsEMA.toFixed(0)} calm=${window.__twCalm} field=${fieldMs.toFixed(1)}ms`, {
   P, applyLayout,
   bench() {
     const ts = [];
@@ -1152,7 +1186,7 @@ window.__dbg = {
     ts.sort((a, b) => a - b);
     return { frame: +ts[5].toFixed(1), canvas: cv.width + 'x' + cv.height, gpu: GPU };
   },
-};
+});
 resize();
 buildNoiseTex();
 if (WALL || PREVIEW) startHostedMode();
@@ -1210,7 +1244,7 @@ function startHostedMode() {
       worldDesk(m); if (lastIconsMsg) { first = true; handle(lastIconsMsg); } else commit(true); return; }
     if (m.t === 'reset') { applySettings(Object.assign({}, DEFAULTS, m.v || {})); return; }
     if (m.t !== 'icons') return;
-    lastIconsMsg = m;
+    lastIconsMsg = m; liveDrag = !!m.live;
     const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
     icons = (m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : []).concat(deskIc);   // (your desktop icons: a small cloud each)
     if (PREVIEW) drawGhosts();
