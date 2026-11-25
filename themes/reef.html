@@ -1443,7 +1443,7 @@ function setPads(cells, art) {
       el.style.backgroundImage = `var(--pad${n % 3})`; el.style.setProperty('--r', `${(n * 37) % 40 - 20}deg`);   /* a small turn only: the light and the shadow are painted in */ el.style.setProperty('--dur', `${9 + (n % 7)}s`);
       p = { el, n }; }
     const h = (p.n * 0.61803) % 1, h2 = (p.n * 0.7548) % 1;
-    const d = w.s * 1.55 * (.88 + .24 * h), ox = (h2 - .5) * w.s * .16, oy = w.s * .1 + (h - .5) * w.s * .1;   // (a little below the artwork's middle: the leaf reaches under the label)
+    const d = w.s * 2.3 * (.88 + .24 * h), ox = (h2 - .5) * w.s * .16, oy = w.s * .1 + (h - .5) * w.s * .1;   // (a little below the artwork's middle: the leaf reaches under the label)
     p.x = w.x; p.y = w.y;
     Object.assign(p.el.style, { width: d.toFixed(1) + 'px', height: d.toFixed(1) + 'px', translate: `${(w.x + ox - d / 2).toFixed(1)}px ${(w.y + oy - d / 2).toFixed(1)}px` });
     if (fresh) { p.el.style.opacity = 0; p.el.style.scale = '.6'; document.body.appendChild(p.el); void p.el.offsetWidth; p.el.style.opacity = 1; p.el.style.scale = '1'; }   // (a style read first: placed where it is, then it opens)
