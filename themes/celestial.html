@@ -3,7 +3,9 @@
   Celestial Atlas — a Tidewall theme. An antique star chart in gold on deep navy, and every window is a
   black hole: the sky is gravitationally lensed around it (stars smeared into arcs along an Einstein ring,
   light from behind wrapped into view), with a dark horizon, a thin photon ring and a lopsided accretion glow.
-  Your cursor is a tiny black hole too, exactly where the pointer is.
+  Your cursor is a tiny black hole too, exactly where the pointer is. Ordinary app windows bend the starlight only a
+  little, a few px right at their edges (the full lens round every window was distracting); Stage Manager thumbnails
+  and Notification Centre keep the full one.
   Perf: the sky is painted once into a texture; the lensing pass runs only while a window or the cursor moves.
 -->
 <html>
@@ -13,8 +15,10 @@
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1730; }
   canvas.layer { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
-  .shoot { position: fixed; left: 0; top: 0; height: 1.4px; pointer-events: none; transform-origin: 0 50%; opacity: 0;
-           background: linear-gradient(90deg, rgba(255,240,200,0), rgba(255,244,215,.95)); border-radius: 2px; }
+  /* a meteor: a bright head and a tail that tapers to nothing; it burns out by the tail drawing into the head */
+  .shoot { position: fixed; left: 0; top: 0; height: 2.2px; pointer-events: none; transform-origin: 100% 50%; opacity: 0;
+           background: linear-gradient(90deg, rgba(255,240,200,0), rgba(255,244,215,.75) 88%, #fffaf0);
+           clip-path: polygon(0 50%, 100% 0, 100% 100%); }
 </style>
 </head>
 <body>
@@ -39,7 +43,7 @@ let seed = 1;
 // where you are: the host passes the city of your time zone (from the system's time-zone table; no location permission)
 const SQ = new URLSearchParams(location.search);
 const SITE = { name: SQ.get('site') || 'Greenwich', lat: parseFloat(SQ.get('lat')) || 51.48, lon: parseFloat(SQ.get('lon')) || 0,
-  tz: SQ.get('tz') || Intl.DateTimeFormat().resolvedOptions().timeZone };
+  tz: SQ.get('tz') || (SQ.get('lat') ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'Europe/London') };   // (no site given, as on the website: Greenwich's sky, so Greenwich's clock)
 const D2R = Math.PI / 180;
 let SKY = null;
 async function loadSky() {
@@ -247,7 +251,13 @@ function paintSky(date = new Date()) {
         x.beginPath(); x.moveTo(px - dx * L2, py - dy * L2); x.lineTo(px + dx * L2, py + dy * L2); x.stroke(); }); }
   }
   // the Moon (real phase, lit toward the Sun) and the naked-eye planets
-  const bodies = solarSystem(date), boxes = [[W - 330, H - 116, W - 20, H - 20], [16, 16, 150, 150]];
+  // names keep clear of the cartouche where it actually hangs (a fixed bottom-right box let them print under it when it
+  // moved), of the rose, and of your windows: a name half under a window edge ("Den" of Deneb) reads as a mistake
+  const lastScreen = DESK.i === DESK.n - 1; if (lastScreen) cartAt = cartoucheSpot();
+  const roseY = Math.max(82, AREA_T + 78), boxes = allWins.map(([l, t, r, b]) => [l - 4, t - 4, r + 4, b + 4]);
+  if (lastScreen) boxes.push([cartAt[0] - 168, cartAt[1] - 58, cartAt[0] + 168, cartAt[1] + 58]);
+  if (DESK.i === 0) boxes.push([16, roseY - 66, 150, roseY + 68]);
+  const bodies = solarSystem(date); nameCands = [];
   for (const b of bodies) {
     const [px, py, alt] = P(b.ra, b.dec); if (alt < -1 || !on(px, py, 30)) continue;
     if (b.name === 'Moon') { drawMoon(x, px, py, b, P); boxes.push([px - 30, py - 30, px + 30, py + 30]); }
@@ -261,42 +271,63 @@ function paintSky(date = new Date()) {
     }
   }
   // your desktop icons sit in dark nebulae: dust that hides the stars behind it, as real dark clouds do (the Coalsack,
-  // Barnard's lanes), so the icons read cleanly; and no lettering is set under them
-  for (const [l, t, r, b] of deskIc) {
-    const R4 = rng(hash(`${Math.round(l)},${Math.round(t)},${Math.round(r)},${Math.round(b)}`)), P = 16, x0 = l - P, y0 = t - P, x1 = r + P, y1 = b + P;
-    for (let gy = y0; gy <= y1 + 1; gy += 24) for (let gx = x0; gx <= x1 + 1; gx += 24) {
-      const n = fbm(gx * .011 + 70, gy * .011), edge = Math.min(gx - x0, x1 - gx, gy - y0, y1 - gy) < 24;   // ragged at the rim: wisps out, bays in
-      const rx = gx + (R4() - .5) * 22, ry = gy + (R4() - .5) * 22, rad = (edge ? 26 + 90 * n * n : 46) + R4() * 26, g = x.createRadialGradient(rx, ry, 0, rx, ry, rad);
-      g.addColorStop(0, `rgba(3,7,18,${(edge ? .08 + .2 * n : .2) + R4() * .08})`); g.addColorStop(1, 'rgba(3,7,18,0)'); x.fillStyle = g; x.fillRect(rx - rad, ry - rad, rad * 2, rad * 2);
+  // Barnard's lanes), so the icons read cleanly; and no lettering is set under them. Only round each icon's artwork and
+  // its label (dusting the whole cell merged a column of icons into one near-black slab): small clouds, sky between
+  for (const [l, t, r, b] of deskDust) {
+    const R4 = rng(hash(`${Math.round(l)},${Math.round(t)},${Math.round(r)},${Math.round(b)}`)), P = 10, x0 = l - P, y0 = t - P, x1 = r + P, y1 = b + P;
+    for (let gy = y0; gy <= y1 + 1; gy += 18) for (let gx = x0; gx <= x1 + 1; gx += 18) {
+      const n = fbm(gx * .011 + 70, gy * .011), edge = Math.min(gx - x0, x1 - gx, gy - y0, y1 - gy) < 18;   // ragged at the rim: wisps out, bays in
+      const rx = gx + (R4() - .5) * 20, ry = gy + (R4() - .5) * 20, rad = (edge ? 14 + 60 * n * n : 30) + R4() * 18, g = x.createRadialGradient(rx, ry, 0, rx, ry, rad);
+      g.addColorStop(0, `rgba(3,7,18,${(edge ? .04 + .16 * n * n : .12) + R4() * .06})`); g.addColorStop(1, 'rgba(3,7,18,0)'); x.fillStyle = g; x.fillRect(rx - rad, ry - rad, rad * 2, rad * 2);
     }
-    boxes.push([x0, y0, x1, y1]);
   }
+  for (const [l, t, r, b] of deskIc) boxes.push([l - 10, t - 10, r + 10, b + 10]);
   // names: constellations (Latin, spaced capitals) and the bright named stars
   const free = b => b[0] > 6 && b[1] > 6 && b[2] < W - 6 && b[3] < H - 6 && !boxes.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
   for (const f of SKY.consts.features) {
-    const rank = +f.properties.rank; if (rank > 2) continue;
+    const rank = +f.properties.rank; if (rank > 3) continue;              // (the smaller ones too, where there's room: Denebola was named, LEO's neighbours weren't)
     const [ra, de] = f.geometry.coordinates, [px, py, alt] = P(ra, de); if (alt < 4) continue;
-    const label = f.properties.la.toUpperCase(), size = rank === 1 ? 11 : 9.5;
+    const label = f.properties.la.toUpperCase(), size = rank === 1 ? 11 : rank === 2 ? 9.5 : 8.5;
     x.font = `italic ${size}px ${SERIF}`; let w = -2.2; for (const ch of label) w += x.measureText(ch).width + 2.2;
-    const b = [px - w / 2 - 4, py - size, px + w / 2 + 4, py + size]; if (!free(b)) continue; boxes.push(b);
-    x.fillStyle = GOLD + (rank === 1 ? '.66)' : '.5)'); x.textAlign = 'left'; x.textBaseline = 'middle';
+    const b = [px - w / 2 - 4, py - size, px + w / 2 + 4, py + size]; nameCands.push(b); if (!free(b)) continue; boxes.push(b);
+    x.fillStyle = GOLD + (rank === 1 ? '.66)' : rank === 2 ? '.5)' : '.4)'); x.textAlign = 'left'; x.textBaseline = 'middle';
     let cxp = px - w / 2; for (const ch of label) { x.fillText(ch, cxp, py); cxp += x.measureText(ch).width + 2.2; }
   }
   for (const [id, name] of Object.entries(SKY.names)) {
     const p = pos.get(+id); if (!p) continue; const [px, py] = p;
-    x.font = `italic 10px ${SERIF}`; const w = x.measureText(name).width, b = [px + 6, py + 2, px + 10 + w, py + 15]; if (!free(b)) continue; boxes.push(b);
+    x.font = `italic 10px ${SERIF}`; const w = x.measureText(name).width, b = [px + 6, py + 2, px + 10 + w, py + 15]; nameCands.push(b); if (!free(b)) continue; boxes.push(b);
     x.fillStyle = 'rgba(232,222,196,.6)'; x.textAlign = 'left'; x.textBaseline = 'middle'; x.fillText(name, px + 8, py + 9);
   }
   // zenith mark and a small orientation rose (north up, east left — as when you lie on your back and look up)
   x.strokeStyle = GOLD + '.4)'; x.lineWidth = .7; x.beginPath(); const zx = (DESK.uw || W) / 2 - DESK.x, zy = (DESK.uh || H) / 2 - DESK.y; x.moveTo(zx - 6, zy); x.lineTo(zx + 6, zy); x.moveTo(zx, zy - 6); x.lineTo(zx, zy + 6); x.stroke();
-  if (DESK.i === 0) { const rx = 82, ry = 82;   /* the rose once, on the leftmost screen */ x.strokeStyle = GOLD + '.5)'; x.lineWidth = .8; x.beginPath(); x.arc(rx, ry, 30, 0, 7); x.stroke();
-    x.fillStyle = GOLD + '.7)'; x.font = `600 11px ${SERIF}`; x.textAlign = 'center'; x.textBaseline = 'middle';
-    [['N', 0, -1], ['S', 0, 1], ['E', -1, 0], ['W', 1, 0]].forEach(([t, dx, dy]) => { x.fillText(t, rx + dx * 44, ry + dy * 44); x.beginPath(); x.moveTo(rx + dx * 30, ry + dy * 30); x.lineTo(rx + dx * 36, ry + dy * 36); x.stroke(); }); }
-  if (DESK.i === DESK.n - 1) {                                        // the cartouche once, on the rightmost screen
-  // the cartouche: where and when
-  const [tx, ty] = cartAt = cartoucheSpot();
-  x.fillStyle = 'rgba(10,20,42,.85)'; x.fillRect(tx - 150, ty - 40, 300, 80);
+  if (DESK.i === 0) {                                                  // the rose once, on the leftmost screen, clear of the menu bar
+    // an old chart's eight-point rose: long cardinal points, short diagonals, each point half solid and half open, on a
+    // patch of darkened sky (a star sat on the bare ring and its figure's lines ran through it)
+    const rx = 82, ry = roseY, bg = x.createRadialGradient(rx, ry, 0, rx, ry, 64);
+    bg.addColorStop(0, 'rgba(6,12,28,.9)'); bg.addColorStop(.7, 'rgba(6,12,28,.7)'); bg.addColorStop(1, 'rgba(6,12,28,0)'); x.fillStyle = bg; x.fillRect(rx - 64, ry - 64, 128, 128);
+    x.strokeStyle = GOLD + '.45)'; x.lineWidth = .7; x.beginPath(); x.arc(rx, ry, 27, 0, 7); x.stroke(); x.beginPath(); x.arc(rx, ry, 24.5, 0, 7); x.stroke();
+    for (const [L, hw, list] of [[20, 3.6, [1, 3, 5, 7]], [36, 5.5, [0, 2, 4, 6]]]) for (const k of list) {
+      const a = k * Math.PI / 4 - Math.PI / 2, ux = Math.cos(a), uy = Math.sin(a), nx = -uy, ny = ux, tx = rx + ux * L, ty = ry + uy * L;
+      x.beginPath(); x.moveTo(rx, ry); x.lineTo(tx, ty); x.lineTo(rx + ux * L * .22 + nx * hw, ry + uy * L * .22 + ny * hw); x.closePath(); x.fillStyle = GOLD + '.78)'; x.fill();
+      x.beginPath(); x.moveTo(rx, ry); x.lineTo(tx, ty); x.lineTo(rx + ux * L * .22 - nx * hw, ry + uy * L * .22 - ny * hw); x.closePath(); x.fillStyle = 'rgba(10,20,42,.9)'; x.fill();
+      x.strokeStyle = GOLD + '.7)'; x.lineWidth = .6; x.stroke(); }
+    x.fillStyle = GOLD + '.85)'; x.beginPath(); x.arc(rx, ry, 1.8, 0, 7); x.fill();
+    x.fillStyle = GOLD + '.75)'; x.font = `600 11px ${SERIF}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+    [['N', 0, -1], ['S', 0, 1], ['E', -1, 0], ['W', 1, 0]].forEach(([t, dx, dy]) => x.fillText(t, rx + dx * 46, ry + dy * 46)); }
+  if (lastScreen) {                                                   // the cartouche once, on the rightmost screen
+  // the cartouche: where and when. The sky round it is dusted out first, so the figures' lines and stars stop short of
+  // its frame instead of running under and through it; then an opaque card, with corner ornaments, as old charts had
+  const [tx, ty] = cartAt;
+  x.save(); x.shadowColor = 'rgba(8,15,32,1)'; x.shadowBlur = 22; x.fillStyle = 'rgb(10,19,40)'; x.fillRect(tx - 156, ty - 46, 312, 92); x.restore();
+  x.fillStyle = 'rgb(10,20,42)'; x.fillRect(tx - 150, ty - 40, 300, 80);
   x.strokeStyle = GOLD + '.55)'; x.lineWidth = .9; x.strokeRect(tx - 150, ty - 40, 300, 80); x.strokeRect(tx - 145, ty - 35, 290, 70);
+  for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {        // quarter-round notches in the inner frame's corners, a dot in each
+    const cx = tx + sx * 145, cy = ty + sy * 35, a0 = sx < 0 ? (sy < 0 ? 0 : -Math.PI / 2) : (sy < 0 ? Math.PI / 2 : Math.PI);
+    x.beginPath(); x.arc(cx, cy, 7, a0, a0 + Math.PI / 2); x.stroke(); x.fillStyle = GOLD + '.6)'; x.beginPath(); x.arc(tx + sx * 147.5, ty + sy * 37.5, 1.1, 0, 7); x.fill(); }
+  for (const sy of [-1, 1]) { const dy = ty + sy * 40; x.fillStyle = 'rgb(10,20,42)'; x.fillRect(tx - 9, dy - 2, 18, 4); x.fillStyle = GOLD + '.7)';   // a small lozenge set into the outer rule, top and bottom
+    x.beginPath(); x.moveTo(tx - 7, dy); x.lineTo(tx, dy - 3); x.lineTo(tx + 7, dy); x.lineTo(tx, dy + 3); x.closePath(); x.fill(); }
+  x.strokeStyle = GOLD + '.32)'; x.lineWidth = .6; x.beginPath(); x.moveTo(tx - 78, ty - 2); x.lineTo(tx - 6, ty - 2); x.moveTo(tx + 6, ty - 2); x.lineTo(tx + 78, ty - 2); x.stroke();   // a hairline between the title and the details
+  x.fillStyle = GOLD + '.55)'; x.beginPath(); x.moveTo(tx - 3, ty - 2); x.lineTo(tx, ty - 4.5); x.lineTo(tx + 3, ty - 2); x.lineTo(tx, ty + .5); x.closePath(); x.fill();
   x.fillStyle = GOLD + '.85)'; x.font = `600 15px ${SERIF}`; x.textAlign = 'center'; x.textBaseline = 'middle';
   const title = 'CAELUM HODIERNUM'; let tw = -2.5; for (const ch of title) tw += x.measureText(ch).width + 2.5; let px2 = tx - tw / 2;
   for (const ch of title) { const w2 = x.measureText(ch).width; x.fillText(ch, px2 + w2 / 2, ty - 13); px2 += w2 + 2.5; }
@@ -304,17 +335,21 @@ function paintSky(date = new Date()) {
   const when = `${fmt({ day: 'numeric', month: 'short', year: 'numeric' })} · ${fmt({ hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }).replace(/GMT\+0$/, 'GMT')}`;
   const deg = (v, p, n) => `${Math.abs(v).toFixed(1)}°${v >= 0 ? p : n}`;
   x.font = `italic 11px ${SERIF}`; x.fillStyle = GOLD + '.65)';
-  x.fillText(`${SITE.name} · ${deg(SITE.lat, 'N', 'S')} ${deg(SITE.lon, 'E', 'W')}`, tx, ty + 6); x.fillText(when, tx, ty + 22);
+  x.fillText(`${SITE.name} · ${deg(SITE.lat, 'N', 'S')} ${deg(SITE.lon, 'E', 'W')}`, tx, ty + 9); x.fillText(when, tx, ty + 23);
   }
+  nameSig = sigOf(allWins);
   return c;
 }
+// which candidate names a set of windows covers: when a settled layout changes that, the chart is repainted round it
+let nameCands = [], nameSig = '';
+const sigOf = wins => nameCands.map(b => wins.some(([l, t, r, q]) => b[0] < r + 4 && b[2] > l - 4 && b[1] < q + 4 && b[3] > t - 4) ? 1 : 0).join('');
 
 // the cartouche hangs in whichever corner no black hole is near (it would be lensed to pieces), and where your windows
 // leave it in sight: half a cartouche peeking out from under a window reads as a mistake. It stays put unless another
 // corner is clearly better, so it doesn't hop about as windows come and go.
 function cartoucheSpot(list = cur.filter(c => c.alive)) {
-  const spots = [[W - 175, H - 68], [175, H - 68], [W - 175, 92]];   // the top spot clears the menu bar
-  const near = ([tx, ty]) => list.some(c => tx + 150 + 150 > c.tx && tx - 150 - 150 < c.tx + c.tw && ty + 40 + 150 > c.ty && ty - 40 - 150 < c.ty + c.th)
+  const B = Math.min(H, AREA_B), spots = [[W - 175, B - 68], [175, B - 68], [W - 175, Math.max(92, AREA_T + 68)]];   // clear of the menu bar, and of the Dock when it shows
+  const near = ([tx, ty]) => list.some(c => !c.gentle && tx + 150 + 150 > c.tx && tx - 150 - 150 < c.tx + c.tw && ty + 40 + 150 > c.ty && ty - 40 - 150 < c.ty + c.th)
     || deskIc.some(([l, t, r, b]) => tx + 150 + 20 > l && tx - 150 - 20 < r && ty + 40 + 20 > t && ty - 40 - 20 < b);   // nor over your icons
   const hidden = ([tx, ty]) => Math.min(24000, allWins.reduce((s, [l, t, r, b]) => s + Math.max(0, Math.min(r, tx + 158) - Math.max(l, tx - 158)) * Math.max(0, Math.min(b, ty + 48) - Math.max(t, ty - 48)), 0));
   const score = sp => (near(sp) ? 1e6 : 0) + hidden(sp);
@@ -322,7 +357,7 @@ function cartoucheSpot(list = cur.filter(c => c.alive)) {
   const here = cartAt && spots.find(sp => sp[0] === cartAt[0] && sp[1] === cartAt[1]);
   return here && score(here) <= bs + 2500 ? here : best;
 }
-let cartAt = null, cartT = null, deskIc = [], iconKey = '', allWins = [];
+let cartAt = null, cartT = null, deskIc = [], deskDust = [], iconKey = '', allWins = [], AREA_T = 0, AREA_B = 1e9;
 /* ---------- windows → black holes (eased like everything else) ---------- */
 let cur = [], liveUntil = 0;
 function setTargets(list) {
@@ -330,12 +365,13 @@ function setTargets(list) {
   for (const t of list) {
     let best = null, bd = 1e9;
     for (const c of cur) { if (used.has(c) || c.owner !== t.owner) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
-    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, alive: true }); }
-    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, life: 0, alive: true }; cur.push(c); used.add(c); }
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, alive: true, gentle: t.gentle }); }
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, life: 0, alive: true, gentle: t.gentle }; cur.push(c); used.add(c); }
   }
   for (const c of cur) if (!used.has(c)) c.alive = false;
   // the cartouche moves only once the layout has settled (Show Desktop, Mission Control and the like shuffle windows for a moment)
-  clearTimeout(cartT); cartT = setTimeout(() => { const sp = cartoucheSpot(); if (SKY && cartAt && (sp[0] !== cartAt[0] || sp[1] !== cartAt[1])) newSky(1200); }, performance.now() < liveUntil ? 1500 : 1000);
+  // (and the names, when the settled windows now cover a different set of them)
+  clearTimeout(cartT); cartT = setTimeout(() => { const sp = cartoucheSpot(); if (SKY && ((cartAt && (sp[0] !== cartAt[0] || sp[1] !== cartAt[1])) || sigOf(allWins) !== nameSig)) newSky(1200); }, performance.now() < liveUntil ? 1500 : 1000);
   wake();
 }
 function stepWins(dt) {
@@ -358,7 +394,7 @@ function program(vs, fs) { const sh = (t, s) => { const x = gl.createShader(t); 
 const LENS = program(`#version 300 es
 void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, `#version 300 es
 precision highp float;
-uniform sampler2D uSky, uSkyB; uniform float uSkyMix; uniform vec4 uWin[16]; uniform float uLife[16]; uniform int uN; uniform vec2 uRes; uniform float uK;
+uniform sampler2D uSky, uSkyB; uniform float uSkyMix; uniform vec4 uWin[16]; uniform float uLife[16], uGentle[16]; uniform int uN; uniform vec2 uRes; uniform float uK;
 uniform vec3 uCur;                                   // x, y, strength (0..1)
 out vec4 o;
 float h12(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
@@ -390,7 +426,9 @@ void main() {
     vec2 ne = outer > 0. ? sign(dp) * qo / outer : (q.x > q.y ? vec2(sign(dp.x), 0.) : vec2(0., sign(dp.y)));
     // bend toward the centre as well as away from the edge: light converges, stars smear into curved arcs
     vec2 n = normalize(mix(ne, dp / max(length(dp), 1.), .55));
-    lens(p, d, n, min(.14 * min(hs.x, hs.y) + 28., 110.) * L, L, 16., 1., false, src, shade, glow);
+    // an ordinary window: barely a lens, at most ~3 px of bent starlight at its edge, ~1 px six px out, gone by ~20 px
+    float E = uGentle[i] > .5 ? 3. : min(.14 * min(hs.x, hs.y) + 28., 110.);
+    lens(p, d, n, E * L, L, uGentle[i] > .5 ? 10. : 16., 1., false, src, shade, glow);
   }
   if (uCur.z > 0.) {                                 // the cursor: a round mini black hole
     vec2 dp = p - uCur.xy; float dist = length(dp);
@@ -402,7 +440,7 @@ void main() {
   o = vec4(sky * shade + glow, 1.);
 }`);
 gl.useProgram(LENS);
-const U = {}; for (const k of ['uSky', 'uSkyB', 'uSkyMix', 'uWin', 'uLife', 'uN', 'uRes', 'uK', 'uCur']) U[k] = gl.getUniformLocation(LENS, k);
+const U = {}; for (const k of ['uSky', 'uSkyB', 'uSkyMix', 'uWin', 'uLife', 'uGentle', 'uN', 'uRes', 'uK', 'uCur']) U[k] = gl.getUniformLocation(LENS, k);
 gl.bindVertexArray(gl.createVertexArray());
 let skyTex = gl.createTexture(), skyTexB = gl.createTexture(), skyMix = 0, skyFadeT0 = -1e9;
 let SKY_FADE_MS = 2500, skyPending = 0;
@@ -410,7 +448,7 @@ let SKY_FADE_MS = 2500, skyPending = 0;
 function newSky(ms = 2500) { if (performance.now() - skyFadeT0 < SKY_FADE_MS) { skyPending = ms; return; } SKY_FADE_MS = ms; uploadSky(paintSky(), true); }
 // a new sky (the minute moved on): upload it as B and cross-fade A → B, then B becomes A
 function uploadSky(canvas, fade) {
-  if (fade) { if (skyMix > 0) [skyTex, skyTexB] = [skyTexB, skyTex]; [skyTex, skyTexB] = [skyTex, skyTexB]; }
+  if (fade && skyMix > 0) [skyTex, skyTexB] = [skyTexB, skyTex];
   const t = fade ? skyTexB : skyTex;
   gl.bindTexture(gl.TEXTURE_2D, t);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
@@ -420,15 +458,15 @@ function uploadSky(canvas, fade) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   if (fade) { skyFadeT0 = performance.now(); skyMix = 0; wake(); } else { gl.bindTexture(gl.TEXTURE_2D, skyTexB); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); skyMix = 0; skyFadeT0 = -1e9; }
 }
-const wf = new Float32Array(64), lf = new Float32Array(16);
+const wf = new Float32Array(64), lf = new Float32Array(16), gf = new Float32Array(16);
 function render() {
   gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
   const ord = cur.length > 16 ? cur.filter(c => c.alive).concat(cur.filter(c => !c.alive)) : cur;
-  const n = Math.min(ord.length, 16); wf.fill(0); lf.fill(0);
-  for (let i = 0; i < n; i++) { const c = ord[i]; wf.set([c.x, c.y, c.w, c.h], i * 4); lf[i] = c.life; }
+  const n = Math.min(ord.length, 16); wf.fill(0); lf.fill(0); gf.fill(0);
+  for (let i = 0; i < n; i++) { const c = ord[i]; wf.set([c.x, c.y, c.w, c.h], i * 4); lf[i] = c.life; gf[i] = c.gentle ? 1 : 0; }
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, skyTex); gl.uniform1i(U.uSky, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, skyTexB); gl.uniform1i(U.uSkyB, 1); gl.uniform1f(U.uSkyMix, skyMix);
-  gl.uniform4fv(U.uWin, wf); gl.uniform1fv(U.uLife, lf); gl.uniform1i(U.uN, n); gl.uniform2f(U.uRes, W, H); gl.uniform1f(U.uK, K);
+  gl.uniform4fv(U.uWin, wf); gl.uniform1fv(U.uLife, lf); gl.uniform1fv(U.uGentle, gf); gl.uniform1i(U.uN, n); gl.uniform2f(U.uRes, W, H); gl.uniform1f(U.uK, K);
   gl.uniform3f(U.uCur, curs.x, curs.y, curs.a);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
@@ -442,8 +480,11 @@ function shootingStar() {
     if (cur.some(w => x > w.x - 200 && x < w.x + w.w + 200 && y > w.y - 200 && y < w.y + w.h + 200)) continue;
     { const ex = x + Math.cos(a) * (260 + len), ey = y + Math.sin(a) * (260 + len); if (allWins.some(([l, t, r, b]) => Math.max(x, ex) > l && Math.min(x, ex) < r && Math.max(y, ey) > t && Math.min(y, ey) < b)) continue; }   // nor behind your windows, where nobody would see it
     const el = document.createElement('div'); el.className = 'shoot'; el.style.width = `${len}px`; document.body.appendChild(el);
-    const anim = el.animate([{ transform: `translate(${x}px,${y}px) rotate(${a}rad) scaleX(.2)`, opacity: 0 }, { opacity: 1, offset: .25 },
-      { transform: `translate(${x + Math.cos(a) * 260}px,${y + Math.sin(a) * 260}px) rotate(${a}rad) scaleX(1)`, opacity: 0 }], { duration: 1100, easing: 'cubic-bezier(.3,0,.4,1)' });
+    // the head runs ahead along the path; the tail grows out behind it, then draws into the head as it burns out
+    // (it used to fade as a whole: a line switching off, not a meteor)
+    const at = (u, sc, o) => ({ transform: `translate(${x - len + Math.cos(a) * 260 * u}px,${y + Math.sin(a) * 260 * u}px) rotate(${a}rad) scaleX(${sc})`, opacity: o });
+    const anim = el.animate([at(0, .02, 0), { ...at(.08, .15, 1), offset: .08 }, { ...at(.55, 1, 1), offset: .55 }, at(1, 0, 1)],
+      { duration: 1200, easing: 'cubic-bezier(.35,0,.55,1)' });
     anim.onfinish = () => el.remove(); return;
   }
 }
@@ -454,7 +495,7 @@ function wake() { if (!running && !paused) { running = true; lastT = 0; requestA
 function loop(now) { try { loop0(now); } catch (e) { running = false; try { webkit.messageHandlers.host.postMessage('JSERR loop ' + e.message); } catch (_) {} setTimeout(wake, 1000); } }
 function loop0(now) {
   if (paused) { running = false; return; }
-  const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now;
+  const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now; fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
   const moving = stepWins(dt);
   // the cursor hole fades in while the pointer is over the sky and out a few seconds after it stops
   // back on the sky far from where its hole was left (after crossing a window, or another screen): the old one fades
@@ -484,6 +525,7 @@ const handle = m => {
     if (!paused) { if (SKY && Math.floor(Date.now() / 60000) !== paintedMin) newSky(); wake(); }
     return; }
   if (m.t === 'me') return;
+  if (m.t === 'area') { const t = m.r[1] / K, b = m.r[3] / K; if (t === AREA_T && b === AREA_B) return; AREA_T = t; AREA_B = b; if (SKY) newSky(1200); return; }   // below the menu bar, above the Dock
   if (m.t === 'desk') { const k = [m.x, m.y, m.w, m.h, m.uw, m.uh, m.i, m.n].join('|'); if (k === deskKey) return; deskKey = k;
     DESK = m; if (SKY) { uploadSky(paintSky(), false); dirty = true; wake(); } return; }
   if (m.t === 'cursor' && m.w) { curs.away = true; if (curs.here) { curs.here = false; wake(); } return; }   // over a window: its little black hole can't be seen; let it fade, and redraw nothing for it
@@ -492,15 +534,20 @@ const handle = m => {
     curs.away = false; curs.here = true; curs.lastMove = performance.now(); dirty = true; wake(); return; }
   if (m.t === 'cursorOff') { curs.here = false; curs.away = true; wake(); return; }        // the pointer went to another screen
   if (m.t === 'dicons') { const k = [m.r].join('|'); if (k === iconKey) return; iconKey = k;   // your desktop icons: the chart is repainted round them
-    deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]); if (SKY) newSky(1200); return; }
-  // black holes only for the small things: Stage Manager thumbnails and desktop widgets (and the cursor); not your main windows
+    deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]);
+    // the dust: round the artwork and the label strip under it, not the whole cell
+    const art = (m.a || m.i || m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]);
+    deskDust = art.flatMap((q, i) => { const c = deskIc[i] || q; return c[3] - q[3] > 8 ? [q, [c[0] + 8, q[3] + 2, c[2] - 8, c[3]]] : [q]; });
+    if (SKY) newSky(1200); return; }
+  // full black holes for the small things: Stage Manager thumbnails and desktop widgets (and the cursor); your main
+  // windows only bend the starlight right at their edges, very gently
   if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
     allWins = m.r.map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]);
-    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i], sm: !!(m.sm && m.sm[i]) }))
-      .filter(w => w.sm || w.owner === 'Notification Centre')); }
+    setTargets(m.r.map(([l, t, r, b], i) => { const sm = !!(m.sm && m.sm[i]), owner = (m.n || [])[i]; return { x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner, sm, gentle: !(sm || owner === 'Notification Centre') }; })); }
 };
 build(); setTimeout(shootingStar, 8000);
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 200); });
+window.__dbg = () => `run=${running} fps=${fpsEMA | 0} paint=${fieldMs}ms cart=${cartAt ? cartAt.map(Math.round).join(',') : '-'} holes=${cur.filter(c => !c.gentle).length} gentle=${cur.filter(c => c.gentle).length} area=${AREA_T},${AREA_B > 1e8 ? '-' : AREA_B}`;
 const host = window.chrome && window.chrome.webview;
 if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
 else { handle({ t: 'windows', r: [[W * .35 * K, H * .3 * K, W * .7 * K, H * .66 * K]], n: ['Slack'] }); addEventListener('mousemove', e => handle({ t: 'cursor', x: e.clientX * K, y: e.clientY * K })); }
