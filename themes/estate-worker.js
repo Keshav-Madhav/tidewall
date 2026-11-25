@@ -175,10 +175,13 @@ function buildTown({ W, H, K, seed, t: tNow = 1, OX = 0, OY = 0, WW = W, WH = H,
   const roads = makeRoads(WW, WH, R);
   const rings = [];
   for (let i = 0; i < 2; i++) {             // round towers with a circular road around them
-    for (let tries = 0; tries < 30; tries++) {
-      const r = 70 + R() * 70, cx = r + 40 + R() * (WW - 2 * r - 80), cy = r + 40 + R() * (WH - 2 * r - 80);
+    // big towers first; where your windows leave no room for one, a smaller tower closer in (keeping clear of windows
+    // had cost most towns their towers: a big one with a wide berth rarely fits beside real windows)
+    for (let tries = 0; tries < 110; tries++) {
+      const small = tries >= 30, r = small ? 48 + R() * 34 : 70 + R() * 70, gap = small ? 28 : 60;
+      const cx = r + 40 + R() * (WW - 2 * r - 80), cy = r + 40 + R() * (WH - 2 * r - 80);
       if (FR && !onOne(cx - r - 30, cy - r - 30, cx + r + 30, cy + r + 50)) continue;      // a tower stands wholly on one display
-      if (wins.some(w => cx + r > w.x - 60 && cx - r < w.x + w.w + 60 && cy + r > w.y - 60 && cy - r < w.y + w.h + 60)) continue;
+      if (wins.some(w => cx + r > w.x - gap && cx - r < w.x + w.w + gap && cy + r > w.y - gap && cy - r < w.y + w.h + gap)) continue;
       if (rings.some(o => Math.hypot(o.cx - cx, o.cy - cy) < o.r + r + 80)) continue;
       if (Math.hypot(cx - CX, cy - CY) < r + 100) continue;                          // nor on the compass rose (it can stand in any corner now)
       rings.push({ cx, cy, r });
@@ -396,7 +399,7 @@ function layLetters(loop, size, alpha, n) {
       const px = a[0] + ux * t, py = a[1] + uy * t, qx = Math.round(px / 3), qy = Math.round(py / 3);
       if (lhash(qx, qy, 11) < .12) continue;             // gaps between words
       let ka = alpha;                                     // under a banner, a tower or the rose: thinned away as its sheet inks in
-      for (const k of LOOPKEEP) if (px > k[0] && px < k[2] && py > k[1] && py < k[3]) ka *= 1 - k[4];
+      for (const k of LOOPKEEP) if (px > k[0] && px < k[2] && py > k[1] && py < k[3]) ka *= 1 - k[4] * .55;   // (thinned, not erased: the town keeps its texture)
       if (ka < .01) continue;
       const o = n * 6; INST[o] = px; INST[o + 1] = py; INST[o + 2] = ang;
       INST[o + 3] = Math.floor(lhash(qx, qy, 5) * NG); INST[o + 4] = ka; INST[o + 5] = size; n++;

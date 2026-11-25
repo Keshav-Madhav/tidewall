@@ -10,9 +10,9 @@
   // particle counts (count), simulation detail (sim) and optional effects (fx: 0 lean, 1 normal, 2 extra).
   const RES = HOST.res > 0 && HOST.res < 1 ? HOST.res : 1;
   const Q = Object.freeze([
-    { tier: 0, res: RES, calm: 20, deep: 10, deep2: 6, live: 45, hover: 30, count: .65, sim: .7, fx: 0 },
-    { tier: 1, res: 1, calm: 24, deep: 12, deep2: 8, live: 0, hover: 60, count: 1, sim: 1, fx: 1 },   // (24 at rest: gentle motion reads smooth at film rate)
-    { tier: 2, res: 1, calm: 60, deep: 0, deep2: 0, live: 0, hover: 0, count: 1, sim: 1, fx: 2 },
+    { tier: 0, res: RES, calm: 20, deep: [15, 10, 6], live: 45, hover: 30, count: .65, sim: .7, fx: 0 },
+    { tier: 1, res: 1, calm: 24, deep: [18, 12, 8], live: 0, hover: 60, count: 1, sim: 1, fx: 1 },   // (24 at rest: gentle motion reads smooth at film rate)
+    { tier: 2, res: 1, calm: 60, deep: null, live: 0, hover: 0, count: 1, sim: 1, fx: 2 },
   ][HOST.tier === 0 || HOST.tier === 2 ? HOST.tier : 1]);
   window.__twQ = Q;
 
@@ -108,18 +108,21 @@
   const LIVE = pick > 0 ? pick : Q.live || Math.max(60, HOST.maxHz);
   const HOVER = Math.min(LIVE, Q.hover || LIVE);
   // Deep rest: while you're working in your apps (the pointer hasn't been on the wallpaper, and no window has moved,
-  // opened or closed, for 20 s) a wall rests at Q.deep (12 in Balanced) instead of its calm rate; the pointer arriving or
-  // any window changing brings it straight back. A rate picked in Settings, or Quality, never deep-rests.
-  // Two minutes of that, deeper still (Q.deep2). And a display your windows mostly cover (over three quarters of it:
-  // only slivers of the wall show) rests deep at once rather than after 20 s.
-  const DEEP_AFTER = 20000, DEEPER_AFTER = 120000; let attentionAt = performance.now(), covered = 0;
+  // opened or closed) a wall eases down in steps rather than at once: in Balanced 18 fps after a minute, 12 after five,
+  // 8 after ten (Performance 15 / 10 / 6). The pointer arriving or any window changing brings it straight back. A rate
+  // picked in Settings, or Quality, never deep-rests. A display your windows mostly cover (over three quarters of it:
+  // only slivers of the wall show) goes to the second step at once. (The steps were 12 after 20 s and 8 after two
+  // minutes: a wall you could still see on another display turned choppy while you worked.)
+  const DEEP_AT = [60000, 300000, 600000]; let attentionAt = performance.now(), covered = 0;
   const calmRate = () => { if (pick >= 60) return pick;
     const r = Math.min(CALM, window.__twCalm || CALM);
     if (pick > 0 || !Q.deep) return r;
     const away = performance.now() - attentionAt;
-    // (deeper only for walls that don't already slow themselves: Ink Map, resting at 12 on its own, cost more at 8)
-    if (away > DEEPER_AFTER && !(window.__twCalm <= Q.deep)) return Math.min(r, Q.deep2 || Q.deep);
-    return away > DEEP_AFTER || covered > .75 ? Math.min(r, Q.deep) : r; };
+    let step = DEEP_AT.filter(t => away > t).length;
+    if (covered > .75) step = Math.max(step, 2);
+    // (the last step only for walls that don't already slow themselves: Ink Map, resting at 12 on its own, cost more at 8)
+    if (step === 3 && window.__twCalm <= Q.deep[1]) step = 2;
+    return step ? Math.min(r, Q.deep[step - 1]) : r; };
   // how much of this display your windows cover, on a coarse grid (their rects are in the page's device pixels)
   const coverage = s => { try { const m = JSON.parse(s), W = innerWidth * devicePixelRatio, H = innerHeight * devicePixelRatio; let hit = 0;
       for (let j = 0; j < 12; j++) for (let i = 0; i < 16; i++) { const x = (i + .5) * W / 16, y = (j + .5) * H / 12;

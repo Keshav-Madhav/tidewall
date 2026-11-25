@@ -167,7 +167,7 @@ function decorate(x, rings, spots = [], rose = compassAt()) {
   let placed = 0; const want = Math.round(W * H / 260000), at = [];
   for (const [px, py] of spots) {
     if (placed >= want) break;
-    if (at.some(([ax, ay]) => Math.hypot(ax - px, ay - py) < 180)) continue;
+    if (at.some(([ax, ay]) => Math.hypot(ax - px, ay - py) < 130)) continue;   // (180 left a town of windows with two or three)
     const HR = rng(hash(`b${townSeed}${(px + OX) | 0}:${(py + OY) | 0}`)), name = placeName(HR), size = 10.5 + HR() * 2, tilt = (HR() - .5) * .14;
     const b = fits(px, py, name, size);
     if (!b) continue; boxes.push(b); at.push([px, py]);

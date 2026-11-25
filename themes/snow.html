@@ -2,8 +2,8 @@
 <!--
   Snowfall — a Tidewall theme. A winter dusk; snow falls behind your windows and settles on their top
   edges, slumping into soft drifts. Move a window fast (or resize it) and the snow shakes off in clumps;
-  close it and its drift is left behind to melt. Your cursor is warm: flakes swerve and melt near it, and it
-  melts grooves into drifts. Backdrop drawn once; flakes, clumps and drifts in one small WebGL pass.
+  close it and its snow falls off. Your pointer is a little plough: flakes swerve round it, drag it through snow and
+  it heaps up ahead of you, flick it and the snow is thrown. Backdrop drawn once; flakes, clumps and drifts in one small WebGL pass.
 -->
 <html>
 <head>
@@ -227,8 +227,9 @@ function setTargets(list) {
   }
   settled = true; driftsDirty = true;
   for (const c of cur) if (!used.has(c) && c.alive) {           // gone (closed, minimised, Show Desktop): with nothing under it, its snow falls
-    c.alive = false; if (c.owner !== '__icon') { const keep = Float32Array.from(c.cols); shed(c, 1, 0, 40); c.cols = keep; }   // tumbling clumps, not a ledge in mid-air
-    else orphans.push({ x: c.x, y: c.y, w: c.w, cols: c.cols, melt: 0, owner: c.owner });
+    // tumbling clumps, not a ledge in mid-air (an icon too: deleted or moved, its cap used to melt where it stood and
+    // looked as if nothing had noticed)
+    c.alive = false; { const keep = Float32Array.from(c.cols); shed(c, 1, 0, 40); c.cols = keep; }
     if (c.owner !== '__icon') { away.push({ owner: c.owner, w: c.w, cols: Float32Array.from(c.cols), at: now }); if (away.length > 24) away.shift(); }
   }
   cur = cur.filter(c => c.alive);
@@ -290,16 +291,16 @@ function relax(cols, cap) {
     if (d > m) { const t = (d - m) * .3; cols[i] -= t; cols[i + 1] += t; } else if (-d > m) { const t = (-d - m) * .3; cols[i + 1] -= t; cols[i] += t; } }
   for (let i = 0; i < n; i++) { const edge = Math.min(i, n - 1 - i) * COL; cols[i] = Math.min(cols[i], cap, 3 + edge * 1.1); }
 }
-let cursor = null, cursorT = 0;
+let cursor = null, cursorT = 0, cvx = 0, cvy = 0, plowDue = false, cursorOnWin = false;
 function stepSnow(dt, now) {
   windT += dt; wind = (vnoise(windT * .07, 3) - .5) * 70 + Math.sin(windT * .21) * 12;
   const warm = cursor && now - cursorT < 6000;
   for (const f of flakes) {
     f.ph += dt * f.sw;
     let vx = wind * (.4 + f.layer * .3) + Math.sin(f.ph) * 14 * (.5 + f.layer * .4), vy = f.v;
-    if (warm) {                                      // warm air round the cursor: flakes swerve, the closest melt
+    if (warm) {                                      // flakes swerve round the pointer
       const dx = f.x - cursor.x, dy = f.y - cursor.y, d = Math.hypot(dx, dy);
-      if (d < 70) { const p = (70 - d) / 70; vx += dx / (d + 1) * 160 * p; vy -= 40 * p; if (d < 14 && f.layer) { respawn(f); continue; } }
+      if (d < 70) { const p = (70 - d) / 70; vx += dx / (d + 1) * 160 * p; vy -= 40 * p; }   // (they swerve round it)
     }
     const ny = f.y + vy * dt, nx = f.x + vx * dt;
     if (f.layer > 0) {                               // near flakes settle on whatever is below them
@@ -311,6 +312,8 @@ function stepSnow(dt, now) {
     }
     f.x = nx; f.y = ny; if (f.y > H + 10 || f.x < -120 || f.x > W + 120) respawn(f);
   }
+  // the pointer pushes snow (each move, not on the 10 Hz upkeep: a plough has to keep up with the hand)
+  if (plowDue && cursor) { plowDue = false; if (!cursorOnWin && now >= liveUntil) { for (const c of cur) plow(c.cols, c.x, c.y, c); plow(ground, 0, GB(), null); } }
   // clumps from shaken drifts: tumble, and land on drifts below
   for (const c of clumps) {
     c.vy += 520 * dt; c.vx *= .99; const ny = c.y + c.vy * dt, nx = c.x + c.vx * dt;
@@ -320,7 +323,7 @@ function stepSnow(dt, now) {
     c.x = nx; c.y = ny; if (c.y > H + 20) c.life = 0;
   }
   for (let i = clumps.length - 1; i >= 0; i--) if (clumps[i].life <= 0) clumps.splice(i, 1);
-  // drifts settle; warmth melts grooves; orphans melt away. Ten times a second, not every frame: they change over
+  // drifts settle; orphans melt away. Ten times a second, not every frame: they change over
   // seconds, and the slump and the mesh were most of what the wall cost at rest (every frame while a window moves)
   const dragging = now < liveUntil;
   upkeepDt += dt;
@@ -337,18 +340,43 @@ function stepSnow(dt, now) {
     for (let i = 0; i < c.cols.length; i++) if (c.cols[i] < c.want[i]) c.cols[i] = Math.min(c.want[i], c.cols[i] + g * c.gr[i]);
   }
   // (the cursor melts only snow it's in: on a window's title bar, dragging it, it's below the snow, not in it)
-  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, c.cap || 42); if (warm && !dragging && cursor.y < c.y) melt(c.cols, c.x, c.y, ud, c); }   // c.cap: a desktop icon wears only a little cap
+  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, c.cap || 42); }   // c.cap: a desktop icon wears only a little cap
   const gs = Math.exp(-ud / 1500); for (let i = 0; i < ground.length; i++) ground[i] *= gs;
   // the bank along the bottom builds up like the window tops do: a soft, uneven bank within a minute or so
   if (!gWant || gWant.length !== ground.length) { gWant = new Float32Array(ground.length); for (let i = 0; i < ground.length; i++) gWant[i] = 26 * (.55 + .9 * vnoise(i * .025, 11)); }
   for (let i = 0; i < ground.length; i++) if (ground[i] < gWant[i]) ground[i] = Math.min(gWant[i], ground[i] + ud * .45);
-  relax(ground, 70); if (warm) melt(ground, 0, GB(), ud);
+  relax(ground, 70);
   for (const o of orphans) { o.melt += ud; const os = Math.exp(-ud / 14); for (let i = 0; i < o.cols.length; i++) o.cols[i] *= os; relax(o.cols, 34); }
   orphans = orphans.filter(o => o.cols.some(v => v > .3));
 }
-function melt(cols, x0, y0, dt, c) {
-  for (let i = 0; i < cols.length; i++) { const px = x0 + i * COL, py = y0 + (c ? floor(c, i) : 0) - cols[i], d = Math.hypot(px - cursor.x, py - cursor.y);
-    if (d < 45) cols[i] = Math.max(0, cols[i] - (45 - d) / 45 * 26 * dt); }
+// the pointer as a plough: moving through snow it scoops up what's under it and heaps it just ahead (the slump then
+// settles the heap); a quick flick throws what it scooped instead, as clumps along the flick. A pointer at rest, or
+// one above or below the snow, leaves it be
+function plow(cols, x0, y0, c) {
+  const sp = Math.hypot(cvx, cvy); if (sp < 40) return;
+  const R = 20, n = cols.length, i0 = Math.max(0, Math.floor((cursor.x - R - x0) / COL)), i1 = Math.min(n - 1, Math.ceil((cursor.x + R - x0) / COL));
+  if (i0 > i1) return;
+  let took = 0;
+  for (let i = i0; i <= i1; i++) {
+    const px = x0 + i * COL, base = y0 + (c ? floor(c, i) : 0), top = base - cols[i];
+    if (cols[i] < .4 || cursor.y < top - 5 || cursor.y > base + 3) continue;     // only snow the pointer is actually in
+    const k = 1 - Math.abs(px - cursor.x) / R; if (k <= 0) continue;
+    const a = Math.min(cols[i], (cols[i] * .3 + .5) * k * Math.min(1.6, sp / 300)); cols[i] -= a; took += a;
+  }
+  if (took < .05) return;
+  driftsDirty = true;
+  if (sp > 650) {                                                         // a flick: thrown, the faster the further
+    const nThrow = Math.min(24, Math.ceil(took / 3));
+    for (let k = 0; k < nThrow && clumps.length < 900; k++) clumps.push({ x: cursor.x + (Math.random() - .5) * 10, y: cursor.y - 2 - Math.random() * 6,
+      vx: cvx * (.45 + Math.random() * .3) + (Math.random() - .5) * 50, vy: Math.min(cvy * .5, -60) - Math.random() * 140, s: Math.min(7, 2 + took / nThrow * .8 + Math.random() * 1.5), life: 1 });
+    return;
+  }
+  // pushed: a heap just ahead, falling off the end if it's pushed past the edge
+  const dir = Math.abs(cvx) > 8 ? Math.sign(cvx) : 1, j0 = Math.round((cursor.x + dir * (R + 4) - x0) / COL);
+  const wts = [.4, .3, .2, .1]; let spilt = 0;
+  for (let k = 0; k < 4; k++) { const j = j0 + dir * k, a = took * wts[k]; if (j >= 0 && j < n) cols[j] += a; else spilt += a; }
+  if (spilt > 1 && c) { const ex = dir > 0 ? x0 + (n - 1) * COL : x0; for (let k = 0; k < Math.ceil(spilt / 4) && clumps.length < 900; k++)
+    clumps.push({ x: ex + dir * 3, y: y0 - 2, vx: dir * (40 + Math.random() * 60), vy: -20 - Math.random() * 40, s: 2.4 + Math.random() * 2.4, life: 1 }); }
 }
 
 /* ---------- 4. WebGL: one pass for drifts, flakes and clumps ---------- */
@@ -505,7 +533,9 @@ const handle = m => {
   if (m.t === 'desk') { showPanel(m.i, m.n); return; }
   if (m.t === 'area') { const was = GY; GY = m.r[3] / K; driftsDirty = true; if (was !== GY && PAINT.complete) drawBackdrop(); return; }   // (the snowman moves up onto it)
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
-  if (m.t === 'cursor') { cursor = { x: m.x / K, y: m.y / K }; cursorT = performance.now(); return; }
+  if (m.t === 'cursor') { const x = m.x / K, y = m.y / K, t = performance.now();
+    if (cursor && t - cursorT < 150 && t > cursorT) { const dt = (t - cursorT) / 1000; cvx = cvx * .4 + (x - cursor.x) / dt * .6; cvy = cvy * .4 + (y - cursor.y) / dt * .6; } else { cvx = cvy = 0; }
+    cursor = { x, y }; cursorT = t; cursorOnWin = !!m.w; plowDue = true; return; }
   if (m.t === 'cursorOff') { cursor = null; return; }
   // Stage Manager draws its thumbnails tilted in 3D but reports flat rectangles: snow can't sit on them believably, so it falls behind
   if (m.t === 'dicons') {                                               // your desktop icons: snow settles in a little cap on each
