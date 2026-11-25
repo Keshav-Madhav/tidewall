@@ -18,7 +18,9 @@
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
   /* your desktop icons float on lily pads; the koi swim beneath them */
   .pad { position: fixed; left: 0; top: 0; pointer-events: none; background-size: 100% 100%; will-change: transform;
-         animation: padsway var(--dur, 11s) ease-in-out infinite alternate; transition: opacity .9s ease; }
+         animation: padsway var(--dur, 11s) ease-in-out infinite alternate;
+         /* a moved icon's pad drifts over to it; a new one opens out of the water, a gone one sinks back */
+         transition: opacity .9s ease, scale .9s ease, translate 1.6s cubic-bezier(.45, 0, .25, 1), width 1.2s ease, height 1.2s ease; }
   @keyframes padsway { from { rotate: calc(var(--r) - 2.5deg); } to { rotate: calc(var(--r) + 2.5deg); } }
 </style>
 </head>
@@ -89,6 +91,13 @@ const WATER = `
 vec3 water(vec3 c, float D) { vec3 T = exp(-D * vec3(2.7, .62, .44)); return c * T + vec3(.0, .25, .34) * (1. - exp(-D * 1.8)); }
 `;
 
+// spurs and grooves along a reef's edge (px it reaches out, or in where negative): the same sum of waves in the shader
+// that grows the rock and on the CPU that picks where coral grows, so the corals stay on their rock
+const SPUR_GLSL = `
+float spur(vec2 p) { float s = sin(p.x * .021 + 1.3 * sin(p.y * .013 + .7)) * cos(p.y * .019 + 1.1 * sin(p.x * .012 + 2.1)); return 30. * max(s, 0.) - 10. * max(-s, 0.); }
+`;
+const spur = (x, y) => { const s = Math.sin(x * .021 + 1.3 * Math.sin(y * .013 + .7)) * Math.cos(y * .019 + 1.1 * Math.sin(x * .012 + 2.1)); return 30 * Math.max(s, 0) - 10 * Math.max(-s, 0); };
+
 /* ---------- 1. sand (painted once per size) ---------- */
 const SAND = prog(VS_FULL, `#version 300 es
 precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o; uniform vec2 uRes; uniform float uK; uniform vec4 uMd[8]; uniform int uNM;
@@ -140,17 +149,17 @@ void main() {
   vec3 col = base * (.5 + .7 * dif / LIGHT.z * .72);
   // seagrass beds: a dark mat of blades with soft, ragged edges
   for (int i = 0; i < 8; i++) { if (i >= uNM) break;
-    vec4 md = uMd[i]; float m = 1. - length(p - md.xy) / md.z + (fbm(p * .011 + md.w) - .5) * 1.1;
+    vec4 md = uMd[i]; float m = 1. - length(p - md.xy) / md.z + (fbm(p * .011 + md.w) - .5) * 1.1 + (fbm(p * .022 + md.w + 4.) - .5) * .55;   // (a finer second wobble: no blobby, straight-sided bed)
     if (m < -.2) continue;
     float dens = clamp(.15 + m * 2.2, 0., 1.);
     mat2 R = mat2(cos(.45), -sin(.45), sin(.45), cos(.45));      // into the current's frame
     vec2 q = R * (p - md.xy);
     float matA = smoothstep(-.15, .35, m);
-    vec3 mat = vec3(.26, .34, .19) * (.85 + .3 * fbm(p * .05 + md.w));
+    vec3 mat = vec3(.31, .40, .23) * (.85 + .3 * fbm(p * .05 + md.w));                   // (a living green mat, not a dark stain)
     col = mix(col, mat, matA * .9);                                                   // the mat the blades root in
     vec4 b = seagrass(q, dens, md.w);
     if (b.x > 0.) {
-      vec3 bc = mix(vec3(.22, .32, .15), vec3(.44, .50, .27), smoothstep(.2, 1., b.y)) * (.8 + .4 * hash(vec2(b.w * 91.)));
+      vec3 bc = mix(vec3(.25, .36, .17), vec3(.48, .55, .30), smoothstep(.2, 1., b.y)) * (.8 + .4 * hash(vec2(b.w * 91.)));
       bc *= .85 + .2 * (1. - abs(b.z));                                             // each blade is a little rounded
       if (hash(vec2(b.w * 37.)) > .85) bc = mix(bc, vec3(.62, .58, .42), .55);         // some old, sun-bleached
       col = mix(col, bc, b.x * mix(.55, .9, matA));
@@ -526,7 +535,7 @@ void main() {
   float c = (min(c1, 1.4) * .62 + min(c2, 1.4) * .48) * (1. + clamp(-N.z * 10., -.7, 1.6));
   vec2 t = uShTex * 1.3;
   vec2 sh = texture(uShadow, vUV).rg * .36 + (texture(uShadow, vUV + t).rg + texture(uShadow, vUV - t).rg + texture(uShadow, vUV + vec2(t.x, -t.y)).rg + texture(uShadow, vUV + vec2(-t.x, t.y)).rg) * .16;
-  o = vec4(c * .4, 1. - (1. - sh.r) * (1. - sh.g), sh.g, 1.);
+  o = vec4(c * .4, 1. - (1. - sh.r) * (1. - min(sh.g * 1.33, 1.)), sh.g, 1.);   // (fish shadows a little darker: they are what sells clear shallow water)
 }`, 'light');
 // tiny wind ruffles for the sun glints: a tiling field of slopes, made once
 const RUF = prog(VS_FULL, `#version 300 es
@@ -561,19 +570,26 @@ void main() { vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO; o = vec4(rock(p, 3.
 const GROW = prog(VS_FULL, `#version 300 es
 precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o;
 uniform sampler2D uPrev; uniform vec4 uR[32]; uniform vec4 uB[32]; uniform int uN; uniform vec4 uBm[16]; uniform int uNB; uniform vec2 uRes; uniform float uDt;
-${NOISE}
+${NOISE}${SPUR_GLSL}
 float sdBox(vec2 p, vec2 c, vec2 hs) { vec2 d = abs(p - c) - hs; return length(max(d, 0.)) + min(max(d.x, d.y), 0.); }
 float smin(float a, float b, float k) { float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
 void main() {
   vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO;
   float bw = (.35 + .9 * clamp(.5 + .3 * sin(p.x * .0123 + 1.7) * cos(p.y * .0101 + .4) + .2 * sin((p.x + p.y) * .0071 + 2.9), 0., 1.));          // wide in places, a thin rim in others
-  float sd = 1e5;
-  for (int i = 0; i < 32; i++) { if (i >= uN) break; vec4 r = uR[i]; sd = smin(sd, sdBox(p, (r.xy + r.zw) * .5, (r.zw - r.xy) * .5) - uB[i].x * bw, 40.); }
+  float sd = 1e5, inner = 1e5;
+  for (int i = 0; i < 32; i++) { if (i >= uN) break; vec4 r = uR[i]; float b = sdBox(p, (r.xy + r.zw) * .5, (r.zw - r.xy) * .5); inner = min(inner, b); sd = smin(sd, b - uB[i].x * bw, 40.); }
   for (int i = 0; i < 16; i++) { if (i >= uNB) break; vec4 bm = uBm[i]; sd = smin(sd, length(p - bm.xy) - bm.z, 40.); }
-  sd += (fbm3(p * .018) - .5) * 44.;
+  sd += (fbm3(p * .018) - .5) * 44. - spur(p);       // spurs and grooves: no straight run of reef along a window's edge
   vec2 tgt = vec2(1. - smoothstep(-6., 6., sd), 1. - smoothstep(-30., 260., sd));
+  // the reef is a fringe round the window, not a slab under it: deep inside the window there's sand (a window that
+  // closes, or lets go of the whole screen, uncovers its own seabed, not a screenful of dying rock)
+  tgt.x *= smoothstep(-62. * 1.9, -62. * 1.4, inner);           // (62: BAND)
   vec2 prev = texture(uPrev, vUV).rg;
-  vec2 up = 1. - exp(-uDt * vec2(2.2, 1.6)), dn = 1. - exp(-uDt * vec2(2.4, 1.3));   // (settled ~1.5 s after a drop)
+  // dying back, the reef retreats from its rim inward like a shoreline (a texel whose neighbour is already gone goes
+  // fast, the heart of the reef slowly), instead of thinning everywhere at once into a speckled stain
+  vec2 tx = 2. / vec2(textureSize(uPrev, 0));
+  float nb = min(min(texture(uPrev, vUV + vec2(tx.x, 0.)).r, texture(uPrev, vUV - vec2(tx.x, 0.)).r), min(texture(uPrev, vUV + vec2(0., tx.y)).r, texture(uPrev, vUV - vec2(0., tx.y)).r));
+  vec2 up = 1. - exp(-uDt * vec2(2.2, 1.6)), dn = 1. - exp(-uDt * vec2(2.4 * (.3 + 1.9 * (1. - nb)), 1.3));   // (settled ~1.5 s after a drop)
   o = vec4(mix(prev, tgt, mix(dn, up, step(prev, tgt))), 0., 1.);
 }`, 'grow');
 const BED = prog(VS_FULL, `#version 300 es
@@ -642,9 +658,9 @@ void main() {
 
 const FISH = prog(`#version 300 es
 in vec2 aP, aUV, aN; in vec4 aI;              // pos, (u, v), side normal, (kind, seed, part, alpha)
-uniform vec2 uRes, uOff;
+uniform vec2 uRes, uOff, uSh;                 // uSh: the shadow's offset (shadow pass only)
 out vec2 vUV, vN, vP; flat out vec4 vI;
-void main() { vUV = aUV; vN = aN; vI = aI; vec2 p = aP + uOff; vP = p; gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.); }`, `#version 300 es
+void main() { vUV = aUV; vN = aN; vI = aI; vec2 p = aP + uOff + uSh * (aI.z > 1.5 ? .45 : 1. - fract(aI.z) * .9); vP = p;   /* small reef fish swim near the floor: their shadow hugs them */ gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.); }`, `#version 300 es
 precision highp float;
 in vec2 vUV, vN, vP; flat in vec4 vI; out vec4 o; uniform int uMode;
 ${NOISE}${WATER}${BED_COMMON}
@@ -714,8 +730,9 @@ void main() {
     if (u <= 1.) { float nose = u < .1 ? sqrt(max(1. - pow((.1 - u) / .1, 2.), 0.)) : 1.; a = 1. - smoothstep(nose - aa, nose, av); }
     else { float t = (u - 1.) / .25; a = (1. - smoothstep(1. - aa, 1., av)) * (1. - smoothstep(.8 + .2 * av - .1, .8 + .2 * av, t)) * .9; }
     c = reefCol(kind, u, v);
+    if (u <= 1.) c *= 1. - .24 * (1. - smoothstep(.0, .24, av)) * smoothstep(.08, .22, u);   // a darker back along the spine, as the koi have
   }
-  if (uMode == 1) { o = vec4(0., a * vI.w * (part == 0 && u <= 1. ? .55 : .3), 0., 0.); return; }
+  if (uMode == 1) { o = vec4(0., a * vI.w * (part == 0 && u <= 1. ? .55 : part == 2 ? .5 : .3), 0., 0.); return; }
   if (a < .003) discard;
   vec3 n = normalize(vec3(vN * v * .85, sqrt(max(1. - v * v * .72, .05))));
   float dif = max(dot(n, LIGHT), 0.);
@@ -723,7 +740,7 @@ void main() {
   vec3 H = normalize(LIGHT + vec3(0., 0., 1.));
   col += pow(max(dot(n, H), 0.), mix(30., 70., metal)) * mix(.12, .55, metal) * (part == 1 ? .3 : 1.);
   col += texture(uLight, suv(vP)).r * .2 * dif;
-  col = water(col, part == 2 ? .08 : .04);
+  col = water(col, part == 2 ? .08 : .04 + fract(vI.z) * .17);       // (a deeper koi: through more water)
   a *= vI.w;
   o = vec4(col * a, a);
 }`, 'fish');
@@ -789,7 +806,7 @@ const ZONES = [
 ];
 function pick(R, list) { let x = R() * list.reduce((s, a) => s + a[1], 0); for (const [t, w] of list) if ((x -= w) <= 0) return t; return list[0][0]; }
 let coralId = 0;
-let floor = [], bommies = [], meadows = [];
+let floor = [], bommies = [], meadows = [], tufts = [];
 const uBm = new Float32Array(16 * 4), uMd = new Float32Array(8 * 4);
 function floorCoral(R, t, x, y, size, rot) {
   const cs = CELLS_BY[t], c = { t, cell: cs[Math.floor(R() * cs.length)], size: size || SIZE[t][0] + R() * (SIZE[t][1] - SIZE[t][0]), of: 0, lat: 0,
@@ -819,6 +836,12 @@ function makeFloor() {
     if (!far(x, y, bommies, r + 30) || !far(x, y, meadows, r + 60)) continue;
     meadows.push({ x, y, r, s: R() * 50 }); i++;
   }
+  // round each meadow's edge, tufts of the swaying seagrass: the painted bed is still, these move with the swell
+  tufts = [];
+  for (const m of meadows) { const n = Math.round(m.r / 6);
+    for (let k = 0; k < n; k++) { const a = R() * 6.283, d = m.r * (.4 + R() * .45), x = m.x + Math.cos(a) * d, y = m.y + Math.sin(a) * d;
+      if (!far(x, y, bommies, 20)) continue;
+      const c = floorCoral(R, 11, x, y, SIZE[11][0] * (.6 + R() * .4), CURRENT + (R() - .5) * .6); c.tuft = true; c.vis = 1; c.tgt = 1; c.tint = .62 + R() * .12; tufts.push(c); } }   // (darker: of a piece with the bed, not loose clumps on it)
   uBm.fill(0); bommies.forEach((b, i) => uBm.set([b.x, b.y, b.r, b.s], i * 4));
   uMd.fill(0); meadows.forEach((m, i) => uMd.set([m.x, m.y, m.r, m.s], i * 4));
   growReset = true;
@@ -844,13 +867,15 @@ function makeSites() {
 }
 let touched = [], reefWins = [];
 function stepSites(dt) {
-  reefWins = wins.filter(w => w.alive); if (reefWins.length > 32) reefWins = reefWins.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, 32);
+  // (a window that covers the whole display is a maximised one: it grows no reef, so letting go of it shows the
+  // lagoon as it was instead of a screen of rock dying back)
+  reefWins = wins.filter(w => w.alive && w.w * w.h < .9 * SW * SH); if (reefWins.length > 32) reefWins = reefWins.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, 32);
   // re-target only when a window has actually moved
   let key = ''; for (const w of reefWins) key += (w.x | 0) + ',' + (w.y | 0) + ',' + (w.w | 0) + ',' + (w.h | 0) + (w.sm ? 's;' : ';');
   if (key !== siteKey) {
     siteKey = key; for (const c of touched) c.tgt = 0; touched = [];
     for (const w of reefWins) {
-      const B = BAND * (w.sm ? .55 : 1), pad = B * 1.3 + 10, sc = w.sm ? .6 : 1;
+      const B = BAND * (w.sm ? .55 : 1), pad = B * 1.3 + 40, sc = (w.sm ? .6 : 1) * clamp(Math.min(w.w, w.h) / 120, .5, 1);   // (a tiny window gets small coral: a table coral twice its size dwarfed it)
       const gx0 = Math.max(0, Math.floor((w.x - pad) / SITE)), gx1 = Math.min(gcols - 1, Math.floor((w.x + w.w + pad) / SITE));
       const gy0 = Math.max(0, Math.floor((w.y - pad) / SITE)), gy1 = Math.min(grows - 1, Math.floor((w.y + w.h + pad) / SITE));
       const ix0 = Math.floor((w.x + 16) / SITE) + 1, ix1 = Math.floor((w.x + w.w - 16) / SITE) - 1, iy0 = Math.floor((w.y + 16) / SITE) + 1, iy1 = Math.floor((w.y + w.h - 16) / SITE) - 1;
@@ -859,17 +884,20 @@ function stepSites(dt) {
         const cell = siteGrid[gy * gcols + gx]; if (!cell) continue;      // (a window past the world's edge while the displays change)
         for (const c of cell) {
         if (!c.ok || c.tgt) continue;
-        const o = sdBox(c.x, c.y, w.x, w.y, w.x + w.w, w.y + w.h), Z = ZONES[c.z], bb = B * c.bw;
-        if (o < -14 || o < Z.lo * bb || o > Z.hi * bb) continue;
+        const o0 = sdBox(c.x, c.y, w.x, w.y, w.x + w.w, w.y + w.h), o = o0 - spur(c.x, c.y), Z = ZONES[c.z], bb = B * c.bw;   // (measured to the rock's spurred edge)
+        if (o0 < -14 || o < Z.lo * bb || o > Z.hi * bb) continue;
         c.tgt = 1; c.sc = sc; touched.push(c);
       } }
     }
+    // the swaying seagrass round the meadows gives way where a reef has grown over it, and comes back when it goes
+    for (const c of tufts) { let near = false; for (const w of reefWins) if (sdBox(c.x, c.y, w.x, w.y, w.x + w.w, w.y + w.h) - spur(c.x, c.y) < BAND * (w.sm ? .55 : 1) * bandW(c.x, c.y) + 30) { near = true; break; } c.tgt = near ? 0 : 1; }
   }
+  for (const c of tufts) if (c.vis !== c.tgt) { if (instant) c.vis = c.tgt; else { c.vis += (c.tgt - c.vis) * Math.min(1, dt * (c.tgt ? 1.2 : 1.6)); if (Math.abs(c.tgt - c.vis) < .003) c.vis = c.tgt; } }
   const regrow = performance.now() < regrowUntil ? 2.5 : 1;
   for (const c of sites) {
     if (c.vis === c.tgt) continue;
     if (instant) c.vis = c.tgt;
-    else { c.vis += (c.tgt - c.vis) * Math.min(1, dt * (c.rate + .5) * (c.tgt > c.vis ? 1.6 * regrow : 3)); if (Math.abs(c.tgt - c.vis) < .003) c.vis = c.tgt; }
+    else { c.vis += (c.tgt - c.vis) * Math.min(1, dt * (c.rate + .5) * (c.tgt > c.vis ? 1.6 * regrow : 1.8)); if (Math.abs(c.tgt - c.vis) < .003) c.vis = c.tgt; }   // (dying at the rock's pace: corals shrink with their reef instead of popping off first and leaving bare crumbs)
     if (c.t === 4 && c.f < .6) {
       if (c.vis > .45 && !c.clown) { c.clown = true; clownPair(c, null); }
       else if (c.vis === 0 && c.clown) { c.clown = false; clowns = clowns.filter(f => f.coral !== c); }
@@ -946,7 +974,7 @@ function inWindow(x, y, pad) { for (const c of wins) if (c.alive && !c.sm && x >
 
 /* ======================= fish ======================= */
 const KOI_NS = 18, KOI_U = 1.3, REEF_NS = 8, REEF_U = 1.25;
-let koi = [], schools = [], clowns = [], T = 0, TG = 0;   // TG: shader time, wrapped to keep float32 precision
+let koi = [], koiOrder = [], schools = [], clowns = [], T = 0, TG = 0;   // TG: shader time, wrapped to keep float32 precision
 function koiW(u) {          // half width as a fraction of length
   if (u <= 1) return .118 * (u < .16 ? .55 + .45 * Math.sqrt(u / .16) : u < .32 ? 1 : 1 - Math.pow((u - .32) / .68, 1.4) * .8);
   return .118 * (.2 + 1.25 * Math.pow((u - 1) / .3, .85));
@@ -961,8 +989,11 @@ function makeFish() {
   for (let i = 0; i < n; i++) {
     const L = 80 + R() * 38, [x, y] = openSpot(rng(4321 + i * 977)), ang = R() * 6.283;   // (the spot's own dice: every display gives each koi the same looks)
     koi.push({ L, kind: kinds[Math.floor(R() * kinds.length)], seed: R() * 50, x, y, ang, av: 0, v: 20, cruise: 18 + R() * 14, ph: R() * 6.28, fin: R() * 6.28, wob: R() * 100,
-      sp: makeSpine(KOI_NS, x, y, ang, L * KOI_U), feed: false, nib: R() * 2, wake: 0, scare: 0, flee: [0, 0] });
+      sp: makeSpine(KOI_NS, x, y, ang, L * KOI_U), feed: false, nib: R() * 2, wake: 0, scare: 0, flee: [0, 0], dz: [0, .5, 1][i % 3] });
   }
+  // (koi at three depths: where two cross, one passes under the other, a little bluer through more water, its shadow
+  // nearer to it, instead of the two merging into one blot)
+  koiOrder = koi.slice().sort((a, b) => b.dz - a.dz);
   schools = [];
   for (const [kind, cnt, lo, hi] of [[0, 14, 12, 16], [1, 6, 20, 25], [2, 6, 21, 27], [3, 4, 17, 21], [5, 9, 11, 14]]) {
     const sc = { kind, home: null, t: R(), dir: R() < .5 ? -1 : 1, speed: 10 + R() * 8, tx: 0, ty: 0, wx: R() * 100, nextHome: 0, fish: [] };
@@ -1003,6 +1034,7 @@ function stepKoi(dt, now) {
   }
   if (food && (!cur.on || (now - cur.moveT < 200 && Math.hypot(food.x - cur.x, food.y - cur.y) > 40))) { food = null; for (const k of koi) k.feed = false; }
   if (food && !food.bored && now - food.t0 > 30000) { food.bored = true; for (const k of koi) k.feed = false; }
+  if (food && !food.bored && now > (food.ring || food.t0 + 600)) { food.ring = now + 2200 + Math.random() * 1000; drop(food.x, food.y, 2.2, -.22); }   // (a slow ring where the hand rests: you see where the food is)
   for (const k of koi) {
     const dirx = Math.cos(k.ang), diry = Math.sin(k.ang);
     let sx = dirx, sy = diry;
@@ -1016,8 +1048,17 @@ function stepKoi(dt, now) {
     for (const g of walls) { const [gx, gy, d] = boxGrad(lx, ly, g, 30); if (d < 60) { const f = (60 - d) / 60 * 4; sx += gx * f; sy += gy * f; } }   // the edge of the world's water
     // screen edges
     const m = 50; if (k.x < m) sx += (m - k.x) / m * 3; if (k.x > W - m) sx -= (k.x - W + m) / m * 3; if (k.y < m) sy += (m - k.y) / m * 3; if (k.y > H - m) sy -= (k.y - H + m) / m * 3;
-    for (const o of koi) { if (o === k) continue; const dx = k.x - o.x, dy = k.y - o.y, d = Math.hypot(dx, dy); if (d < k.L * .8 && d > 0) { sx += dx / d * (1 - d / (k.L * .8)) * 2; sy += dy / d * (1 - d / (k.L * .8)) * 2; } }
-    let want = k.cruise * (.75 + .5 * vnoise(T * .1, k.wob + 9)), turnMax = 1.1;
+    // other koi: keep the head clear of their whole body, not just their head (head-to-head only, a koi swam straight
+    // over another's back and the two lay stacked for seconds, which from above reads as a rendering fault)
+    // (one about to swim over another's body also checks its pace and turns more sharply, as fish give way)
+    let crowd = 0;
+    for (const o of koi) { if (o === k) continue;
+      for (let i = 0; i < KOI_NS; i += 4) { const R = i ? k.L * .55 : k.L * .8, dx = k.x - o.sp[i * 2], dy = k.y - o.sp[i * 2 + 1], d = Math.hypot(dx, dy);
+        if (d < R && d > 0) { const c = 1 - d / R, f = c * (i ? 4 : 2); sx += dx / d * f; sy += dy / d * f; if (i && dx * dirx + dy * diry < 0) crowd = Math.max(crowd, c); }
+        // and looks ahead: a long, slow koi crossing another's body took seconds to get across it, so it turns off early
+        const ax = lx - o.sp[i * 2], ay = ly - o.sp[i * 2 + 1], ad = Math.hypot(ax, ay), AR = k.L * .6;
+        if (ad < AR && ad > 0) { const c = 1 - ad / AR; sx += ax / ad * c * 2.4; sy += ay / ad * c * 2.4; crowd = Math.max(crowd, c * .7); } } }
+    let want = k.cruise * (.75 + .5 * vnoise(T * .1, k.wob + 9)) * (1 - .6 * crowd), turnMax = 1.1;
     const sc = dragScare(k.x, k.y);
     if (sc && sc[2] > .05) { if (k.scare < .3) k.flee = [sc[0], sc[1]]; else { k.flee[0] += (sc[0] - k.flee[0]) * .2; k.flee[1] += (sc[1] - k.flee[1]) * .2; } k.scare = Math.min(1, Math.max(k.scare, sc[2])); }
     else k.scare = Math.max(0, k.scare - dt * .7);          // calms down over a second or two
@@ -1033,7 +1074,7 @@ function stepKoi(dt, now) {
     if (hidden && !k.feed) { want = Math.max(want, 75); turnMax = Math.max(turnMax, 2.2); }
     let da = Math.atan2(sy, sx) - k.ang; da = Math.atan2(Math.sin(da), Math.cos(da));
     if (Math.abs(da) > 2.2 && !k.feed && !(k.scare > .2) && !hidden) want = Math.max(want * .6, 12);
-    turnMax = Math.min(turnMax, k.feed || k.scare > .2 || hidden ? .3 + k.v / (k.L * .3) : .12 + k.v / (k.L * .62));   // (startled: a sharp flick of a turn)   // a koi can't pivot: it turns in arcs of at least ~half its length
+    turnMax = Math.min(turnMax, k.feed || k.scare > .2 || hidden ? .3 + k.v / (k.L * .3) : .12 + k.v / (k.L * .62) + .4 * crowd);   // (startled: a sharp flick of a turn)   // a koi can't pivot: it turns in arcs of at least ~half its length
     k.av += (clamp(da * 2.4, -turnMax, turnMax) - k.av) * Math.min(1, dt * 2.5);
     k.ang += k.av * dt; k.v += (want - k.v) * Math.min(1, dt * ((k.scare > .2 || hidden) && want > k.v ? 5 : 1.2));   // (a burst of speed)
     k.x += Math.cos(k.ang) * k.v * dt; k.y += Math.sin(k.ang) * k.v * dt;
@@ -1192,11 +1233,11 @@ function vert(x, y, u, v, nx, ny, kind, seed, part, alpha) {
   if (nF * 10 + 10 > fArr.length) { const g = new Float32Array(fArr.length * 2); g.set(fArr); fArr = g; }
   const o = nF * 10; fArr[o] = x; fArr[o + 1] = y; fArr[o + 2] = u; fArr[o + 3] = v; fArr[o + 4] = nx; fArr[o + 5] = ny; fArr[o + 6] = kind; fArr[o + 7] = seed; fArr[o + 8] = part; fArr[o + 9] = alpha; nF++;
 }
-function fin(ax, ay, dx, dy, len, bw, tw, kind, seed) {
+function fin(ax, ay, dx, dy, len, bw, tw, kind, seed, part) {
   const px = -dy, py = dx, bx = ax + dx * len, by = ay + dy * len;
   const ax0 = ax + px * bw, ay0 = ay + py * bw, ax1 = ax - px * bw, ay1 = ay - py * bw, bx0 = bx + px * tw, by0 = by + py * tw, bx1 = bx - px * tw, by1 = by - py * tw;
-  vert(ax0, ay0, 0, 1, px, py, kind, seed, 1, 1); vert(ax1, ay1, 0, -1, px, py, kind, seed, 1, 1); vert(bx0, by0, 1, 1, px, py, kind, seed, 1, 1);
-  vert(ax1, ay1, 0, -1, px, py, kind, seed, 1, 1); vert(bx1, by1, 1, -1, px, py, kind, seed, 1, 1); vert(bx0, by0, 1, 1, px, py, kind, seed, 1, 1);
+  vert(ax0, ay0, 0, 1, px, py, kind, seed, part, 1); vert(ax1, ay1, 0, -1, px, py, kind, seed, part, 1); vert(bx0, by0, 1, 1, px, py, kind, seed, part, 1);
+  vert(ax1, ay1, 0, -1, px, py, kind, seed, part, 1); vert(bx1, by1, 1, -1, px, py, kind, seed, part, 1); vert(bx0, by0, 1, 1, px, py, kind, seed, part, 1);
 }
 function buildFish() {
   nF = 0;
@@ -1204,9 +1245,9 @@ function buildFish() {
   for (const sc of schools) for (const f of sc.fish) if (near(f.x, f.y, 80)) pushFish(f.sp, REEF_NS, f.L, REEF_U, reefW, f.ph, .06, sc.kind, 0, 2, 1);
   for (const f of clowns) if (f.sp && f.coral.vis > .3) pushFish(f.sp, REEF_NS, f.L, REEF_U, reefW, f.ph, .06, 4, 0, 2, Math.min(1, (f.coral.vis - .3) * 2));
   nFr = nF;
-  for (const k of koi) {
+  for (const k of koiOrder) {
     if (!near(k.x, k.y, 260)) continue;
-    const sp = k.sp, L = k.L;
+    const sp = k.sp, L = k.L, dp = k.dz * .4;   // (depth rides in the part's fraction)
     // fins first, so the body lies over their roots
     for (const [ui, flen, base, flap, bw, tw] of [[3, .2, .95, .35, .025, .075], [7, .11, .6, .2, .015, .045]]) {
       const i = ui, tx = sp[i * 2 - 2] - sp[i * 2 + 2], ty = sp[i * 2 - 1] - sp[i * 2 + 3], tl = Math.hypot(tx, ty) || 1, fx = tx / tl, fy = ty / tl;
@@ -1214,10 +1255,10 @@ function buildFish() {
       for (const side of [1, -1]) {
         const a = Math.PI - side * (base + flap * Math.sin(k.fin + side * .6) + (k.feed ? .35 : 0));
         const dx = Math.cos(a) * fx - Math.sin(a) * fy, dy = Math.sin(a) * fx + Math.cos(a) * fy;
-        fin(sp[i * 2] - fy * hw * side, sp[i * 2 + 1] + fx * hw * side, dx, dy, flen * L, bw * L, tw * L, k.kind, k.seed);
+        fin(sp[i * 2] - fy * hw * side, sp[i * 2 + 1] + fx * hw * side, dx, dy, flen * L, bw * L, tw * L, k.kind, k.seed, 1 + dp);
       }
     }
-    pushFish(sp, KOI_NS, L, KOI_U, koiW, k.ph, .055, k.kind, k.seed, 0, 1);
+    pushFish(sp, KOI_NS, L, KOI_U, koiW, k.ph, .055, k.kind, k.seed, dp, 1);
   }
 }
 function bindTex(p, list) {
@@ -1272,7 +1313,7 @@ function render() {
   bindTex(CORAL, [['uNrm', nrmTex], ['uLight', null], ['uShadow', null], ['uSand', null], ['uA', atlasA], ['uNm', atlasN]]);
   gl.bindVertexArray(cVao); gl.bindBuffer(gl.ARRAY_BUFFER, cBuf); gl.bufferData(gl.ARRAY_BUFFER, cArr.subarray(0, nC * 8), gl.DYNAMIC_DRAW);
   if (nC) gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nC);
-  gl.useProgram(FISH); gl.uniform1i(FISH.u.uMode, 1); gl.uniform2f(FISH.u.uRes, SW, SH); gl.uniform2f(FISH.u.uOff, 13 - OX, 17 - OY);
+  gl.useProgram(FISH); gl.uniform1i(FISH.u.uMode, 1); gl.uniform2f(FISH.u.uRes, SW, SH); gl.uniform2f(FISH.u.uOff, -OX, -OY); gl.uniform2f(FISH.u.uSh, 13, 17);
   bindTex(FISH, [['uNrm', nrmTex], ['uLight', null]]);
   gl.bindVertexArray(fVao); gl.bindBuffer(gl.ARRAY_BUFFER, fBuf); gl.bufferData(gl.ARRAY_BUFFER, fArr.subarray(0, nF * 10), gl.DYNAMIC_DRAW);
   if (nF) gl.drawArrays(gl.TRIANGLES, 0, nF);
@@ -1287,7 +1328,7 @@ function render() {
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.useProgram(CORAL); common(CORAL); gl.uniform1i(CORAL.u.uMode, 0); gl.uniform2f(CORAL.u.uOff, -OX, -OY);
   gl.bindVertexArray(cVao); if (nC) gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nC);
-  gl.useProgram(FISH); common(FISH); gl.uniform1i(FISH.u.uMode, 0); gl.uniform2f(FISH.u.uOff, -OX, -OY);
+  gl.useProgram(FISH); common(FISH); gl.uniform1i(FISH.u.uMode, 0); gl.uniform2f(FISH.u.uOff, -OX, -OY); gl.uniform2f(FISH.u.uSh, 0, 0);
   gl.bindVertexArray(fVao); if (nF) gl.drawArrays(gl.TRIANGLES, 0, nF);
   gl.useProgram(SURF); common(SURF); full();
 }
@@ -1379,27 +1420,44 @@ function padImg(v) {
   x.save(); x.filter = 'blur(9px)'; x.globalAlpha = .45; x.drawImage(leaf, 9, 12); x.globalCompositeOperation = 'source-in'; x.fillStyle = 'rgb(0,52,58)'; x.fillRect(0, 0, S, S); x.restore();   // its shadow, down on the pond floor
   x.drawImage(leaf, 0, 0); leaf.width = leaf.height = 1;
   return c.toDataURL(); }
-const pads = new Map();                                                  // icon key -> element
-function setPads(list) {
-  const k = devicePixelRatio, seen = new Set();
-  if (list.length) makePads();
-  for (const [l, t, r, b] of list) {
-    const w = (r - l) / k, h = (b - t) / k, cx = (l + r) / 2 / k, cy = (t + b) / 2 / k, d = Math.hypot(w, h) * 1.05;   // (the leaf reaches the label's corners)
-    const key = `${Math.round(cx / 4)},${Math.round(cy / 4)}`; seen.add(key);
-    let el = pads.get(key);
-    if (!el) { el = document.createElement('div'); el.className = 'pad'; const n = Math.abs(Math.round(cx * 7 + cy * 13)) % 997;
+// Each pad is sized to its icon's artwork (not the icon's cell, which made a column of same-sized discs touching edge to
+// edge), with its own size and a small offset so neighbours overlap a little here and there, as real pads do. A pad
+// belongs to an icon, not to a spot: when icons move, each keeps the nearest pad, which drifts over to it.
+let pads = [];                                                           // { el, x, y, n }
+function setPads(cells, art) {
+  const k = devicePixelRatio;
+  if (cells.length) makePads();
+  const want = cells.map(([l, t, r, b], i) => {
+    const g = art && art[i] && art[i].length === 4 ? art[i] : [l, t, r, t + (r - l)];   // (no artwork box: the square top of the cell)
+    return { x: (g[0] + g[2]) / 2 / k, y: (g[1] + g[3]) / 2 / k, s: Math.max(g[2] - g[0], g[3] - g[1]) / k };
+  });
+  // nearest first, so a whole row that shifts keeps its pads in order
+  const pairs = []; want.forEach((w, i) => pads.forEach((p, j) => pairs.push([Math.hypot(p.x - w.x, p.y - w.y), i, j]))); pairs.sort((a, b) => a[0] - b[0]);
+  const owner = new Array(want.length).fill(null), taken = new Set();
+  for (const [, i, j] of pairs) if (!owner[i] && !taken.has(j)) { owner[i] = pads[j]; taken.add(j); }
+  const next = [];
+  want.forEach((w, i) => {
+    let p = owner[i];
+    const fresh = !p;
+    if (fresh) { const n = Math.abs(Math.round(w.x * 7 + w.y * 13)) % 997, el = document.createElement('div'); el.className = 'pad';
       el.style.backgroundImage = `var(--pad${n % 3})`; el.style.setProperty('--r', `${(n * 37) % 40 - 20}deg`);   /* a small turn only: the light and the shadow are painted in */ el.style.setProperty('--dur', `${9 + (n % 7)}s`);
-      el.style.opacity = 0; document.body.appendChild(el); pads.set(key, el); void el.offsetWidth; el.style.opacity = 1; }   // (a style read first, so the fade runs)
-    Object.assign(el.style, { width: d + 'px', height: d + 'px', translate: `${(cx - d / 2).toFixed(1)}px ${(cy - d / 2).toFixed(1)}px` });
-  }
-  for (const [key, el] of pads) if (!seen.has(key)) { el.style.opacity = 0; pads.delete(key); setTimeout(() => el.remove(), 950); }
+      p = { el, n }; }
+    const h = (p.n * 0.61803) % 1, h2 = (p.n * 0.7548) % 1;
+    const d = w.s * 1.55 * (.88 + .24 * h), ox = (h2 - .5) * w.s * .16, oy = w.s * .1 + (h - .5) * w.s * .1;   // (a little below the artwork's middle: the leaf reaches under the label)
+    p.x = w.x; p.y = w.y;
+    Object.assign(p.el.style, { width: d.toFixed(1) + 'px', height: d.toFixed(1) + 'px', translate: `${(w.x + ox - d / 2).toFixed(1)}px ${(w.y + oy - d / 2).toFixed(1)}px` });
+    if (fresh) { p.el.style.opacity = 0; p.el.style.scale = '.6'; document.body.appendChild(p.el); void p.el.offsetWidth; p.el.style.opacity = 1; p.el.style.scale = '1'; }   // (a style read first: placed where it is, then it opens)
+    next.push(p);
+  });
+  pads.forEach((p, j) => { if (!taken.has(j)) { p.el.style.opacity = 0; p.el.style.scale = '.7'; setTimeout(() => p.el.remove(), 950); } });
+  pads = next;
 }
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
   if (m.t === 'desk') { const k = JSON.stringify([m.x, m.y, m.uw, m.uh, m.fr]); if (k === deskKey) return; deskKey = k; Span.desk(m); rebuildWorld(); return; }
   if (m.t === 'cursor') { const x = m.x / K + OX, y = m.y / K + OY; curAt(x, y, -1, m.w); Span.post('cur', { x, y, w: m.w ? 1 : 0 }); return; }   // (w: the pointer is over a window)
   if (m.t === 'cursorOff') { if (curFrom === -1) { cur.on = false; Span.post('curoff', {}); } return; }
-  if (m.t === 'dicons') { setPads(m.r || []); return; }
+  if (m.t === 'dicons') { setPads(m.r || [], m.a || m.i); return; }
   if (m.t === 'windows') { lastWinMsg = m; if (m.live) liveUntil = performance.now() + 250;
     setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
 };

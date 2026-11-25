@@ -30,7 +30,7 @@ const post = s => { try { webkit.messageHandlers.host.postMessage(s); } catch (_
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const h1 = x => { const s = Math.sin(x * 127.1) * 43758.5453; return s - Math.floor(s); };
 const n1 = x => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return h1(i) * (1 - u) + h1(i + 1) * u; };
-const cur = { x: -1e4, y: -1e4, vx: 0, vy: 0, on: false, t: 0 };
+const cur = { x: -1e4, y: -1e4, vx: 0, vy: 0, on: false, t: 0 }, glow = { x: -1e4, y: -1e4, a: 0 };
 
 /* ======================= PHYSICS BEGIN ======================= */
 // The wax is a set of soft bodies. Each one carries a volume (conserved exactly through every merge and split), a
@@ -44,9 +44,11 @@ const cur = { x: -1e4, y: -1e4, vx: 0, vy: 0, on: false, t: 0 };
 //  · coalescence: wax that touches flows together, volume and momentum conserved, and wobbles as it settles;
 //  · shape: blobs stretch along their motion, flatten on the floor and under the cap, and ring down slowly.
 const T_NEUTRAL = .5, G_BUOY = 200, K_DRAG = 1.2, R_REF = 80, VMAX = 46;
-const OIL_TOP = .13, OIL_BOT = .38, OIL_K = .006, OIL_T = .2, BULB_K = .14, BULB_R = 420, CAP_D = 160, CAP_K = .25;   // the oil is stratified: warmed from below by the bulb, cooled by the cap
-const BUD_MIN = .011, BUD_SPAN = .07, BUD_POW = 1.8, MAX_BUDS = 3, POOL_MIN = .35;
-const BUD_T = .56, BUD_RATE = 1.8, MAX_BLOBS = 40, POOL_V = .22, WAX_FRAC = .15, SPLIT_V = .06, SPLIT_RATE = .25;
+const OIL_TOP = .13, OIL_BOT = .38, OIL_K = .009, OIL_T = .2, BULB_K = .14, BULB_R = 420, CAP_D = 160, CAP_K = .25;   // the oil is stratified: warmed from below by the bulb, cooled by the cap
+// (fewer, bigger buds and only really big blobs necking: the lamp reads as a few big slow masses over a pool, not a
+// polka-dot field of twenty same-sized drops; the oil cools a touch faster so wax comes home to the pool sooner)
+const BUD_MIN = .03, BUD_SPAN = .08, BUD_POW = 1.2, MAX_BUDS = 2, POOL_MIN = .45;
+const BUD_T = .56, BUD_RATE = .6, MAX_BLOBS = 40, POOL_V = .22, WAX_FRAC = .15, SPLIT_V = .1, SPLIT_RATE = .25;
 let blobs = [], simT = 0, WAX_V = 1;
 const rOf = b => Math.sqrt(b.V / Math.PI);
 // the lamp's glass base tapers like a real lamp's: wax always gathers in a basin over the bulb
@@ -221,7 +223,7 @@ function step(dt) {
   for (const b of blobs) {
     const r = rOf(b), sp = Math.hypot(b.vx, b.vy);
     let tAng = b.ang, tSt;
-    if (b.rest) { tAng = 0; tSt = b === poolNow ? 1 + 1.15 * Math.min(1, r / 180) :   /* the pool spreads across the whole base */ 1 + .55 * Math.min(1, r / 140); }
+    if (b.rest) { tAng = 0; tSt = b === poolNow ? 1 + 1.35 * Math.min(1, r / 200) :   /* the pool spreads across the whole base (wide and low: a puddle of wax, not a dome) */ 1 + .55 * Math.min(1, r / 140); }
     else if (b.parent) { const p = b.parent; tAng = Math.atan2(b.y - p.y, b.x - p.x); tSt = 1.12; }
     else { const sv = Math.hypot(b.svx || 0, b.svy || 0); if (sv > 3) tAng = Math.atan2(b.svy, b.svx); tSt = 1 + Math.min(.22, sv / 200); const top = b.y - halfY(b); if (top < 40) { tAng = 0; tSt = 1.25; } }
     let da = tAng - b.ang; da = Math.atan2(Math.sin(2 * da), Math.cos(2 * da)) / 2;   // an ellipse is symmetric: turn the short way
@@ -263,7 +265,7 @@ function fieldAt(x, y) {
 /* ======================= air bubbles and suspended specks ======================= */
 // A bubble rises at its Stokes speed (∝ r²) wobbling as it goes; wax in its way pushes it aside, so bubbles slide
 // around blobs or ride under them. At the cap they swell a touch and pop.
-let bubbles = [], specks = [], nextBubble = 0;
+let bubbles = [], specks = [], nextBubble = 0, speckTick = 0;
 function makeSpecks() { specks = []; for (let i = 0; i < Math.round(W * H / 9000); i++) specks.push({ x: Math.random() * W, y: Math.random() * H, r: .7 + Math.random() * 1.1, a: .25 + Math.random() * .5, p: Math.random() * 100 }); }
 function stepBubbles(dt) {
   nextBubble -= dt;
@@ -288,10 +290,15 @@ function stepBubbles(dt) {
     if (b.y < b.r + 14 || b.pop) { b.pop += dt; b.a = Math.min(b.a, Math.max(0, 1 - b.pop / .35)); b.r *= 1 + dt * .6; }
   }
   bubbles = bubbles.filter(b => !(b.pop > .35));
-  for (const s of specks) {
+  // wax is opaque: a speck the wax drifts over goes out of sight like a bubble does (checked a quarter at a time, eased)
+  speckTick = (speckTick + 1) & 3;
+  for (let i = 0; i < specks.length; i++) { const s = specks[i];
     s.p += dt * .05; s.x += (n1(s.p + s.r * 31) - .5) * dt * 6; s.y += ((n1(s.p * .7 + s.r * 17) - .5) * 6 - 1.2) * dt;
     if (s.y < -4) s.y = H + 2; if (s.x < -4) s.x = W + 2; if (s.x > W + 4) s.x = -2;
+    if ((i & 3) === speckTick) s.hid = s.die || fieldAt(s.x, s.y) > .1;
+    s.v = clamp((s.v ?? 1) + dt * (s.hid ? (s.die ? -1 : -6) : 2), 0, 1);
   }
+  if (specks.length && specks[specks.length - 1].die) specks = specks.filter(s => !(s.die && s.v <= 0));
 }
 
 /* ======================= your windows: the lamp is behind them (they never touch the wax) ======================= */
@@ -337,7 +344,7 @@ const COMP = prog(`#version 300 es
 out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); vUV = p; gl_Position = vec4(p * 2. - 1., 0., 1.); }`, `#version 300 es
 precision highp float; in vec2 vUV; out vec4 o;
 uniform sampler2D uF; uniform vec2 uRes, uTex; uniform float uTh, uBowl, uCoil, uT;
-uniform vec3 uOilHi, uOilLo, uOilDeep, uBulb, uWax, uRim;
+uniform vec3 uOilHi, uOilLo, uOilDeep, uBulb, uWax, uRim, uCur; uniform vec4 uPool;   // cursor x, y, warmth · pool x, y, half-width, half-height
 float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 void main() {
   vec2 px = vec2(vUV.x, 1. - vUV.y) * uRes, uv = vUV;
@@ -352,11 +359,17 @@ void main() {
   // a faint shaft of light rising from the bulb, gently wavering with the warm oil
   float shaft = exp(-pow((px.x - uCoil + 18. * sin(px.y * .006 + uT * .25)) / (uRes.x * .09 + (uRes.y - px.y) * .12), 2.)) * smoothstep(0., uRes.y, px.y);
   liq += uBulb * .06 * shaft;
+  // the pool sits right on the bulb: the oil just over it glows, so the base is the lamp's hottest, brightest part
+  float poolOn = step(1., uPool.z), poolTop = uPool.y - uPool.w;
+  float overPool = exp(-pow((px.x - uPool.x) / (uPool.z * .9 + 1.), 2.)) * poolOn;
+  liq += uBulb * .16 * overPool * exp(-max(poolTop - px.y, 0.) / 70.) * smoothstep(poolTop + 60., poolTop - 10., px.y);
+  // where the hand rests the oil warms: a faint glow that comes up slowly and lingers (the wax near it lifts in time)
+  { vec2 dc = px - uCur.xy; liq += uBulb * .12 * uCur.z * exp(-dot(dc, dc) / (130. * 130.)); }
   vec4 Fl = textureLod(uF, uv, 4.); liq *= 1. - .3 * smoothstep(.15, 1.8, max(max(Fl.r, Fl.g), max(Fl.b, Fl.a)));     // wax shades the oil around it a little
   // the wax, one depth at a time from the back: nearer wax passes in front of farther wax
   vec2 e = uTex * 1.5;
   vec4 Gx = texture(uF, uv + vec2(e.x, 0.)) - texture(uF, uv - vec2(e.x, 0.)), Gy = texture(uF, uv + vec2(0., e.y)) - texture(uF, uv - vec2(0., e.y));
-  float height = 1. - px.y / uRes.y, lit = .55 + .45 * exp(-height * 2.2);   // nearer the bulb, brighter
+  float height = 1. - px.y / uRes.y, lit = .75 + .25 * exp(-height * 2.2);   // nearer the bulb, brighter (but wax aloft still shows its lit underside)
   vec3 col = liq; vec4 AA = fwidth(F);                                  // derivatives taken once, outside the per-depth branches
   for (int l = 3; l >= 0; l--) {
     float f = F[l], z = (float(l) + .5) / 4.;
@@ -365,40 +378,56 @@ void main() {
     float edge = 1. - smoothstep(uTh, uTh * 1.9, f);                     // thin wax near the outline
     vec2 g = vec2(Gx[l], Gy[l]);
     vec3 n = normalize(vec3(-g * 1.4 / uTh, 1.));
-    float glint = pow(max(dot(reflect(-normalize(vec3(-.4, .6, .7)), n), vec3(0., 0., 1.)), 0.), 40.);
+    // the nearest wax has a broad satin sheen on its upper left; deeper wax, seen through more oil, only a faint glint
+    float glint = pow(max(dot(reflect(-normalize(vec3(-.4, .6, .7)), n), vec3(0., 0., 1.)), 0.), l == 0 ? 16. : 40.);
     // light from the bulb shines through the thin underside of each blob: a warm rim along its bottom edge
     vec2 gn = g / (length(g) + 1e-5);
     float under = smoothstep(.0, .9, gn.y) * edge * edge;
-    vec3 wax = uWax * (.75 + .5 * (1. - edge)) + liq * .22 * edge * edge + uRim * under * .55 * lit + vec3(1., .85, .8) * glint * .07;
+    if (l == 0) under *= 1. - overPool * smoothstep(uPool.y - 30., uPool.y + 10., px.y);   // (the pool has no underside: it runs down into the base, no lit arc inside it)
+    vec3 wax = uWax * (.75 + .5 * (1. - edge)) + liq * .22 * edge * edge + uRim * under * .55 * lit + vec3(1., .85, .8) * glint * (l == 0 ? .25 : .07);
+    if (l == 0) {
+      wax += liq * .08 * (1. - edge);                                     // thick wax is translucent too: never a flat black cut-out
+      // the pool is lit from the bulb below: its top surface glows along the rim and the wax over the bulb shines through
+      float topRim = smoothstep(0., .9, -gn.y) * edge * edge, coilK = exp(-pow((px.x - uCoil) / (uRes.x * .3), 2.));
+      float inPool = overPool * smoothstep(poolTop - 40., poolTop + 30., px.y);
+      wax += uRim * inPool * (topRim * .7 + .2 * coilK);
+    }
     wax = mix(wax, liq * .62 + uWax * .3, z * .38);                      // wax further back sits behind more oil
     col = mix(col, wax, inside);
   }
-  // the glass in front: a faint long reflection, the cylinder darker at its sides
-  col += vec3(1.) * .025 * exp(-pow((px.x / uRes.x - .14) / .012, 2.)) + vec3(1.) * .012 * exp(-pow((px.x / uRes.x - .2) / .04, 2.));
-  // the base fades into the dark: no hard edge
+  // the glass in front: a faint long reflection, the cylinder darker at its sides. It bows a little with height, as a
+  // highlight on curved glass does, drifts with the lamp's warmth over the better part of an hour, and fades out
+  // toward the cap and the base (two dead-straight full-height streaks read as a banding artefact)
+  float hy = px.y / uRes.y, bow = .018 * (hy - .45) * (hy - .45) + .004 * sin(uT * .002), taper = smoothstep(0., .3, hy) * (1. - smoothstep(.65, 1., hy));
+  col += vec3(1.) * taper * (.025 * exp(-pow((px.x / uRes.x - .14 - bow) / .012, 2.)) + .01 * exp(-pow((px.x / uRes.x - .2 - bow * 1.4) / .04, 2.)));
+  // the base fades into the dark: no hard edge (only below the pool's lit surface: the glow comes up through it)
   float u = abs(px.x - uRes.x * .5) / (uRes.x * .5), floorY = uRes.y - uBowl * pow(u, 3.4), below = px.y - floorY;
-  col = mix(col, uOilDeep * .35, smoothstep(-70., 90., below) * .92);
+  col = mix(col, uOilDeep * .35, smoothstep(10., 110., below) * .92);
   col += (hash(px * 1.7) - .5) / 255. * 2.;                              // dither against banding in the gradients
   o = vec4(col, 1.);
 }`, 'comp');
 // air bubbles in the oil, and fine suspended specks
 const DOTS = prog(`#version 300 es
-in vec4 aB; uniform vec2 uRes; out vec2 vQ; flat out float vA, vKind;
+in vec4 aB; uniform vec2 uRes; out vec2 vQ; flat out float vA, vKind, vRpx;
 void main() {
   vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2. - 1.;
-  vQ = c; vA = aB.w; vKind = aB.z < 0. ? 1. : 0.;
-  float r = abs(aB.z) + 1.;
+  vA = aB.w; vKind = aB.z < 0. ? 1. : 0.;
+  // a bubble's quad reaches 1.5 px past its rim so the rim can be antialiased (|vQ| = 1 is the rim itself)
+  float R = abs(aB.z), r = vKind > .5 ? R + 1. : R + 1.5;
+  vQ = vKind > .5 ? c : c * r / R; vRpx = R;
   vec2 p = aB.xy + c * r;
   gl_Position = vec4(p.x / uRes.x * 2. - 1., 1. - p.y / uRes.y * 2., 0., 1.);
 }`, `#version 300 es
-precision highp float; in vec2 vQ; flat in float vA, vKind; out vec4 o; uniform vec3 uTint;
+precision highp float; in vec2 vQ; flat in float vA, vKind, vRpx; out vec4 o; uniform vec3 uTint;
 void main() {
-  float d = length(vQ); if (d > 1.) discard;
-  if (vKind > .5) { float a = (1. - smoothstep(.2, 1., d)) * vA * .5; o = vec4(uTint * a, a); return; }   // a speck
-  // an air bubble: a bright refracting rim, a clear centre that's a touch lighter than the oil, a pin of light
-  float rim = smoothstep(.62, .9, d) * (1. - smoothstep(.9, 1., d));
+  float d = length(vQ);
+  if (vKind > .5) { if (d > 1.) discard; float a = (1. - smoothstep(.2, 1., d)) * vA * .5; o = vec4(uTint * a, a); return; }   // a speck
+  // an air bubble: a bright refracting rim, a clear centre that's a touch lighter than the oil, a pin of light.
+  // (the rim is a band about a pixel wide whatever the size, with a pixel of soft edge: not a 2 px aliased ring)
+  float px = 1. / vRpx; if (d > 1. + 1.5 * px) discard;
+  float rim = smoothstep(.5, .95, d) * (1. - smoothstep(1. - px * .5, 1. + px, d));
   float body = (1. - smoothstep(.0, .9, d)) * .1;
-  float spec = 1. - smoothstep(.08, .2, length(vQ - vec2(-.38, -.4)));
+  float spec = 1. - smoothstep(.12, .28, length(vQ - vec2(-.38, -.4)));
   vec3 c = mix(uTint, vec3(1.), .35);
   float a = clamp(rim * .55 + body + spec * .8, 0., 1.) * vA;
   o = vec4(c * a, a);
@@ -443,10 +472,12 @@ function render() {
   gl.useProgram(COMP); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, fT); gl.uniform1i(COMP.u.uF, 0);
   gl.uniform2f(COMP.u.uRes, W, H); gl.uniform2f(COMP.u.uTex, 1 / fw, 1 / fh); gl.uniform1f(COMP.u.uTh, TH); gl.uniform1f(COMP.u.uBowl, BOWL()); gl.uniform1f(COMP.u.uCoil, coilX()); gl.uniform1f(COMP.u.uT, (performance.now() / 1000) % (8 * Math.PI * 125));
   for (const k of ['OilHi', 'OilLo', 'OilDeep', 'Bulb', 'Wax', 'Rim']) gl.uniform3fv(COMP.u['u' + k], PAL[k]);
+  { const p = pi >= 0 ? blobs[pi] : null; gl.uniform4f(COMP.u.uPool, p ? p.x : 0, p ? p.y : 0, p ? halfX(p) : 0, p ? halfY(p) : 0); }
+  gl.uniform3f(COMP.u.uCur, glow.x, glow.y, glow.a);
   gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
   // bubbles and specks
   let m = 0; const need = (bubbles.length + specks.length) * 4; if (dArr.length < need) dArr = new Float32Array(need * 2);
-  for (const b of specks) { dArr[m++] = b.x; dArr[m++] = b.y; dArr[m++] = -b.r; dArr[m++] = b.a; }
+  for (const b of specks) { const a = b.a * (b.v ?? 1); if (a <= .002) continue; dArr[m++] = b.x; dArr[m++] = b.y; dArr[m++] = -b.r; dArr[m++] = a; }
   for (const b of bubbles) { if (b.a <= 0) continue; dArr[m++] = b.x; dArr[m++] = b.y; dArr[m++] = b.r; dArr[m++] = b.a; }
   if (m) { gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(DOTS); gl.uniform2f(DOTS.u.uRes, W, H); gl.uniform3fv(DOTS.u.uTint, PAL.Bulb.map(v => .55 + .45 * v)); gl.bindVertexArray(dVao); gl.bindBuffer(gl.ARRAY_BUFFER, dBuf);
@@ -480,6 +511,9 @@ function loop0(now) {
   const t0 = performance.now();
   acc += dt; let n = 0; while (acc >= STEP && n < 16) { step(STEP); acc -= STEP; n++; } if (n === 16) acc = 0;
   stepBubbles(dt);
+  // the glow of the warmed oil under the hand: comes up over a second, dies away over two, trails the hand a little
+  { const on = cur.on && performance.now() - cur.t < 8000; glow.a = clamp(glow.a + (on ? dt : -dt / 2), 0, 1);
+    if (on) { if (glow.a <= dt) { glow.x = cur.x; glow.y = cur.y; } else { glow.x += (cur.x - glow.x) * Math.min(1, dt * 4); glow.y += (cur.y - glow.y) * Math.min(1, dt * 4); } } }
   fieldMs = fieldMs * .9 + (performance.now() - t0) * .1;
   render();
   requestAnimationFrame(loop);
@@ -496,7 +530,23 @@ const handle = m => {
 };
 try { build(); } catch (e) { post('JSERR boot ' + e.message + ' ' + (e.stack || '').split('\n')[0]); }
 wake();
-let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 250); });
+// A new display size (another screen, a scaling change, the Dock appearing) keeps the lamp as it is, stretched to fit:
+// every blob keeps its share of the wax (volume scales with the area, so the total stays exactly the lamp's), and only
+// the GL targets and the specks are made again. (Rebuilding swapped the whole lamp for a fresh one in a frame.)
+function refit() {
+  const ow = W, oh = H; W = innerWidth; H = innerHeight; K = devicePixelRatio;
+  if (!blobs.length || !(ow > 0 && oh > 0)) { build(); return; }
+  const sx = W / ow, sy = H / oh, sa = sx * sy;
+  WAX_V = W * H * WAX_FRAC;
+  for (const b of blobs) { b.x *= sx; b.y *= sy; b.V *= sa; b.budTarget *= sa; if (b.ox !== undefined) b.ox *= sx; if (b.cx !== undefined) { b.cx *= sx; b.cy *= sy; } }
+  for (const b of bubbles) { b.x *= sx; b.y *= sy; }
+  for (const s of specks) { s.x *= sx; s.y *= sy; }
+  const want = Math.round(W * H / 9000);                                  // (more glass, a few more specks, easing in)
+  for (let i = want; i < specks.length; i++) specks[i].die = true;      // (less glass: the spare ones ease out)
+  while (specks.length < want) specks.push({ x: Math.random() * W, y: Math.random() * H, r: .7 + Math.random() * 1.1, a: .25 + Math.random() * .5, p: Math.random() * 100, v: 0 });
+  buildTargets();
+}
+let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(refit, 250); });
 window.__dbg = () => { const tot = blobs.reduce((s, b) => s + b.V, 0) / WAX_V, aloft = blobs.filter(b => !b.rest).length;
   return `run=${running} fps=${fpsEMA | 0} ms=${fieldMs.toFixed(2)} blobs=${blobs.length} aloft=${aloft} volume=${tot.toFixed(4)} bubbles=${bubbles.length}`; };
 const host = window.chrome && window.chrome.webview;
