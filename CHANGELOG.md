@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.2]
+
+### Fixed
+- A wall that had rebuilt itself many times (one world across several displays, screens covered and uncovered) could
+  hold on to a few hundred MB it no longer needed, until you switched walls or modes. Tidewall now notices a wall that
+  has grown well past its settled size and gives it a fresh start at a quiet moment.
+- Switching walls, modes or the frame rate no longer flashes your plain desktop for a second: each display keeps its
+  last frame until the new wall has drawn.
+
 ## [1.4.1]
 
 ### Fixed
