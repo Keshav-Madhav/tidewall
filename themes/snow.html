@@ -149,24 +149,53 @@ function stepSleigh(now) {
   x.setTransform(K * sleigh.dir, 0, 0, K, px * K, py * K); x.globalAlpha = a; drawSleigh(x, now / 1000, Math.max(.85, Math.min(1.5, H / 760)));
 }
 function drawSleigh(x, t, k) {
-  x.fillStyle = x.strokeStyle = '#1c2240'; x.lineCap = 'round'; x.lineJoin = 'round';
-  // the sleigh: a curled runner, the body, Santa and his sack
-  x.lineWidth = 1.3 * k; x.beginPath(); x.moveTo(-34 * k, 4 * k); x.lineTo(-6 * k, 4 * k); x.quadraticCurveTo(2 * k, 4 * k, 2 * k, -2 * k); x.stroke();
-  x.beginPath(); x.moveTo(-32 * k, 2 * k); x.lineTo(-30 * k, -6 * k); x.lineTo(-12 * k, -6 * k); x.quadraticCurveTo(-6 * k, -6 * k, -4 * k, 1 * k); x.lineTo(-32 * k, 2 * k); x.fill();
-  x.beginPath(); x.arc(-16 * k, -10 * k, 4.2 * k, 0, 7); x.fill();                     // Santa
-  x.beginPath(); x.arc(-15 * k, -15 * k, 2.4 * k, 0, 7); x.fill();
-  x.beginPath(); x.ellipse(-26 * k, -9 * k, 4.5 * k, 4 * k, -.3, 0, 7); x.fill();      // the sack
-  // the reins, then four reindeer in pairs, legs gathering and stretching as they run
-  x.lineWidth = .7 * k; x.beginPath(); x.moveTo(-13 * k, -10 * k); x.lineTo(30 * k, -5 * k); x.stroke();
+  // a silhouette in the painting's night ink, facing the way it flies (+x): a sleigh with a scrolled front on its runner,
+  // Santa in his hat with the reins, the sack behind him, and four reindeer at a gallop
+  x.save(); x.scale(k, k);
+  x.fillStyle = x.strokeStyle = '#1b2140'; x.lineCap = 'round'; x.lineJoin = 'round';
+  // the runner, curling up at the front, and two struts up to the body
+  x.lineWidth = 1.2; x.beginPath(); x.moveTo(-43, 5); x.lineTo(-3, 5); x.bezierCurveTo(2, 5, 4, 2, 3, -1); x.bezierCurveTo(2.4, -3, .2, -2.6, .6, -1); x.stroke();
+  x.lineWidth = 1; x.beginPath(); x.moveTo(-35, 5); x.lineTo(-34, 1); x.moveTo(-13, 5); x.lineTo(-12, 1); x.stroke();
+  // the body: a high back, a low middle, the front rolled into a scroll
+  x.beginPath(); x.moveTo(-41, 1.5); x.lineTo(-5, 1.5); x.bezierCurveTo(-1, 1.5, 1, -2, 0, -6); x.bezierCurveTo(-.6, -9.5, -4.6, -9.6, -5, -6.6);
+  x.bezierCurveTo(-5.3, -4.8, -7.5, -4.6, -9, -5); x.lineTo(-29, -5); x.bezierCurveTo(-32, -5, -33, -8, -34, -11.5); x.bezierCurveTo(-35, -14, -38.5, -14.5, -40, -12.5);
+  x.bezierCurveTo(-42.5, -9, -42.5, -3, -41, 1.5); x.fill();
+  // the sack, tied at the top, behind Santa
+  x.beginPath(); x.moveTo(-33, -5); x.bezierCurveTo(-36.5, -9, -35, -17, -29.5, -18); x.lineTo(-28.6, -20.4); x.lineTo(-27.2, -18.2);
+  x.bezierCurveTo(-23.5, -16.5, -23.6, -9, -25.5, -5); x.fill();
+  // Santa: a round back, an arm forward on the reins, his head and a drooping hat with its bobble
+  x.beginPath(); x.moveTo(-24, -5); x.bezierCurveTo(-25.5, -11, -23.5, -16.5, -19, -16.5); x.bezierCurveTo(-15.5, -16.5, -14, -13, -14.5, -10);
+  x.lineTo(-10.5, -11); x.lineTo(-10, -9.4); x.lineTo(-14.6, -7.8); x.lineTo(-14.6, -5); x.fill();
+  x.beginPath(); x.arc(-18.4, -19.2, 2.9, 0, 7); x.fill();
+  x.beginPath(); x.moveTo(-21.4, -20); x.bezierCurveTo(-21, -25, -16, -26, -15.4, -20.4); x.bezierCurveTo(-17.8, -22.6, -20, -22, -22.6, -24.4); x.lineTo(-21.4, -20); x.fill();
+  x.beginPath(); x.moveTo(-15.6, -20.6); x.bezierCurveTo(-18, -25.5, -22, -25, -23.6, -23); x.lineWidth = 1.4; x.stroke();
+  x.beginPath(); x.arc(-23.8, -22.6, 1.25, 0, 7); x.fill();
+  // the reins, from his hands to the leading pair
+  x.lineWidth = .55; x.beginPath(); x.moveTo(-10.2, -10.2); x.quadraticCurveTo(10, -7.5, 33, -9.2); x.stroke();
+  // four reindeer, two by two, each leg pair reaching and gathering in turn (the far one of each pair a shade lighter)
   for (let i = 0; i < 4; i++) {
-    const rx = 8 * k + i * 9.5 * k, ph = t * 9 + i * .9, bob = Math.sin(ph) * 1.2 * k, ry = -4 * k + bob - (i % 2) * 1.5 * k;
-    x.beginPath(); x.ellipse(rx, ry, 4.2 * k, 1.9 * k, -.12, 0, 7); x.fill();               // body
-    x.beginPath(); x.moveTo(rx + 3 * k, ry - .5 * k); x.lineTo(rx + 5.4 * k, ry - 3.8 * k); x.lineWidth = 1.2 * k; x.stroke();   // neck
-    x.beginPath(); x.ellipse(rx + 6 * k, ry - 4.2 * k, 1.5 * k, 1 * k, .3, 0, 7); x.fill();   // head
-    x.lineWidth = .6 * k; x.beginPath(); x.moveTo(rx + 5.6 * k, ry - 5 * k); x.lineTo(rx + 4.6 * k, ry - 7.4 * k); x.lineTo(rx + 3.4 * k, ry - 8 * k); x.moveTo(rx + 4.8 * k, ry - 6.8 * k); x.lineTo(rx + 6 * k, ry - 8.2 * k); x.stroke();   // antlers
-    const sw = Math.sin(ph) * 2.4 * k; x.lineWidth = .8 * k; x.beginPath();
-    x.moveTo(rx + 2.5 * k, ry + 1 * k); x.lineTo(rx + 4 * k + sw, ry + 4.6 * k); x.moveTo(rx - 2.5 * k, ry + 1 * k); x.lineTo(rx - 4 * k - sw, ry + 4.4 * k); x.stroke();   // legs
+    const pair = i >> 1, far = i & 1, rx = 10 + pair * 20 + far * 3.6, ph = t * 8.5 + pair * 1.7 + far * .5;
+    const lift = Math.sin(ph) * 1.1, ry = -3.4 - far * 2.2 + lift;
+    x.fillStyle = x.strokeStyle = far ? '#262d52' : '#1b2140';
+    x.save(); x.translate(rx, ry); x.scale(1.2, 1.2);
+    // legs: front pair stretches forward as the hind pair pushes back, then they gather under the body
+    const a = Math.sin(ph), fr = .9 + .8 * a, hd = -.7 - .8 * a;
+    x.lineWidth = 1; x.beginPath();
+    x.moveTo(3.6, .8); x.lineTo(3.6 + Math.cos(fr) * 3.2, .8 + Math.sin(fr) * 3.2); x.lineTo(3.6 + Math.cos(fr) * 3.2 + Math.cos(fr + .9) * 2.4, .8 + Math.sin(fr) * 3.2 + Math.sin(fr + .9) * 2.4);
+    x.moveTo(-3.8, .8); x.lineTo(-3.8 + Math.cos(Math.PI - hd) * 3.2, .8 + Math.sin(Math.PI - hd) * 3.2); x.lineTo(-3.8 + Math.cos(Math.PI - hd) * 3.2 + Math.cos(Math.PI - hd - 1) * 2.4, .8 + Math.sin(Math.PI - hd) * 3.2 + Math.sin(Math.PI - hd - 1) * 2.4);
+    x.stroke();
+    // body, a little deeper at the chest; the neck rising forward; the head reaching out; a flick of tail
+    x.beginPath(); x.moveTo(-5.4, -.4); x.bezierCurveTo(-5, -3, 3, -3.4, 4.6, -1.6); x.bezierCurveTo(5.8, -.4, 5, 1.6, 3.4, 1.7); x.bezierCurveTo(1, 1.9, -3, 1.9, -4.6, 1.2); x.closePath(); x.fill();
+    x.beginPath(); x.moveTo(3, -2.2); x.bezierCurveTo(4.4, -4.6, 5.6, -6.4, 6.6, -6.8); x.lineTo(7.6, -5.4); x.bezierCurveTo(6.2, -4.6, 5.6, -2.6, 5.2, -.8); x.fill();
+    x.beginPath(); x.moveTo(6.2, -7.2); x.bezierCurveTo(7.6, -7.8, 9.6, -6.6, 10.1, -5.6); x.bezierCurveTo(9.4, -5, 7.8, -5.2, 7, -5); x.fill();
+    x.beginPath(); x.moveTo(-5.2, -.8); x.lineTo(-6.6, -2.4); x.lineTo(-5.6, -.2); x.fill();
+    // antlers: two curved beams swept back, with a couple of tines
+    x.lineWidth = .55; x.beginPath();
+    x.moveTo(6.8, -7.2); x.quadraticCurveTo(6.2, -10.4, 4, -11.4); x.moveTo(6.4, -9.4); x.lineTo(7.8, -10.6); x.moveTo(5.2, -10.8); x.lineTo(5.6, -12.4);
+    x.moveTo(7.4, -7); x.quadraticCurveTo(7.8, -10, 6.4, -11.8);
+    x.stroke(); x.restore();
   }
+  x.restore();
 }
 
 /* ---------- 2. windows: eased slots, each carrying its own drift ---------- */
@@ -175,8 +204,8 @@ const COL = 4;                                 // a depth sample every 4 px alon
 const RAD = /Windows/.test(navigator.userAgent) ? 8 : 14;
 function floor(c, i) {                         // how far below the top edge column i's floor is
   if (c.owner === '__icon') return 0;
-  const dx = Math.min(i * COL, c.w - i * COL); if (dx >= RAD) return 0;
-  const t = RAD - Math.max(0, dx); return RAD - Math.sqrt(Math.max(0, RAD * RAD - t * t));
+  const R = c.rad || RAD, dx = Math.min(i * COL, c.w - i * COL); if (dx >= R) return 0;
+  const t = R - Math.max(0, dx); return R - Math.sqrt(Math.max(0, R * R - t * t));
 }
 let cur = [], liveUntil = 0, orphans = [], settled = false;
 // a window that goes (Show Desktop, minimised, another Space) and comes back gets its snow back, not a bare top
@@ -190,7 +219,7 @@ function setTargets(list) {
     let best = null, bd = 1e9;
     for (const c of cur) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
     if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
-    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, cap: t.cap, alive: true, cols: makeCols(t.w), vx: 0, vy: 0, px: t.x, py: t.y };
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, cap: t.cap, rad: t.rad, alive: true, cols: makeCols(t.w), vx: 0, vy: 0, px: t.x, py: t.y };
       const back = away.findIndex(a => a.owner === t.owner && Math.abs(a.w - t.w) < 12 && now - a.at < 120000);
       if (back >= 0) { c.cols = makeCols(t.w, away[back].cols); away.splice(back, 1); }
       else if (!settled || performance.now() < 8000) for (let i = 0; i < c.cols.length; i++) c.cols[i] = 11 + 10 * vnoise(i * .06 + t.x, 2) + 5 * vnoise(i * .25 + t.y, 5);   // it's been snowing a while (icons arrive a moment after the first windows)
@@ -239,11 +268,19 @@ function respawn(f) { f.y = -10 - Math.random() * 40; f.x = Math.random() * (W +
 function deposit(cols, i, amt) { for (let k = -2; k <= 2; k++) { const j = i + k; if (j >= 0 && j < cols.length) cols[j] += amt * [.12, .22, .32, .22, .12][k + 2]; } }
 function shed(c, frac, vx, vy) {
   if (!c.acc || c.acc.length !== c.cols.length) c.acc = new Float32Array(c.cols.length);
+  // all of it falls: a wide window's whole drift needs far more clumps than the sky has room for, so past the budget
+  // they come bigger rather than fewer (before, past 420 the rest just vanished: half a window's snow fell, half popped)
+  const lumps = [];
   for (let i = 0; i < c.cols.length; i++) {
     const d = c.cols[i] * frac; c.cols[i] -= d; c.acc[i] += d;      // always comes off; clumps form as it adds up
-    if (c.acc[i] < 3.5) continue; const lump = c.acc[i]; c.acc[i] = 0;
-    if (clumps.length > 420) continue;                     // enough tumbling snow; the rest just vanishes into the fall
-    for (let n = 0; n < Math.ceil(lump / 6); n++) clumps.push({ x: c.x + i * COL + (Math.random() - .5) * 3, y: c.y - c.cols[i] - Math.random() * lump, vx: vx * .55 + (Math.random() - .5) * 60, vy: vy * .3 - 30 - Math.random() * 60, s: 2.2 + Math.random() * 3.2, life: 1 });
+    if (c.acc[i] < 3.5) continue; lumps.push([i, c.acc[i]]); c.acc[i] = 0;
+  }
+  let need = 0; for (const [, l] of lumps) need += Math.ceil(l / 6);
+  const room = Math.max(60, 420 - clumps.length), f = Math.min(1, room / Math.max(1, need));
+  for (const [i, lump] of lumps) {
+    const want = Math.ceil(lump / 6), n = Math.max(1, Math.round(want * f)), grow = want / n;   // (each carries more: what lands is the same)
+    if (clumps.length > 900) break;                        // (a last guard, never reached by one window)
+    for (let k = 0; k < n; k++) clumps.push({ x: c.x + i * COL + (Math.random() - .5) * 3 * grow, y: c.y - c.cols[i] - Math.random() * lump, vx: vx * .55 + (Math.random() - .5) * 60, vy: vy * .3 - 30 - Math.random() * 60, s: Math.min(14, (2.2 + Math.random() * 3.2) * grow), life: 1 });
   }
 }
 // the snow slumps to its angle of repose; ends round off; a depth cap
@@ -340,6 +377,57 @@ in vec4 aF; uniform vec2 uRes; uniform float uK; out float vA;
 void main() { vA = aF.w; gl_PointSize = aF.z * uK * 2.2; gl_Position = vec4(aF.x / uRes.x * 2. - 1., 1. - aF.y / uRes.y * 2., 0., 1.); }`, `#version 300 es
 precision mediump float; in float vA; out vec4 o;
 void main() { float r = length(gl_PointCoord - .5) * 2.; float a = smoothstep(1., .25, r) * vA; o = vec4(vec3(.97, .98, 1.) * a, a); }`);
+// the Christmas season: a string of lights along the snow on each window. Bulbs are glowing points with their own
+// colour (x, y, size, brightness, r, g, b); the wire is a thin dark line strip
+const BULB = program(`#version 300 es
+in vec4 aB; in vec3 aC; uniform vec2 uRes; uniform float uK; out float vA; out vec3 vC;
+void main() { vA = aB.w; vC = aC; gl_PointSize = aB.z * uK; gl_Position = vec4(aB.x / uRes.x * 2. - 1., 1. - aB.y / uRes.y * 2., 0., 1.); }`, `#version 300 es
+precision mediump float; in float vA; in vec3 vC; out vec4 o;
+void main() { float r = length(gl_PointCoord - .5) * 2.;
+  float core = smoothstep(.3, .12, r), halo = exp(-r * r * 6.) * .7 * vA;                 // a small lit bulb, and its glow on the snow
+  vec3 c = mix(vC, vec3(1., .97, .9), core * .45) * (core * (.55 + .45 * vA) + halo);
+  o = vec4(c, core * .95); }`);
+const WIRE = program(`#version 300 es
+in vec2 aP; uniform vec2 uRes; void main() { gl_Position = vec4(aP.x / uRes.x * 2. - 1., 1. - aP.y / uRes.y * 2., 0., 1.); }`, `#version 300 es
+precision mediump float; out vec4 o; void main() { o = vec4(vec3(.05, .07, .08) * .42, .42); }`);
+const bBuf = gl.createBuffer(), wBuf = gl.createBuffer(), bVao = gl.createVertexArray(), wVao = gl.createVertexArray();
+gl.bindVertexArray(bVao); gl.bindBuffer(gl.ARRAY_BUFFER, bBuf);
+{ const l = gl.getAttribLocation(BULB, 'aB'), lc = gl.getAttribLocation(BULB, 'aC'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 4, gl.FLOAT, false, 28, 0); gl.enableVertexAttribArray(lc); gl.vertexAttribPointer(lc, 3, gl.FLOAT, false, 28, 16); }
+gl.bindVertexArray(wVao); gl.bindBuffer(gl.ARRAY_BUFFER, wBuf); { const l = gl.getAttribLocation(WIRE, 'aP'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 2, gl.FLOAT, false, 0, 0); }
+gl.bindVertexArray(null);
+const BULB_COLS = [[1, .74, .32], [.92, .2, .18], [.22, .7, .36], [.3, .5, .95], [1, .55, .16]];   // warm gold, red, green, blue, amber
+let bArr = new Float32Array(1 << 12), wArr = new Float32Array(1 << 12);
+function drawLights(now) {
+  if (!SEASON) return;
+  let nb = 0, nw = 0; const wires = [], t = now / 1000, GAP = 26;
+  const grow = (a, need) => { if (need <= a.length) return a; const g = new Float32Array(Math.max(need, a.length * 2)); g.set(a); return g; };
+  for (const c of cur) {
+    if (c.owner === '__icon' || c.rad || c.w < 160) continue;               // windows only: not icons, widgets or slivers
+    const n = Math.floor((c.w - 24) / GAP); if (n < 3) continue;
+    const off = (c.w - (n - 1) * GAP) / 2, start = nw;
+    let px = 0, py = 0;
+    for (let b = 0; b < n; b++) {
+      const x = c.x + off + b * GAP, i = Math.max(0, Math.min(c.cols.length - 1, Math.round((x - c.x) / COL)));
+      const top = c.y + floor(c, i) - c.cols[i];
+      const y = top + Math.min(3, c.cols[i] * .35) + .5;                     // nestled in the snow, half showing
+      if (b > 0) for (let s = 1; s <= 4; s++) { const u = s / 4, sag = Math.sin(u * Math.PI) * 2.6;   // the wire droops a little between bulbs
+        wArr = grow(wArr, (nw + 1) * 2); wArr[nw * 2] = px + (x - px) * u; wArr[nw * 2 + 1] = py + (y - py) * u + sag; nw++; }
+      else { wArr = grow(wArr, (nw + 1) * 2); wArr[nw * 2] = x; wArr[nw * 2 + 1] = y; nw++; }
+      px = x; py = y;
+      // each bulb twinkles on its own slow beat (seeded by where it sits on the window, so it doesn't change as you move it)
+      const seed = (b * 7.31 + c.cols.length * .13) % 1, col = BULB_COLS[(b + (c.owner ? c.owner.length : 0)) % 5];
+      const lit = .55 + .45 * Math.sin(t * (.5 + seed * .9) + seed * 40);
+      bArr = grow(bArr, (nb + 1) * 7); const o = nb * 7;
+      bArr[o] = x; bArr[o + 1] = y; bArr[o + 2] = 17; bArr[o + 3] = lit; bArr[o + 4] = col[0]; bArr[o + 5] = col[1]; bArr[o + 6] = col[2]; nb++;
+    }
+    wires.push([start, nw - start]);
+  }
+  if (!nb) return;
+  gl.useProgram(WIRE); gl.uniform2f(U(WIRE, 'uRes'), W, H); gl.bindVertexArray(wVao); gl.bindBuffer(gl.ARRAY_BUFFER, wBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, wArr.subarray(0, nw * 2), gl.DYNAMIC_DRAW); for (const [s, n] of wires) gl.drawArrays(gl.LINE_STRIP, s, n);
+  gl.useProgram(BULB); gl.uniform2f(U(BULB, 'uRes'), W, H); gl.uniform1f(U(BULB, 'uK'), K); gl.bindVertexArray(bVao); gl.bindBuffer(gl.ARRAY_BUFFER, bBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, bArr.subarray(0, nb * 7), gl.DYNAMIC_DRAW); gl.drawArrays(gl.POINTS, 0, nb);
+}
 const U = (p, n) => (p.__u || (p.__u = {}))[n] || (p.__u[n] = gl.getUniformLocation(p, n));
 const dBuf = gl.createBuffer(), fBuf = gl.createBuffer(), dVao = gl.createVertexArray(), fVao = gl.createVertexArray();
 gl.bindVertexArray(dVao); gl.bindBuffer(gl.ARRAY_BUFFER, dBuf); { const l = gl.getAttribLocation(DRIFT, 'aP'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 3, gl.FLOAT, false, 0, 0); }
@@ -385,8 +473,9 @@ function render() {
   gl.bindBuffer(gl.ARRAY_BUFFER, dBuf); gl.bufferData(gl.ARRAY_BUFFER, dArr.subarray(0, Math.max(1, m) * 3), gl.DYNAMIC_DRAW); dStrips = strips; }
   if (dStrips.length) { gl.useProgram(DRIFT); gl.uniform2f(U(DRIFT, 'uRes'), W, H); gl.bindVertexArray(dVao);
     for (const [s, n] of dStrips) gl.drawArrays(gl.TRIANGLE_STRIP, s, n); }
+  drawLights(performance.now());
   let n = pts(false);
-  for (const c of clumps) { if (n * 4 + 4 > fArr.length) break; const o = n * 4; fArr[o] = c.x; fArr[o + 1] = c.y; fArr[o + 2] = c.s; fArr[o + 3] = .95; n++; }
+  for (const c of clumps) { if (n * 4 + 4 > fArr.length) { const g = new Float32Array(fArr.length * 2); g.set(fArr); fArr = g; } const o = n * 4; fArr[o] = c.x; fArr[o + 1] = c.y; fArr[o + 2] = c.s; fArr[o + 3] = .95; n++; }
   drawPts(n);
 }
 
@@ -408,6 +497,10 @@ function build() { W = innerWidth; H = innerHeight; $('gl').width = Math.round(W
 window.__twSleigh = () => { nextSleigh = 0; };   // (tests: one now)
 let FB = null; function commit() { } function refresh() { }
 let lastWins = null, deskIc = [];
+// a desktop widget's window has a clear margin round the card (about 9 pt on a Mac): snow sits on the card, following
+// its rounder corners, not on the margin in mid-air
+const WIDGETS = ['Notification Centre', 'Notification Center', 'WidgetKit Simulator'];
+const card = t => !WIDGETS.includes(t.owner) || t.w < 40 ? t : Object.assign(t, { x: t.x + 9, y: t.y + 9, w: t.w - 18, h: t.h - 18, rad: 22 });
 const handle = m => {
   if (m.t === 'desk') { showPanel(m.i, m.n); return; }
   if (m.t === 'area') { const was = GY; GY = m.r[3] / K; driftsDirty = true; if (was !== GY && PAINT.complete) drawBackdrop(); return; }   // (the snowman moves up onto it)
@@ -416,9 +509,9 @@ const handle = m => {
   if (m.t === 'cursorOff') { cursor = null; return; }
   // Stage Manager draws its thumbnails tilted in 3D but reports flat rectangles: snow can't sit on them believably, so it falls behind
   if (m.t === 'dicons') {                                               // your desktop icons: snow settles in a little cap on each
-    deskIc = (m.i || []).map(([l, t, r, b]) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: '__icon', cap: 9 }));
+    deskIc = (m.a || m.i || []).map(([l, t, r, b]) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: '__icon', cap: 9 }));   // (a: the icon's visible artwork, not its square)
     if (lastWins) handle(lastWins); else setTargets(deskIc); return; }
-  if (m.t === 'windows') { lastWins = m; if (m.live) liveUntil = performance.now() + 250; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })).filter((_, i) => !(m.sm && m.sm[i])).concat(deskIc)); }
+  if (m.t === 'windows') { lastWins = m; if (m.live) liveUntil = performance.now() + 250; setTargets(m.r.map(([l, t, r, b], i) => card({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })).filter((_, i) => !(m.sm && m.sm[i])).concat(deskIc)); }
 };
 build(); wake();
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 200); });

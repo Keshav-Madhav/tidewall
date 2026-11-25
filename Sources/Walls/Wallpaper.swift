@@ -353,7 +353,11 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         .map { boxJSON($0.offsetBy(dx: -o.x, dy: -o.y), scale: k) }
         .joined(separator: ",")
     }
-    let msg = "{\"t\":\"dicons\",\"r\":[\(encode(di.icons))],\"c\":[\(encode(di.clusters))],\"i\":[\(encode(di.images))]}"
+    // a: each image's visible artwork, in step with i (until it's known, the image itself)
+    let shown = di.images.indices.filter { i in world.contains { $0.intersects(di.images[i]) } }
+    let arts = di.artworks.count == di.images.count ? shown.map { di.artworks[$0] } : shown.map { di.images[$0] }
+    let a = arts.map { boxJSON($0.offsetBy(dx: -o.x, dy: -o.y), scale: k) }.joined(separator: ",")
+    let msg = "{\"t\":\"dicons\",\"r\":[\(encode(di.icons))],\"c\":[\(encode(di.clusters))],\"i\":[\(encode(di.images))],\"a\":[\(a)]}"
     if msg != lastSent.deskIcons {
       lastSent.deskIcons = msg
       send(msg)
