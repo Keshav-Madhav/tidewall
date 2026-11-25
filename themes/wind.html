@@ -16,6 +16,13 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: #ece6d9; }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
   #cap { inset: auto auto 0 0; width: 420px; height: 96px; }
+  /* the reports and the cursor's station plot are inked onto the chart left to right, and wiped off right to left:
+     a mask slid across them (a plain opacity fade read as a widget, not as type on a map) */
+  .ink { -webkit-mask-image: linear-gradient(90deg, #000 40%, transparent 60%); mask-image: linear-gradient(90deg, #000 40%, transparent 60%);
+    -webkit-mask-size: 250% 100%; mask-size: 250% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: 100% 0; mask-position: 100% 0;
+    transition: -webkit-mask-position .38s cubic-bezier(.3, .1, .3, 1), mask-position .38s cubic-bezier(.3, .1, .3, 1); }
+  .ink.on { -webkit-mask-position: 0 0; mask-position: 0 0; }
 </style>
 </head>
 <body>
@@ -179,15 +186,7 @@ out vec2 vUV; void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(g
 const CELL = 8;
 const SIM = `
 uniform vec2 uGrid; uniform float uCell, uDt; uniform vec2 uRes;
-uniform vec4 uR[32]; uniform vec2 uRV[32]; uniform int uN;
-vec2 cellP() { return vec2(gl_FragCoord.x, uGrid.y - gl_FragCoord.y) * uCell; }
 vec2 uvOf(vec2 p) { return vec2(p.x / (uCell * uGrid.x), 1. - p.y / (uCell * uGrid.y)); }
-float solid(vec2 p, out vec2 vel) {
-  vel = vec2(0.);
-  for (int i = 0; i < 32; i++) { if (i >= uN) break; vec4 r = uR[i];
-    if (p.x > r.x - 3. && p.x < r.z + 3. && p.y > r.y - 3. && p.y < r.w + 3.) { vel = uRV[i]; return 1.; } }
-  return 0.;
-}
 `;
 // particles: one texel each (x, y, age, life), stepped through the flow on the GPU
 const PW = 256, PH = 128, NP = PW * PH;
@@ -197,16 +196,13 @@ ${SIM}
 float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 void main() {
   vec4 s = texelFetch(uP, ivec2(gl_FragCoord.xy), 0);
-  vec2 pos = s.xy, wv; float age = s.z, life = s.w;
+  vec2 pos = s.xy; float age = s.z, life = s.w;
   vec2 v = texture(uT, uvOf(pos)).xy;
   // midpoint step: streaks follow curved flow without cutting corners
   vec2 mid = pos + v * uDt * .5; pos += texture(uT, uvOf(mid)).xy * uDt;
   age += uDt;
-  if (age > life || pos.x < -4. || pos.y < -4. || pos.x > uRes.x + 4. || pos.y > uRes.y + 4. || solid(pos, wv) > .5) {
-    for (int k = 0; k < 6; k++) {
-      pos = vec2(hash(gl_FragCoord.xy + uSeed * 17.31 + float(k) * 3.7), hash(gl_FragCoord.yx * 1.37 + uSeed * 9.17 + float(k) * 5.3)) * uRes;
-      if (solid(pos, wv) < .5) break;
-    }
+  if (age > life || pos.x < -4. || pos.y < -4. || pos.x > uRes.x + 4. || pos.y > uRes.y + 4.) {
+    pos = vec2(hash(gl_FragCoord.xy + uSeed * 17.31), hash(gl_FragCoord.yx * 1.37 + uSeed * 9.17)) * uRes;   // reborn anywhere: nothing on the desk is solid to this air
     age = 0.; life = 3. + 5. * hash(gl_FragCoord.xy * .71 + uSeed);
   }
   o = vec4(pos, age, life);
@@ -237,15 +233,21 @@ precision highp float; out vec4 o; void main() { o = vec4(0.); }`, 'fade');
 const COMP = prog(VS_FULL, `#version 300 es
 precision highp float; in vec2 vUV; out vec4 o;
 uniform sampler2D uTrail, uMap, uHalo; uniform vec3 uBg, uLand, uLine, uFast, uGrat, uInk; uniform float uK, uDayF; uniform vec4 uWorld;   // this display in the whole map: x, y, w/W, h/H
+uniform vec2 uRes; uniform vec4 uCard[10]; uniform float uCardA[10]; uniform int uNC;   // the reports (and the caption) on the chart, and how far each is inked on
 float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 void main() {
   vec4 m = texture(uMap, vec2(vUV.x, 1. - vUV.y)); /* the chart canvas is stored top-down */ vec2 tr = texture(uTrail, vUV).rg;
-  float h = texture(uHalo, vec2(vUV.x, 1. - vUV.y)).r;              // a cartographer's halo round each desktop icon
+  vec2 hn = texture(uHalo, vec2(vUV.x, 1. - vUV.y)).rg; float h = hn.r;   // a cartographer's halo round each desktop icon (r) and the map's own names (g)
+  // the reports are set on bare paper, as printed labels are: the wind and the fine lines are knocked out under their
+  // type (it ran through the words, and city names sat under them), following each report as it is inked on and off
+  vec2 px = vec2(vUV.x, 1. - vUV.y) * uRes; float kc = 0.;
+  for (int i = 0; i < 10; i++) { if (i >= uNC) break; vec4 r = uCard[i]; vec2 d = max(r.xy - px, px - r.zw);
+    kc = max(kc, uCardA[i] * (1. - smoothstep(-3., 10., length(max(d, 0.)) + min(max(d.x, d.y), 0.)))); }
   vec3 c = mix(uBg, uLand, m.g);
-  c = mix(c, uGrat, m.b * .55 * (1. - h));
-  float t = (1. - exp(-tr.r * 1.5)) * (1. - .92 * h), sp = tr.r > 1e-3 ? clamp(tr.g / tr.r, 0., 1.) : 0.;
+  c = mix(c, uGrat, m.b * .55 * (1. - h) * (1. - kc));
+  float t = (1. - exp(-tr.r * 1.5)) * (1. - .92 * h) * (1. - .7 * hn.g) * (1. - kc), sp = tr.r > 1e-3 ? clamp(tr.g / tr.r, 0., 1.) : 0.;   // (names: held back, not cut out)
   c = mix(c, mix(uLine, uFast, smoothstep(.4, .95, sp)), t * mix(.58, .6, uDayF));   // light lines on a dark map read stronger: hold them back at night
-  c = mix(c, uInk, min(1., m.r * mix(1.15, .85, uDayF)) * (1. - .6 * h));               // and let the ink come through at full strength
+  c = mix(c, uInk, min(1., m.r * mix(1.15, .85, uDayF)) * (1. - .6 * h) * (1. - .8 * kc));   // and let the ink come through at full strength
   c *= .985 + .03 * hash(floor(gl_FragCoord.xy));                     // a whisper of paper grain
   vec2 q = uWorld.xy + vec2(vUV.x, 1. - vUV.y) * uWorld.zw - .5; c *= 1. - .08 * smoothstep(.35, .9, length(q * vec2(1.2, 1.)));   // darker toward the map's edges, not each display's
   o = vec4(c, 1.);
@@ -305,7 +307,7 @@ function buildTarget(seedVelocity) {
 }
 
 /* ---------- the base chart, painted once: R ink (coast, cities, labels), G land, B graticule ---------- */
-let COAST = null, ELEV = null, LABEL_BOXES = [];
+let COAST = null, ELEV = null, LABEL_BOXES = [], NAME_HALO = [];   // NAME_HALO: every name drawn on this display, [cx, cy, w, h, angle], for the halo
 // real elevation, a global 0.25° grid (from the AWS Terrain Tiles, built once and shipped with the theme), cubic-interpolated
 function elevAt(lon, lat) {
   const E = ELEV; if (!E) return 0;
@@ -394,6 +396,7 @@ function drawRelief(y) {
     const mg = 40 + w / 2;                                              // (a long name may be set at an angle)
     if (hit(mine, box) || box[2] < D.ox - mg || box[0] > D.ox + W + mg || box[3] < D.oy - mg || box[1] > D.oy + H + mg) continue;   // under your icons, or off this display
     y.save(); y.translate(L.x - D.ox, L.y - D.oy); y.rotate(L.a); y.textAlign = 'center'; y.fillText(L.t, 0, 0); y.restore();
+    NAME_HALO.push([L.x - D.ox + Math.sin(L.a) * size * .32, L.y - D.oy - Math.cos(L.a) * size * .32, w, size * 1.05, L.a]);
   }
   y.letterSpacing = '0px'; LABEL_BOXES = boxes;
   window.__relief = 'done ' + peaks.length;
@@ -402,6 +405,7 @@ const vn = (x, y) => { const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix
   const hh = (a, b) => { const q = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return q - Math.floor(q); };
   return (hh(ix, iy) * (1 - ux) + hh(ix + 1, iy) * ux) * (1 - uy) + (hh(ix, iy + 1) * (1 - ux) + hh(ix + 1, iy + 1) * ux) * uy; };
 function paintMap() {
+  NAME_HALO = [];
   const dw = Math.round(W * K), dh = Math.round(H * K), c = document.createElement('canvas'); c.width = dw; c.height = dh;
   const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, dw, dh); x.globalCompositeOperation = 'lighter';
   // each ink is drawn alone, then added on: one scratch canvas serves them all (a screen-sized canvas each held ~150 MB until collected)
@@ -428,7 +432,7 @@ function paintMap() {
   layer(y => {
     y.fillStyle = 'rgb(150,0,0)';
     const sea = (t, lon, lat, size, rot = 0) => { y.save(); y.translate(X(lon), Y(lat)); y.rotate(rot); y.font = `italic ${size}px ${SERIF}`; y.textAlign = 'center';
-      y.letterSpacing = `${size * .35}px`; y.fillText(t, 0, 0); y.restore(); };
+      y.letterSpacing = `${size * .35}px`; y.fillText(t, 0, 0); NAME_HALO.push([X(lon), Y(lat) - size * .32, y.measureText(t).width, size * 1.05, rot]); y.restore(); };
     const D = WD(), PU = PJU || PJ, XW = lon => X(lon) + D.ox, YW = lat => Y(lat) + D.oy;   // (desk coordinates: every display chooses alike)
     const taken = LABEL_BOXES.slice(), free = b => !taken.some(o => o[0] < b[2] && o[2] > b[0] && o[1] < b[3] && o[3] > b[1]);
     const mine = deskIc.map(([l, t, r, b]) => [l - 8 + D.ox, t - 6 + D.oy, r + 8 + D.ox, b + 6 + D.oy]), underIcon = b => mine.some(o => o[0] < b[2] && o[2] > b[0] && o[1] < b[3] && o[3] > b[1]);
@@ -443,7 +447,8 @@ function paintMap() {
     }
     const city = (t, lon, lat, home) => { const px = X(lon), py = Y(lat); y.beginPath(); y.arc(px, py, home ? 2.6 : 1.7, 0, 7); y.fill();
       if (home) { y.lineWidth = .8; y.strokeStyle = 'rgb(150,0,0)'; y.beginPath(); y.arc(px, py, 6, 0, 7); y.stroke(); }
-      y.font = `${home ? 12 : 10}px ${SERIF}`; y.letterSpacing = '0px'; y.textAlign = 'left'; y.fillText(t, px + (home ? 9 : 5), py + 3.5); };
+      y.font = `${home ? 12 : 10}px ${SERIF}`; y.letterSpacing = '0px'; y.textAlign = 'left'; y.fillText(t, px + (home ? 9 : 5), py + 3.5);
+      const tw = y.measureText(t).width; NAME_HALO.push([px + (home ? 9 : 5) + tw / 2 - 3, py, tw + 8, home ? 13 : 11, 0]); };
     city(HOME.name, HOME.lon, HOME.lat, true); taken.push([XW(HOME.lon) - 8, YW(HOME.lat) - 12, XW(HOME.lon) + 90, YW(HOME.lat) + 10]);
     const span = spanAll(), gap = 70; let nc = 0;
     for (const [n, lo, la, rank] of WORLD.places) {           // the biggest cities in view, spaced apart
@@ -501,8 +506,11 @@ function localTime(ms, tz) { if (!tz) return new Date(ms).toLocaleTimeString([],
 let deskIc = [], iconKey = '', haloT = null;
 function paintHalo() {
   const q = 4, c = document.createElement('canvas'); c.width = Math.max(1, Math.ceil(W / q)); c.height = Math.max(1, Math.ceil(H / q));
-  const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, c.width, c.height); x.scale(1 / q, 1 / q); x.globalCompositeOperation = 'lighter'; x.fillStyle = 'rgba(255,255,255,.2)';
+  const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, c.width, c.height); x.scale(1 / q, 1 / q); x.globalCompositeOperation = 'lighter'; x.fillStyle = 'rgba(255,0,0,.2)';
   for (const [l, t, r, b] of deskIc) for (let i = 0; i < 6; i++) { const p = 2 + i * 4; x.beginPath(); x.roundRect(l - p, t - p, r - l + 2 * p, b - t + 2 * p, 10 + p); x.fill(); }   // soft: five steps out from a solid core
+  // the map's own names drowned under fast streaks ("Kabul" over a rust band): a narrower halo holds the wind back round them
+  x.fillStyle = 'rgba(0,255,0,.34)';
+  for (const [cx, cy, w, h, a] of NAME_HALO) { x.save(); x.translate(cx, cy); x.rotate(a); for (let i = 0; i < 3; i++) { const p = 1 + i * 3; x.beginPath(); x.roundRect(-w / 2 - p, -h / 2 - p, w + 2 * p, h + 2 * p, 4 + p); x.fill(); } x.restore(); }
   if (!haloT) haloT = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, haloT); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c); c.width = c.height = 1;
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -515,20 +523,22 @@ function placeCaption() { const left = capLeft = !onIcon(0, H - 96, 420, H) || o
 function drawCaption() {
   if (!PAL) palette();
   const k = K, w = 420, h = 96; capCv.width = w * k; capCv.height = h * k;
-  const x = capCv.getContext('2d'); x.scale(k, k); x.clearRect(0, 0, w, h);
+  const x = capCv.getContext('2d'); x.scale(k, k); x.clearRect(0, 0, w, h); CAP_BOX = null;
   if (DESK.n > 1 && DESK.i !== 0) return;                              // one caption for the whole desk, on the leftmost screen
   const ink = `rgb(${PAL.ink.map(v => Math.round(v * 255)).join(',')})`, faint = `rgba(${PAL.ink.map(v => Math.round(v * 255)).join(',')},.7)`;
-  x.fillStyle = ink; x.font = `11px ${SERIF}`; x.letterSpacing = '3px'; x.fillText(`SURFACE WIND · ${(COUNTRY ? COUNTRY.name : '').toUpperCase()}${DATA && !dataNote.includes('last forecast') ? ' · LIVE' : ''}`, 28, h - 46);
+  let tw = 0; const ft = (s, y) => { x.fillText(s, 28, y); tw = Math.max(tw, x.measureText(s).width); };
+  x.fillStyle = ink; x.font = `11px ${SERIF}`; x.letterSpacing = '3px'; ft(`SURFACE WIND · ${(COUNTRY ? COUNTRY.name : '').toUpperCase()}${DATA && !dataNote.includes('last forecast') ? ' · LIVE' : ''}`, h - 46);
   x.letterSpacing = '0px'; x.font = `italic 11px ${SERIF}`; x.fillStyle = faint;
-  const tz = DATA && DATA.tz, t = localTime(Date.now(), tz);
-  const abbr = tz && (tz.name ? (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone: tz.name, timeZoneName: 'short' }).formatToParts(new Date()).find(x => x.type === 'timeZoneName').value; } catch (_) { return tz.abbr; } })() : tz.abbr);
+  const tz = DATA && DATA.tz, t = localTime(Date.now(), tz), abbr = tz && tzAbbr(tz);
   let line = `10 m above ground · ${t}${abbr ? ' ' + abbr : ''}`;
   if (DATA) line += ` · Open-Meteo forecast of ${localTime(DATA.fetched, tz)}`;
-  x.fillText(line, 28, h - 30);
-  if (!DATA || dataNote.startsWith('offline') || dataNote.includes('tomorrow')) x.fillText(dataNote, 28, h - 15);
+  ft(line, h - 30);
+  const note = !DATA || dataNote.startsWith('offline') || dataNote.includes('tomorrow'); if (note) ft(dataNote, h - 15);
+  CAP_BOX = [20, h - 60, 34 + tw, note ? h - 10 : h - 25];                // (caption coordinates)
 }
+const tzAbbr = tz => tz.name ? (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone: tz.name, timeZoneName: 'short' }).formatToParts(new Date()).find(x => x.type === 'timeZoneName').value; } catch (_) { return tz.abbr; } })() : tz.abbr;
 
-/* ======================= windows: eased obstacles that push the air when they move ======================= */
+/* ======================= windows: eased stations (they don't touch the air) ======================= */
 let wins = [], liveUntil = 0;
 function setTargets(list) {
   const used = new Set();
@@ -536,25 +546,18 @@ function setTargets(list) {
     let best = null, bd = 1e9;
     for (const c of wins) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
     if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
-    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, sm: t.sm, alive: true, vx: 0, vy: 0 }; wins.push(c); used.add(c); }
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, sm: t.sm, alive: true }; wins.push(c); used.add(c); }
   }
   for (const c of wins) if (!used.has(c)) c.alive = false;
   wins = wins.filter(c => c.alive);
 }
-const uR = new Float32Array(32 * 4), uRV = new Float32Array(32 * 2);
-let nR = 0;
 function stepWins(dt) {
   // while you drag, everything attached to a window sits exactly on it (eased at 40/s, a card trailed a fast drag by
   // ~15 px); jumps you didn't make by hand (minimise, Stage Manager) still glide
   const live = performance.now() < liveUntil, k = live ? 1 : 1 - Math.exp(-dt * 9);
-  nR = 0;
   for (const c of wins) {
-    const ox = c.x, oy = c.y;
     const ease = (v, t) => Math.abs(t - v) > .1 ? v + (t - v) * k : t;
     c.x = ease(c.x, c.tx); c.y = ease(c.y, c.ty); c.w = ease(c.w, c.tw); c.h = ease(c.h, c.th);
-    c.vx = c.vx * .6 + clamp((c.x - ox) / dt, -900, 900) * .4; c.vy = c.vy * .6 + clamp((c.y - oy) / dt, -900, 900) * .4;
-    const sp = Math.hypot(c.vx, c.vy), f = sp > 1 ? Math.min(sp * .14, 55) / sp : 0;    // ≤ ~6 m/s of push, however fast it's dragged
-    if (nR < 32) { uR.set([c.x, c.y, c.x + c.w, c.y + c.h], nR * 4); uRV.set([c.vx * f, c.vy * f], nR * 2); nR++; }
   }
 }
 
@@ -576,12 +579,12 @@ function placeName(lat, lon) {
   }
   return elevAt(lon, lat) > 2500 ? 'the high mountains' : 'open country';
 }
-function readWind(x, y) {
-  const lat = LAT(y), lon = LON(x), out = [0, 0];
-  if (DATA) sampleWind(lon, lat, Date.now() / 1000, out);
+function windAt(lat, lon) {
+  const out = [0, 0]; if (DATA) sampleWind(lon, lat, Date.now() / 1000, out);
   const ms = Math.hypot(out[0], out[1]), from = (Math.atan2(-out[0], -out[1]) / D2R + 360) % 360;
-  return { ms, from, kmh: Math.round(ms * 3.6), dir: COMPASS[Math.round(from / 22.5) % 16], place: placeName(lat, lon), ok: !!DATA, south: lat < 0 };
+  return { ms, from, kmh: Math.round(ms * 3.6), dir: COMPASS[Math.round(from / 22.5) % 16], south: lat < 0 };
 }
+function readWind(x, y) { const lat = LAT(y), lon = LON(x); return { ...windAt(lat, lon), place: placeName(lat, lon), ok: !!DATA }; }
 // the standard station plot: a shaft pointing into the wind, feathers on the clockwise side (northern hemisphere),
 // half feather 5 kt, full 10 kt, pennant 50 kt; calm is a double circle
 function drawBarb(x, cx, cy, from, kt, ink, south = false) {
@@ -597,7 +600,7 @@ function drawBarb(x, cx, cy, from, kt, ink, south = false) {
   if (k >= 5) { if (pos === 0) pos = 3.6; const [px, py] = at(pos); x.beginPath(); x.moveTo(px, py); x.lineTo(px + fx * 4.8 + ux * 1.3, py + fy * 4.8 + uy * 1.3); x.stroke(); }
 }
 function makeReadout() {
-  const c = document.createElement('canvas'); c.style.cssText = 'position:fixed;left:0;top:0;width:230px;height:46px;pointer-events:none;will-change:transform,opacity;opacity:0;transition:opacity .3s ease';
+  const c = document.createElement('canvas'); c.className = 'ink'; c.style.cssText = 'position:fixed;left:0;top:0;width:230px;height:46px;pointer-events:none;will-change:transform';
   c.width = 230 * K; c.height = 46 * K; document.body.appendChild(c); c._key = ''; return c;
 }
 function paintReadout(c, r, flip = false) {
@@ -656,48 +659,70 @@ function icon(x, kind, cx, cy, s, ink, day) {
 const CW = 330, CH = 104;
 function makeCard() {
   const c = document.createElement('canvas');
-  c.style.cssText = `position:fixed;left:0;top:0;width:${CW}px;height:${CH}px;pointer-events:none;will-change:transform,opacity;opacity:0;transition:opacity .3s ease`;
+  c.className = 'ink'; c.style.cssText = `position:fixed;left:0;top:0;width:${CW}px;height:${CH}px;pointer-events:none;will-change:transform`;
   c.width = CW * K; c.height = CH * K; document.body.appendChild(c); c._key = ''; return c;
 }
 const rgbOf = a => `rgb(${a.map(v => Math.round(v * 255)).join(',')})`;
 // the report, inked straight onto the chart: no panel, just type in the map's own hand
 function paintCard(c, lat, lon) {
   const pk = lat.toFixed(4) + ',' + lon.toFixed(4); if (c._pk !== pk || !c._place) { c._pk = pk; c._place = placeName(lat, lon); }   // the nearest of 1,251 places: only when the card moves
-  const e = wxFor(lat, lon), d = e.d, place = c._place, t = localTime(Date.now(), d && d.w ? { off: d.w.utc_offset_seconds || 0, name: d.w.timezone || '' } : (DATA && DATA.tz));
-  const key = `${place}|${t}|${e.v || 0}|${dayF.toFixed(2)}|${inkF.toFixed(2)}`; if (key === c._key) return;
-  // a new place or a new report: the old words fade, the new ones come up (rewritten in place, they popped)
-  const major = `${place}|${e.v || 0}`;
-  if (c._key && c._major !== major && !c._dipAt) { c._dipAt = performance.now() + 280; return; }
+  const e = wxFor(lat, lon), d = e.d, place = c._place, has = !!(d && d.w && d.w.current);
+  const tz = has ? { off: d.w.utc_offset_seconds || 0, name: d.w.timezone || '' } : (DATA && DATA.tz);
+  let t = localTime(Date.now(), tz);
+  // a report over the sea keeps that point's own zone: beside the caption's clock an unmarked "17:30" read as a mistake
+  if (has && t !== localTime(Date.now(), DATA && DATA.tz)) { const z = tzAbbr(tz); if (z) t += ' ' + z; }
+  // no report (the weather service busy, or its per-minute limit): the card still says what the air is doing here, from
+  // the same forecast grid the streaks ride (a lone "no report just now" read as a broken widget)
+  const fb = !has && DATA ? windAt(lat, lon) : null;
+  const key = `${place}|${t}|${e.v || 0}|${fb ? fb.dir + fb.kmh : ''}|${dayF.toFixed(2)}|${inkF.toFixed(2)}`; if (key === c._key) { c._for = [lat, lon]; return; }
+  // a new place or a new report: the old words are wiped off, the new ones inked on (rewritten in place, they popped)
+  const major = `${place}|${e.v || 0}|${has}|${!!fb}`;
+  if (c._key && c._major !== major && !c._dipAt) { c._dipAt = performance.now() + 400; return; }   // (as long as the wipe takes)
   if (c._dipAt && performance.now() < c._dipAt) return;
-  c._dipAt = 0; c._major = major; c._key = key;
+  c._dipAt = 0; c._major = major; c._key = key; c._for = [lat, lon];
   const x = c.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); x.clearRect(0, 0, CW, CH);
   const ink = rgbOf(PAL.ink), soft = `rgba(${PAL.ink.map(v => Math.round(v * 255)).join(',')},.68)`;
+  let tw = 0; const ft = (s, X, Y) => { x.fillText(s, X, Y); tw = Math.max(tw, X + x.measureText(s).width); };   // how far the words reach: the wind is knocked out under them
   x.textBaseline = 'alphabetic'; x.fillStyle = ink;
   x.shadowColor = `rgba(${PAL.bg.map(v => Math.round(v * 255)).join(',')},.95)`; x.shadowBlur = 5;      // a cartographer's halo, so map labels never fight it
-  x.font = `11px ${SERIF}`; x.letterSpacing = '2.2px'; x.fillText(`${place.toUpperCase()}  ·  ${t}`, 0, 13);
+  x.font = `11px ${SERIF}`; x.letterSpacing = '2.2px'; ft(`${place.toUpperCase()}  ·  ${t}`, 0, 13);
   x.letterSpacing = '0px';
-  if (!d || !d.w || !d.w.current) { x.fillStyle = soft; x.font = `italic 11px ${SERIF}`; x.fillText(e.busy ? 'reading the weather…' : 'no report just now', 0, 34); return; }
+  if (!has) {
+    if (fb) { drawBarb(x, 28, 46, fb.from, fb.ms * 1.944, ink, fb.south);
+      x.fillStyle = ink; x.font = `12px ${SERIF}`; x.letterSpacing = '.5px'; ft(fb.ms < 1.3 ? 'calm' : `${fb.dir} · ${fb.kmh} km/h`, 62, 43);
+      x.letterSpacing = '0px'; x.fillStyle = soft; x.font = `italic 10.5px ${SERIF}`; ft('surface wind, from the forecast', 62, 57); c._th = 76; }
+    else c._th = 18;                                                     // nothing to say yet: the place and the time, like a label
+    c._tw = tw; return;
+  }
   const cu = d.w.current, [cond, kind] = WMO(cu.weather_code), dl = d.w.daily, hr = d.w.hourly;
   icon(x, kind, 11, 37, 13, ink, cu.is_day === 1);
-  x.fillStyle = ink; x.font = `30px ${SERIF}`; const T = `${Math.round(cu.temperature_2m)}°`; x.fillText(T, 28, 47);
-  const tw = x.measureText(T).width;
-  x.font = `italic 13px ${SERIF}`; x.fillText(cond.toLowerCase(), 36 + tw, 36);
+  x.fillStyle = ink; x.font = `30px ${SERIF}`; const T = `${Math.round(cu.temperature_2m)}°`; ft(T, 28, 47);
+  const Tw = x.measureText(T).width;
+  x.font = `italic 13px ${SERIF}`; ft(cond.toLowerCase(), 36 + Tw, 36);
   x.font = `11px ${SERIF}`; x.fillStyle = soft;
-  x.fillText(`feels ${Math.round(cu.apparent_temperature)}° · high ${Math.round(dl.temperature_2m_max[0])}° low ${Math.round(dl.temperature_2m_min[0])}°`, 36 + tw, 50);
+  ft(`feels ${Math.round(cu.apparent_temperature)}° · high ${Math.round(dl.temperature_2m_max[0])}° · low ${Math.round(dl.temperature_2m_min[0])}°`, 36 + Tw, 50);
   const dir = COMPASS[Math.round(cu.wind_direction_10m / 22.5) % 16];
-  x.fillText(`wind ${dir} ${Math.round(cu.wind_speed_10m)} km/h, gusts ${Math.round(cu.wind_gusts_10m)} · humidity ${cu.relative_humidity_2m}% · ${Math.round(cu.pressure_msl)} hPa`, 0, 69);
-  let y2 = 85, line = '';
+  ft(`wind ${dir} ${Math.round(cu.wind_speed_10m)} km/h · gusts ${Math.round(cu.wind_gusts_10m)} · humidity ${cu.relative_humidity_2m}% · ${Math.round(cu.pressure_msl)} hPa`, 0, 69);
+  let y2 = 85;
   const aq = d.q && d.q.current ? d.q.current : null, cat = AQI(aq ? aq.us_aqi : null);
   if (cat) { x.fillStyle = cat[1]; x.beginPath(); x.arc(3.5, y2 - 3.5, 3.2, 0, 7); x.fill(); x.fillStyle = soft;
-    x.fillText(`air ${Math.round(aq.us_aqi)} AQI, ${cat[0].toLowerCase()} · PM2.5 ${Math.round(aq.pm2_5)}`, 11, y2); y2 += 16; }
+    ft(`air ${Math.round(aq.us_aqi)} AQI · ${cat[0].toLowerCase()} · PM2.5 ${Math.round(aq.pm2_5)}`, 11, y2); y2 += 16; }
   const parts = []; for (let k = 1; k <= Math.min(5, hr.time.length - 1); k++) { const pp = hr.precipitation_probability[k]; parts.push(`${hr.time[k].slice(11, 13)}h ${Math.round(hr.temperature_2m[k])}°${pp >= 30 ? ` (${pp}% rain)` : ''}`); }
-  x.fillText(parts.join('   '), 0, y2);
+  ft(parts.join('   '), 0, y2);
+  c._tw = tw; c._th = y2 + 5;
 }
-const cards = new Map();
+const cards = new Map(), leaving = [];
 // where a window's report may sit, relative to the window: above or below it, at its left or its right edge
 const CARD_SPOTS = [[0, 0], [0, 1], [1, 0], [1, 1]];
 const hitR = (a, b, m = 0) => a[0] < b[2] + m && a[2] > b[0] - m && a[1] < b[3] + m && a[3] > b[1] - m;
+// the words on the chart (the caption, each report as far as it's inked on), for the knock-out under them
+const KNOCK = new Float32Array(40), KNOCK_A = new Float32Array(10); let nKnock = 0, CAP_BOX = null, AREA_T = 0;   // AREA_T: the menu bar's foot (the host's "area")
+const knock = (l, t, r, b, a) => { if (nKnock >= 10 || a < .01) return; KNOCK.set([l, t, r, b], nKnock * 4); KNOCK_A[nKnock++] = a; };
+let cardsT = 0;
 function stepCards(now) {
+  const dt = cardsT ? Math.min(.1, (now - cardsT) / 1000) : 0; cardsT = now; const ke = 1 - Math.exp(-dt * 9);
+  nKnock = 0;
+  if (CAP_BOX) { const ox = capLeft ? 0 : W - 420, oy = H - 96; knock(ox + CAP_BOX[0], oy + CAP_BOX[1], ox + CAP_BOX[2], oy + CAP_BOX[3], 1); }
   const seen = new Set(), R = wins.map(w => [w.tx, w.ty, w.tx + w.tw, w.ty + w.th]);
   const placed = DESK.n > 1 && DESK.i !== 0 ? [] : [capLeft ? [0, H - 72, 420, H] : [W - 420, H - 72, W, H]];   // (clear of the caption's words too)
   // the biggest windows choose first; each report keeps its spot while that stays clear, else takes the first clear one,
@@ -705,15 +730,18 @@ function stepCards(now) {
   // on top of another report or half under a window (both happened)
   for (const w of wins.filter(w => w.tw >= 260 && w.th >= 200).sort((a, b) => b.tw * b.th - a.tw * a.th)) {
     seen.add(w);
-    let c = cards.get(w); if (!c) { c = makeCard(); c._still = now; c._new = true; cards.set(w, c); }
+    let c = cards.get(w); if (!c) { c = makeCard(); c._still = now; c._new = true; c._rv = 0; cards.set(w, c); }
     // (still easing, or the window itself moving: under the hand it's drawn exactly where it is, so it never lags)
     const moving = Math.abs(w.x - w.tx) + Math.abs(w.y - w.ty) > .5 || c._was !== `${w.tx},${w.ty}`; c._was = `${w.tx},${w.ty}`;
     if (moving) c._still = now;
     // the report is for the place under the window; asked for once the window has settled
     if (now - c._still > 500 || !c._key || c._dipAt) { if (!c._polled || now - c._polled > 5000) { c._polled = now; c._key += '~'; } paintCard(c, LAT(w.y + w.h / 2), LON(w.x + w.w / 2)); }
+    // a report for where the window was (a big jump: out of full screen, or dragged across the country) stays off the
+    // chart until it's rewritten for where the window is now (it showed the old place for a second, then swapped)
+    const stale = !c._for || Math.abs(c._for[0] - LAT(w.ty + w.th / 2)) > GS || Math.abs(c._for[1] - LON(w.tx + w.tw / 2)) > GS;
     const at = (k, x0, y0, ww, hh) => { const [r, b] = CARD_SPOTS[k], x = clamp(r ? x0 + ww - CW - 4 : x0 + 4, 8, W - CW - 8), y = b ? y0 + hh + 12 : y0 - CH - 6; return [x, y]; };
     const fits = k => { const [x, y] = at(k, w.tx, w.ty, w.tw, w.th), box = [x, y, x + CW, y + CH];
-      return y >= 8 && y + CH <= H - 8 && !R.some(o => hitR(box, o, 4)) && !placed.some(o => hitR(box, o, 6)) && !onIcon(x, y, x + CW, y + CH); };
+      return y >= AREA_T + 8 && y + CH <= H - 8 && !R.some(o => hitR(box, o, 4)) && !placed.some(o => hitR(box, o, 6)) && !onIcon(x, y, x + CW, y + CH); };   // (never up under the menu bar)
     let k = c._spot != null && fits(c._spot) ? c._spot : CARD_SPOTS.findIndex((_, i) => fits(i));
     const show = k >= 0; if (!show) k = c._spot ?? 0;
     const [tx, ty] = at(k, w.x, w.y, w.w, w.h);
@@ -724,11 +752,18 @@ function stepCards(now) {
     let x = tx, y = ty;
     if (c._glide) { const u = Math.min(1, (now - c._glide.t0) / 380), e = 1 - (1 - u) ** 3; x = c._glide.x + (tx - c._glide.x) * e; y = c._glide.y + (ty - c._glide.y) * e; if (u >= 1) c._glide = null; else window.__twSettle && window.__twSettle(150); }
     c._at = [x, y];
+    const want = show && !c._dipAt && !stale;
+    if (c._new) c._new = false; else if (c._on !== want) { c._on = want; c.classList.toggle('on', want); }   // (a new card is inked on from its second frame)
+    // as it's inked on it settles the last few px toward its window, as if set down beside it
+    c._rv += ((c._on ? 1 : 0) - c._rv) * ke; y += (1 - c._rv) * 4 * (CARD_SPOTS[k][1] ? -1 : 1);
+    c._px = [x, y];
     c.style.transform = `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0)`;
-    const want = show && !c._dipAt ? '1' : '0';
-    if (c._new) c._new = false; else if (c.style.opacity !== want) c.style.opacity = want;   // (a new card shows from its second frame: it fades in)
+    if (c._tw) knock(x - 6, y - 4, x + c._tw + 6, y + c._th + 4, c._rv);
   }
-  for (const [w, c] of cards) if (!seen.has(w)) { cards.delete(w); c.style.opacity = 0; setTimeout(() => c.remove(), 700); }
+  for (const [w, c] of cards) if (!seen.has(w)) { cards.delete(w); c._on = false; c.classList.remove('on'); leaving.push(c); }
+  // a closed window's report is wiped off, and the wind comes back under it as it goes
+  for (let i = leaving.length - 1; i >= 0; i--) { const c = leaving[i]; c._rv -= c._rv * ke;
+    if (c._rv < .01) { c.remove(); leaving.splice(i, 1); } else if (c._tw && c._px) knock(c._px[0] - 6, c._px[1] - 4, c._px[0] + c._tw + 6, c._px[1] + c._th + 4, c._rv); }
 }
 
 /* ======================= cursor: a station plot that rides the pointer over the map ======================= */
@@ -738,27 +773,28 @@ function stepCursor(now) {
   if (!curRead) curRead = makeReadout();
   const over = cur.on && !wins.some(w => cur.x > w.tx && cur.x < w.tx + w.tw && cur.y > w.ty && cur.y < w.ty + w.th) && !onIcon(cur.x - 4, cur.y - 4, cur.x + 4, cur.y + 4);
   if (over) {
-    const flip = cur.x > W - 240;                                       // near the right edge the words go to the left; the barb stays on the pointer
-    const tx = flip ? cur.x - 207 : cur.x - 23, ty = clamp(cur.y - 23, -23, H - 23);
+    const flip = cur.x > W - 240;                                       // near the right edge the words go to the left
+    // the station circle sits just past the pointer's arrow, not under its tip (the arrow hid the circle and the shaft's root)
+    const tx = flip ? cur.x - 207 + 14 : cur.x - 23 + 14; let ty = cur.y - 23 + 22;
+    // and off a report or the caption: above the pointer instead, when below would run into one
+    const hits = y => { for (let i = 0; i < nKnock; i++) if (KNOCK_A[i] > .3 && tx < KNOCK[i * 4 + 2] && tx + 230 > KNOCK[i * 4] && y < KNOCK[i * 4 + 3] && y + 46 > KNOCK[i * 4 + 1]) return true; return false; };
+    if (hits(ty) && !hits(cur.y - 50)) ty = cur.y - 50;
+    ty = clamp(ty, AREA_T + 2, H - 46);
     paintReadout(curRead, readWind(cur.x, cur.y), flip);
     curRead.style.transform = `translate3d(${tx.toFixed(1)}px,${ty.toFixed(1)}px,0)`;
   }
-  const want = over ? '1' : '0'; if (curRead.style.opacity !== want) curRead.style.opacity = want;
+  if (curRead._on !== over) { curRead._on = over; curRead.classList.toggle('on', over); }
 }
 
 /* ======================= render ======================= */
 const full = () => { gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3); };
-function simUniforms(p, dt) {
-  gl.uniform2f(p.u.uGrid, GW, GH); gl.uniform1f(p.u.uCell, CELL); if (p.u.uDt) gl.uniform1f(p.u.uDt, dt); gl.uniform2f(p.u.uRes, W, H);
-  if (p.u.uR) { gl.uniform4fv(p.u.uR, uR); gl.uniform2fv(p.u.uRV, uRV); gl.uniform1i(p.u.uN, nR); }
-}
 function bindT(p, list) { list.forEach(([n, t], i) => { if (p.u[n] !== undefined) { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, t); gl.uniform1i(p.u[n], i); } }); }
 let seed = 0;
 function render(dt) {
   gl.disable(gl.BLEND);
   // particles ride the real wind; nothing on your desktop bends it
   gl.viewport(0, 0, PW, PH); gl.bindFramebuffer(gl.FRAMEBUFFER, Pfx[1 - pj]); gl.useProgram(PSTEP);
-  gl.uniform2f(PSTEP.u.uGrid, GW, GH); gl.uniform1f(PSTEP.u.uCell, CELL); if (PSTEP.u.uDt) gl.uniform1f(PSTEP.u.uDt, dt); gl.uniform2f(PSTEP.u.uRes, W, H); if (PSTEP.u.uN) gl.uniform1i(PSTEP.u.uN, 0);
+  gl.uniform2f(PSTEP.u.uGrid, GW, GH); gl.uniform1f(PSTEP.u.uCell, CELL); if (PSTEP.u.uDt) gl.uniform1f(PSTEP.u.uDt, dt); gl.uniform2f(PSTEP.u.uRes, W, H);
   bindT(PSTEP, [['uP', Ptx[pj]], ['uT', Tt]]); gl.uniform1f(PSTEP.u.uSeed, (seed = (seed + 1) % 9973)); full();
   // trails: fade what's there, then lay this frame's segments on top
   gl.viewport(0, 0, trailT.w, trailT.h); gl.bindFramebuffer(gl.FRAMEBUFFER, trailF);
@@ -775,6 +811,7 @@ function render(dt) {
   gl.useProgram(COMP); bindT(COMP, [['uTrail', trailT], ['uMap', mapT], ['uHalo', haloT]]);
   gl.uniform1f(COMP.u.uDayF, inkF);                                  // the shader's weights are for light ink or dark ink
   { const UW = DESK.uw || W, UH = DESK.uh || H; gl.uniform4f(COMP.u.uWorld, (DESK.x || 0) / UW, (DESK.y || 0) / UH, W / UW, H / UH); }
+  gl.uniform2f(COMP.u.uRes, W, H); gl.uniform4fv(COMP.u.uCard, KNOCK); gl.uniform1fv(COMP.u.uCardA, KNOCK_A); gl.uniform1i(COMP.u.uNC, nKnock);
   for (const [u, key] of [['uBg', 'bg'], ['uLand', 'land'], ['uLine', 'line'], ['uFast', 'fast'], ['uGrat', 'grat'], ['uInk', 'ink']]) gl.uniform3fv(COMP.u[u], PAL[key]);
   full();
 }
@@ -798,17 +835,18 @@ function loop0(now) {
 }
 
 /* ======================= boot + host protocol ======================= */
-function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; project(); const c = loadCache(); if (c) DATA = c; buildTargets(); palette(); paintHalo(); paintMap(); drawCaption(); placeCaption(); }
+function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; project(); const c = loadCache(); if (c) DATA = c; buildTargets(); palette(); paintMap(); paintHalo(); drawCaption(); placeCaption(); }   // (the halo reads the names the map just placed)
 const handle = m => {
   if (m.t === 'desk') { DESK = m; deskSeen(); if (booted) build(); return; }
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
+  if (m.t === 'area') { AREA_T = m.r[1] / K; return; }                  // the part of the screen below the menu bar
   if (m.t === 'cursor' && m.w) { cur.on = false; return; }            // over one of your windows (dragging it by its title bar, say): no reading of the air behind it
   if (m.t === 'cursor') { const x = m.x / K, y = m.y / K, t = performance.now(), dt = Math.max(8, t - cur.t) / 1000;
     if (cur.on) { cur.vx = cur.vx * .5 + (x - cur.x) / dt * .5; cur.vy = cur.vy * .5 + (y - cur.y) / dt * .5; }
     cur.x = x; cur.y = y; cur.t = t; cur.on = true; return; }
   if (m.t === 'cursorOff') { cur.on = false; return; }
   if (m.t === 'dicons') { const k = [m.r].join('|'); if (k === iconKey) return; iconKey = k;   // your desktop icons: haloed, and the map lettered round them
-    deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]); if (booted) { paintHalo(); paintMap(); placeCaption(); } return; }
+    deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]); if (booted) { paintMap(); paintHalo(); placeCaption(); } return; }
   if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
     setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
 };
