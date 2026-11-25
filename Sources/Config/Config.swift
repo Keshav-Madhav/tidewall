@@ -15,7 +15,7 @@ enum Cfg {
     }
     d.set(true, forKey: "migrated.driftland")
     // Driftland opened at login: Tidewall does now
-    if Bundle.main.bundleIdentifier != nil && !benchMode && FileManager.default.fileExists(atPath: LoginItem.oldPlist.path) {
+    if Bundle.main.bundleIdentifier != nil && !benchMode && FileManager.default.fileExists(atPath: LoginItem.oldPlists[0].path) {
       LoginItem.set(true)
     }
   }

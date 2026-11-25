@@ -72,9 +72,10 @@ private func runPrintCommands() {
     print("---- issue URL ----\n" + ProblemReport.issueURL().absoluteString)
     exit(0)
   }
+  if args.contains("--login-item-status") { print(LoginItem.status); exit(0) }
+  if args.contains("--remove-login-item") { print(LoginItem.set(false) ?? "off"); exit(0) }
   if args.contains("--install-login-item") {
-    LoginItem.set(true)
-    print(LoginItem.plist.path)
+    print(LoginItem.set(true) ?? (LoginItem.blocked ? "on, waiting for System Settings ▸ Login Items" : "on: Open at Login"))
     exit(0)
   }
 }

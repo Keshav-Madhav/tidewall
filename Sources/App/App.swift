@@ -36,8 +36,10 @@ final class App: NSObject, NSApplicationDelegate {
   var tunnelTimer: Timer?
   private var idleTimer: Timer?
   private var signalSources: [DispatchSourceSignal] = []
+  private var atLogin = false
 
   func applicationDidFinishLaunching(_ n: Notification) {
+    atLogin = LoginItem.launchedAtLogin(NSAppleEventManager.shared().currentAppleEvent)   // (the launch event is current only now)
     if !benchMode { updater.launching() }
     startUsageMeter()
     if let a = argValue("--appearance") { NSApp.appearance = NSAppearance(named: a == "light" ? .aqua : .darkAqua) }
@@ -189,7 +191,7 @@ final class App: NSObject, NSApplicationDelegate {
     buildMainMenu { [weak self] in self?.appWindow.show(page: "about") }
     if Mover.offerIfNeeded() { return }   // opened from Downloads: moves to Applications and reopens from there
     // opened by hand, not at login (or for the first time): show the window
-    if !args.contains("--background") || !Cfg.d.bool(forKey: "welcomed") {
+    if !(args.contains("--background") || atLogin) || !Cfg.d.bool(forKey: "welcomed") {
       Cfg.d.set(true, forKey: "welcomed")
       appWindow.show()
     }
