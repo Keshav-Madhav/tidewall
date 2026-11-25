@@ -37,6 +37,7 @@ final class App: NSObject, NSApplicationDelegate {
   private var idleTimer: Timer?
   private var signalSources: [DispatchSourceSignal] = []
   private var atLogin = false
+  var memBaseline: [Int: Double] = [:]   // each wall page process's size once settled (App+Memory)
 
   func applicationDidFinishLaunching(_ n: Notification) {
     atLogin = LoginItem.launchedAtLogin(NSAppleEventManager.shared().currentAppleEvent)   // (the launch event is current only now)
@@ -122,6 +123,7 @@ final class App: NSObject, NSApplicationDelegate {
       tick += 1
       if tick % 10 == 1 { checkPower() }
       let quiet = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+      memoryTick(tick, quiet: quiet)
       let limit = testLimit ?? Cfg.idleMinutes * 60
       let rest = limit > 0 && quiet > limit
       if rest != idleRest {

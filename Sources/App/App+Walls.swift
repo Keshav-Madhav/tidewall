@@ -44,7 +44,7 @@ extension App {
       still.close()
       if self?.stills[id] === still { self?.stills[id] = nil }
     }
-    w.onShown = dropStill
+    w.onShown = { log("screen \(id): new page drawn, its still picture let go"); dropStill() }
     DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
       if self?.stills[id] === still {
         w.window.alphaValue = 1
@@ -54,17 +54,39 @@ extension App {
   }
 
   func reloadAll() {
-    walls.values.forEach { $0.close() }
-    walls = [:]
     comeBackIfAway()
-    buildWalls()
+    freshPages(Array(walls.keys))
   }
 
   func reloadWall(_ id: CGDirectDisplayID) {
-    walls[id]?.close()
-    walls[id] = nil
     comeBackIfAway()
-    buildWalls()
+    freshPages([id])
+  }
+
+  /// New pages for these displays, handed over like coming back from away: each display's last frame stays up as a
+  /// still picture until its new page has drawn, never your bare desktop between them. The old page stays until its
+  /// picture is taken (a page that can't give one, a crashed one, goes after 2 s without).
+  func freshPages(_ ids: [CGDirectDisplayID]) {
+    var missing = false
+    for id in ids {
+      guard let w = walls[id] else { missing = true; continue }
+      guard w.ready, w.seenSince != nil else { walls[id] = nil; w.close(); missing = true; continue }
+      var done = false
+      let finish: (NSImage?) -> Void = { [weak self] img in
+        guard let self, !done else { return }
+        done = true
+        if let img, walls[id] === w {
+          stills[id]?.close(); stills[id] = StillWall(frame: w.window.frame, image: img)
+          log("screen \(id): fresh page, its last frame stays up until the new one draws")
+        }
+        if walls[id] === w { walls[id] = nil }
+        w.close()
+        buildWalls()
+      }
+      w.web.takeSnapshot(with: nil) { img, _ in finish(img) }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2) { finish(nil) }
+    }
+    if missing { buildWalls() }
   }
 
   /// A theme changed somewhere: worlds may have grown or shrunk, so every page hears its desk again.
