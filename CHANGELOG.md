@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1]
+
+### Fixed
+- Open at login is now an ordinary login item: System Settings ▸ General ▸ Login Items lists Tidewall under Open at
+  Login, like any app you open at login. Before, macOS filed it under "Allow in the Background" and said Tidewall could
+  run in the background, as if it went on after you quit (it never did). If it was on, it stays on.
+
 ## [1.4.0]
 
 ### Optimize for
