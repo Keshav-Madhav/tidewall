@@ -317,7 +317,7 @@ function computeField(rects, reg = null, base = null) {
   const sig = P.sigma, is1 = 1 / (sig * sig);
   const wa = P.warp * 2.2, wmax = wa * 0.5;
   for (const r of rects) {
-    const R = 5.5 * sig + Math.max(r.hw, r.hh) + wmax;
+    const wk = r.wk || 1, R = 5.5 * sig + Math.max(r.hw, r.hh) + wmax * wk;
     const gx0 = Math.max(rx0, Math.floor((r.cx - R) / STEP)), gx1 = Math.min(rx1, Math.ceil((r.cx + R) / STEP));
     const gy0 = Math.max(ry0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(ry1, Math.ceil((r.cy + R) / STEP));
     // Tidewall: windows are big — put the cloud / sand edge just *outside* the window (+ margin), not inside it.
@@ -325,7 +325,7 @@ function computeField(rects, reg = null, base = null) {
     const chw = Math.max(r.hw - 0.8 * sig, r.hw * 0.25), chh = Math.max(r.hh - 0.8 * sig, r.hh * 0.25);
     for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
       const i = gy * Gw + gx;
-      const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
+      const qx = gx * STEP + NZ.wx[i] * wa * wk, qy = gy * STEP + NZ.wy[i] * wa * wk;
       let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
       if (dx < 0) dx = 0; if (dy < 0) dy = 0;
       f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
@@ -451,7 +451,9 @@ void main() {
   // 喷绘颗粒：约 1.3px 的随机点（静止，像印刷纸面上的颗粒）
   vec2 gp = floor(p * (0.78 * max(uScale, 1.0)));   // 按屏幕的实际像素取颗粒（高分屏上不会变成一块块的小方块）
   // 用 hash2：旧 hash 对整数坐标每几十像素循环一次，最亮的颗粒会排成一格格的点阵
-  float g1 = hash2(gp + 0.5), g2 = hash2(gp + 7.3);
+  // (never exactly 0: the hash lands on 0.0 for about one pixel in 4000, and step(g, 0.) then painted a fixed white
+  // speck wherever nothing was drawn — the "dead pixels" scattered over the open water in every still)
+  float g1 = hash2(gp + 0.5) * 0.9998 + 1e-4, g2 = hash2(gp + 7.3) * 0.9998 + 1e-4;
   float gAmt = uGrain;
 
   float s0 = mix(fieldS(uFA, p), fieldS(uFB, p), uMix);
@@ -481,8 +483,8 @@ void main() {
   // 岸线一拐弯探的方向变得快，前沿就出现台阶和缺口
   // sW：薄水层用的"离岸距离"。往岸上走，岸线急拐弯处的等距线会收成尖角（湿痕、水膜前沿出现楔形），
   // 所以用周围 10px 的平均值把尖角磨圆；贴着水边时仍用原值，水膜和岸线对得上
-  float shoreE = 0.0, sW = s;
-  if (s < 4.0 && s > -uSigma * 0.78 - 12.0) {         // 只有薄水冲得到的那一条沙滩需要（再往里的干沙不用算）
+  float shoreE = 0.0, sW = s, inletK = 1.0;
+  if (s < 4.0 && s > -uSigma * 0.78 - 64.0) {         // 只有薄水冲得到的那一条沙滩需要（再往里的干沙不用算） (Tidewall: and the damp sand fading out past it)
     // 法线也用前后左右的差来算：dFdx 在场纹理每个 5px 格子边上会跳，拐角处探的位置跟着跳
     #define SF(q) mix(fieldS(uFA, q), fieldS(uFB, q), uMix)
     float fR = SF(p + vec2(10.0, 0.0)), fL = SF(p - vec2(10.0, 0.0)), fD = SF(p + vec2(0.0, 10.0)), fU = SF(p - vec2(0.0, 10.0));
@@ -492,6 +494,10 @@ void main() {
     float eIn = SF(sp - n10 * 45.0), eOut = SF(sp + n10 * 70.0);
     shoreE = ss(2.0, -18.0, eIn) * ss(25.0, 70.0, eOut);
     sW = mix(s, (fR + fL + fD + fU) * 0.25 + (s - s0), ss(-2.0, -16.0, s));
+    // Tidewall: the head of a narrow inlet (land 45 px to either side along the shore): the swash line there ran on up
+    // the inlet's sides as a lone white scratch on dry sand. A wave front needs water beside it on at least one side
+    vec2 tg = vec2(-n10.y, n10.x);
+    inletK = max(ss(-4.0, 12.0, SF(sp + tg * 45.0 + n10 * 14.0)), ss(-4.0, 12.0, SF(sp - tg * 45.0 + n10 * 14.0)));
   }
 
   vec3 col;
@@ -507,7 +513,7 @@ void main() {
     col *= 1.0 + (N(p + drift * 4.0, 1600.0).r - 0.5) * 0.07 * ss(0.0, uShoal + 40.0, s);
     // 阳光反光点：两层大小不同、互相旋转错开的格子，每格随机放一个点（位置、大小、闪烁节奏都随机），
     // 再按大尺度噪声成片聚集 → 看不出格子
-    float glitter = ss(0.32, 0.72, N(p + drift * 3.0, 520.0).g) * deepK;
+    float glitter = ss(0.45, 0.8, N(p + drift * 3.0, 520.0).g) * deepK;   // Tidewall: only in the patches, so open water stays clean in a still
     float spark = 0.0;
     for (int L = 0; L < 2; L++) {
       float fl = float(L), cs = L == 0 ? 23.0 : 37.0;
@@ -519,10 +525,13 @@ void main() {
       vec2 c = 0.15 + 0.7 * vec2(hash2(seedc + 1.3), hash2(seedc + 2.9));
       float life = fract(t * (0.3 + 0.35 * hash2(seedc + 8.1)) + hash2(seedc + 5.7));
       float tw = ss(0.0, 0.1, life) * (1.0 - ss(0.2, 0.45, life));
-      float r = 0.7 + 0.9 * hash2(seedc + 3.3);
-      spark = max(spark, (1.0 - ss(r * 0.5, r * 1.5, length((f - c) * cs))) * tw);
+      // Tidewall: a glint is a short dash laid along the sun's path, not a lone white pixel (in a still those read as dead
+      // pixels or stars)
+      float r = 0.8 + 0.6 * hash2(seedc + 3.3);
+      vec2 dq = rot(0.35) * ((f - c) * cs) / vec2(2.6, 0.75);
+      spark = max(spark, (1.0 - ss(r * 0.5, r * 1.3, length(dq))) * tw);
     }
-    col = mix(col, vec3(0.95, 1.0, 1.0), spark * 0.85);
+    col = mix(col, vec3(0.95, 1.0, 1.0), spark * 0.6);
 
     // 透明浅滩：水浅到能看见沙底，越往外越被青绿色盖住（过渡同样用颗粒喷出来）
     float shoal = uShoal;
@@ -584,8 +593,12 @@ void main() {
     // Tidewall: painted sand, sampled twice at different scales and angles and blended by slow noise (no visible tile),
     // softened toward the theme's own sand colour so it sits with the water's palette
     vec3 sA = texture(uSand, p / 700.0).rgb, sB = texture(uSand, mat2(0.92, 0.39, -0.39, 0.92) * p / 980.0 + 0.41).rgb;
-    vec3 dry = mix(mix(sA, sB, ss(0.3, 0.7, N(p + 29.0, 1400.0).g)), sandRamp((g1 - 0.5) * 0.1 * gAmt), 0.35);
-    col = mix(dry, WETSAND, wet * 3.0);
+    vec3 dry = mix(mix(sA, sB, ss(0.3, 0.7, N(p + 29.0, 1400.0).g)), sandRamp((g1 - 0.5) * 0.1 * gAmt), 0.5) * vec3(1.01, 1.0, 0.965);
+    // Tidewall: the sand the waves keep damp shades off into the dry over 30-40 px of ragged distance, not at one line
+    // that follows the window's outline at a fixed distance (the dry sand read as a second, pinker shore inside the first)
+    float reachHere = min(uRunup * 0.25 * shoreE, uSigma * 0.78);
+    float damp = ss(-reachHere - 34.0 - 22.0 * N(p, 260.0).r, -reachHere * 0.6, s) * 0.45;
+    col = mix(dry, WETSAND, max(wet * 3.0, damp));
     col *= 1.0 - 0.05 * ss(0.4, 0.8, N(p, 900.0).r) * (1.0 - wet);               // 干沙上极轻的大块明暗
   }
 
@@ -593,7 +606,8 @@ void main() {
   // 同时有 3 层：各自推进 → 停住 → 回落，最高点各不相同；前沿一道颗粒白边，退去后留下慢慢消失的湿痕
   // 冲得再高也不淹到图标：图标边缘大约在 s ≈ -离岸距离 处，留出余量
   // ×0.25：开阔岸边冲浪幅度 120 时约冲上 30px，和原来（按像素位置探能量时实际达到的）一样
-  float reachBase = min(uRunup * 0.25 * shoreE * (0.85 + 0.3 * N(p, 900.0).g), uSigma * 0.78);
+  // (and it varies slowly along the coast, so the furthest crests don't all stop on one contour echoing the window)
+  float reachBase = min(uRunup * 0.25 * shoreE * (0.85 + 0.3 * N(p, 900.0).g), uSigma * 0.78) * clamp(0.5 + 0.75 * N(p + 71.0, 560.0).b, 0.55, 1.0);
   // 薄水、湿痕不在岸线处一刀切：往海里再延伸一段、慢慢淡出（开阔岸边才有，小水塘里没有浪）
   float wk = (1.0 - ss(2.0, 38.0, s)) * mix(1.0, energy, ss(2.0, 10.0, s));
   if ((s < 4.0 && reachBase > 0.5) || (s >= 4.0 && wk > 0.01)) {
@@ -628,12 +642,14 @@ void main() {
     for (int j = 2; j >= 0; j--) {
       float front = layers[j].x, a = layers[j].y, amp = layers[j].z;
       float cov = ss(front - 1.0, front + layers[j].w, sW);
-      float lace = laceNet * cov * ss(0.4, 0.6, a) * (1.0 - ss(0.7, 1.4, a)) * wk;
+      // Tidewall: lace only in a thin strip just behind the edge of the newest wave as it draws back (spread over the
+      // whole band by all three layers it read as cracked mud)
+      float lace = laceNet * ss(0.5, 0.6, a) * (1.0 - ss(0.8, 0.95, a)) * ss(-1.0, 2.0, sW - front) * (1.0 - ss(10.0, 18.0, sW - front)) * wk * inletK;
       col = mix(col, FOAM, lace * 0.75);
       float edgeK = a < 0.45 ? 1.0 : 1.0 - ss(0.45, 1.05, a);
       float d = sW - front;
-      float lineE = (1.0 - ss(0.8 * wv, 1.9 * wv, abs(d - 0.9 * wv))) * edgeK * onSand;    // 前沿白边
-      float sprayE = exp(-max(d, 0.0) / (5.0 * wv)) * cov * edgeK * 0.5 * onSand;         // 白边身后的颗粒水雾
+      float lineE = (1.0 - ss(0.8 * wv, 1.9 * wv, abs(d - 0.9 * wv))) * edgeK * onSand * inletK;    // 前沿白边
+      float sprayE = exp(-max(d, 0.0) / (5.0 * wv)) * cov * edgeK * 0.5 * onSand * inletK;         // 白边身后的颗粒水雾
       col = mix(col, FOAM, max(lineE * 0.95, step(g1, sprayE)));
     }
   }
@@ -643,6 +659,17 @@ void main() {
     if (float(i) >= uKayN) break;
     vec4 k = uKay[i]; float kf = floor(k.w / 6.2832 + 0.001) / 100.0; k.w = k.w - floor(k.w / 6.2832 + 0.001) * 6.2832;
     vec2 q = rot(-k.z) * (p - k.xy);
+    if (dot(q, q) > 10000.0) continue;
+    // Tidewall: a thin grain-dotted V of wake behind the stern, and a ring where each blade last dipped (it stays
+    // where it was made while the kayak slides on: ~9 px/s, the paddle beating at 2.4 rad/s)
+    {
+      float back = -q.x - 20.0, arm = abs(abs(q.y) - 0.35 * back);
+      float wake = (1.0 - ss(0.6, 1.6, arm)) * ss(0.0, 8.0, back) * (1.0 - ss(22.0, 60.0, back)) * 0.42;
+      float age = mod(k.w, 3.14159) / 2.4, side = mod(floor(k.w / 3.14159), 2.0) < 0.5 ? 1.0 : -1.0;
+      vec2 dip = vec2(0.5 - 9.0 * age, side * 13.5);
+      float ring = (1.0 - ss(0.5, 1.4, abs(length(q - dip) - (2.0 + 9.0 * age)))) * exp(-age * 2.2) * 0.8;
+      col = mix(col, FOAM, step(g2, max(wake, ring) * kf) * step(2.0, s));
+    }
     if (dot(q, q) > 900.0) continue;
     float sd = hullSD(q);
     vec2 pd = paddleSD(q, k.w);
@@ -776,14 +803,16 @@ function uploadField(i, Fd) {
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Gw, Gh, gl.RED, gl.HALF_FLOAT, d);
 }
 
-const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+// Tidewall: a window covering (nearly) the whole display is a maximised one: it makes no land, so letting go of it
+// doesn't uncover a screenful of desert framed by surf. Desktop-icon islands warp more (a long straight sand bar otherwise)
+const iconRects = () => icons.filter(ic => ic.w * ic.h < 0.9 * innerWidth * innerHeight).map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2, wk: ic.desk ? 1.8 : 1 }));
 // Tidewall: a window update recomputes only the part of this display it reaches (the rest of the world, which the
 // kayaks read, follows once things settle); and a new shape mid-morph carries on from where the coast is, at speed,
 // so the sand follows a dragged window instead of snapping to the last shape on every update
 let iconsLive = null;
 let laid = null, staleWorld = false, worldT = null, chase = false, pendingCommit = false, growing = false;
-const rectKey = r => `${Math.round(r.cx)},${Math.round(r.cy)},${Math.round(r.hw)},${Math.round(r.hh)}`;
-const reachOf = r => 5.5 * P.sigma + Math.max(r.hw, r.hh) + P.warp * 1.1 + STEP;   // as computeField's loops
+const rectKey = r => `${Math.round(r.cx)},${Math.round(r.cy)},${Math.round(r.hw)},${Math.round(r.hh)},${r.wk || 1}`;
+const reachOf = r => 5.5 * P.sigma + Math.max(r.hw, r.hh) + P.warp * 1.1 * (r.wk || 1) + STEP;   // as computeField's loops
 function mixAt(t) { const e = Math.min(Math.max((t - morphT0) / morphDur, 0), 1); return chase ? 1 - (1 - e) * (1 - e) : e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2; }
 function diffRects(a, b) {                                            // in one list and not the other, counting duplicates
   const n = new Map(); for (const r of b) { const k = rectKey(r); n.set(k, (n.get(k) || 0) + 1); }
@@ -1348,7 +1377,7 @@ function startHostedMode() {
     if (m.t === 'pause') { paused = PREVIEW ? false : m.v; Span.paused(!!paused); settlePaused(); if (!paused && !looping) { looping = true; requestAnimationFrame(frame); } return; }
     if (m.t === 'settings') { applySettings(m.v || {}); return; }
     if (m.t === 'dicons') { const k = window.devicePixelRatio || 1, P = 26;   // your desktop icons: one island for each cluster
-      deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX - P, y: t / k + OY - P, w: (r - l) / k + 2 * P, h: (b - t) / k + 2 * P }));
+      deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX - P, y: t / k + OY - P, w: (r - l) / k + 2 * P, h: (b - t) / k + 2 * P, desk: true }));
       if (lastIconsMsg) handle(lastIconsMsg); return; }
     if (m.t === 'desk') { const dk = [m.x, m.y, m.w, m.h, m.uw, m.uh, JSON.stringify(m.fr || [])].join('|'); if (dk === deskKey) return; deskKey = dk;
       Span.desk(m);
