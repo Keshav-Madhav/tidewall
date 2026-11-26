@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.4.3]
+
+### Every wall, polished
+Each wall was looked over in thirteen desktop situations (windows dragged, resized, hidden, many, tiny, full screen,
+icons, closing), fixed, and then checked side by side against 1.4.2 by reviewers who weren't told which was which,
+until every wall came out ahead.
+- Ink Map: names stay with their places, a renamed island never shows two names, the compass sails out into open sea,
+  fields keep off names and window edges, towns stay put; the map holds still when you leave full screen.
+- Marauders: towers, banners and street names stand where you can see them, not under your windows.
+- Gallery: paintings hang beside your windows (the wall was often bare), lit from below, and the wall is re-hung when
+  windows go.
+- Model Railway: cars drive round the village squares, footbridges over the trains, real station names, no ghost
+  board when you leave full screen.
+- Garden Plan: beds keep their flowers as they change, walks grow from nothing, gardeners use the gates.
+- Meadow: every window gets its cloud bank, the same on every load, and a bank shrinks from its edges.
+- Koi Reef: reefs retreat like a shoreline, koi swim at different depths, lily pads fit and follow their icons.
+- Beach: palms stay put and never stand in the sea, softer sand, no white specks over deep water.
+- Lava Lamp: a few big slow blobs and a lit pool.
+- Wind Map: report cards ink on and always say something, even with the weather service unreachable.
+- Wind Tunnel: icons no longer dam the air, and the model hangs where you can see it.
+- Celestial Atlas: names stay put and clear of windows, planet names keep off the title, a gold compass rose, and
+  windows bend the starlight very gently at their edges.
+
+### Snowfall
+- Your pointer is a little plough: drag it through snow and it heaps up ahead, flick it and the snow is thrown.
+- A closed window's snow all falls (a wide one used to lose half), and a deleted icon's snow falls too.
+- Snow sits on what you see: on a widget's card and on each icon's picture, not on the empty space round them.
+- A proper sleigh crosses the moon, and in the season, lights twinkle along the snow on your windows.
+
+### Smoother while you work
+- A wall you can see on another display while you work eases down slowly: in Balanced 18 fps after a minute, 12
+  after five, 8 after ten. (It dropped to 12 after 20 s, and looked choppy.)
+
 ## [1.4.2]
 
 ### Fixed
