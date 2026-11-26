@@ -303,9 +303,10 @@ function buildNoise() {
   }
 }
 let fieldMs = 0;
+const coreDepth = () => P.sigma * Math.sqrt(-Math.log(0.35));   // the field at a window's core, before the slope below
 function computeField(rects) {
   const t0 = performance.now();
-  const N = Gw * Gh, f1 = new Float32Array(N);
+  const N = Gw * Gh, f1 = new Float32Array(N), dep = new Float32Array(N);
   const sig = P.sigma, is1 = 1 / (sig * sig);
   const wa = P.warp * 2.2, wmax = wa * 0.5;
   for (const r of rects) {
@@ -319,15 +320,22 @@ function computeField(rects) {
       const i = gy * Gw + gx;
       const qx = gx * STEP - MG + NZ.wx[i] * wa, qy = gy * STEP - MG + NZ.wy[i] * wa;
       let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      if (dx < 0 && dy < 0) { const dd = Math.min(-dx, -dy); if (dd > dep[i]) dep[i] = dd; }   // how deep inside the core
       if (dx < 0) dx = 0; if (dy < 0) dy = 0;
       f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
     }
   }
   // 下限 = 计算范围边缘处的贡献值：范围内外算出的"离岸距离"一致，深海不会出现方框状的接缝
+  // Inside a window's core the field keeps going down with the depth (outside it rises 1 per px, inside it now falls 1
+  // per px): a field that was flat there crossed the cloud's edge everywhere at once as it blended away, so a closing
+  // or shrinking bank broke up from the middle into grass holes. Sloped, it retreats from its edges and stays whole.
+  // (Hidden under the window at rest: the core ends 0.8σ inside it.)
+  // The shader and the puffs read it no deeper than the old flat floor (coreDepth), so a bank looks as it did; only
+  // when and where it crosses the edge changes.
   const c0 = Math.sqrt(-Math.log(0.35)), s = new Float32Array(N), fMin = Math.exp(-30);
   for (let i = 0; i < N; i++) {
     const g = Math.log(Math.max(f1[i], fMin));
-    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0);
+    s[i] = sig * (Math.sqrt(Math.max(-g, 0)) - c0) - sig * 0.6 * Math.max(g, 0) - dep[i];
   }
   fieldMs = performance.now() - t0;
   return { s, ring: ringPuffs(rects) };
@@ -380,7 +388,7 @@ const FS = `#version 300 es
 precision highp float;
 uniform sampler2D uNoise, uFA, uFB, uGrass;   // Tidewall: uGrass = a painted meadow (generated for this theme), tiling
 uniform vec2 uRes, uGrid, uOff, uWorld;
-uniform float uScale, uSeed, uStep, uMix, uTime, uDebug, uEdge, uFlow;
+uniform float uScale, uSeed, uStep, uMix, uTime, uDebug, uEdge, uFlow, uCore;   // uCore: how deep a window's field reads (see computeField)
 #ifdef MEADOW_ACTOR
 uniform sampler2D uActor, uActorShadow;
 uniform vec4 uActorRect;
@@ -421,7 +429,7 @@ float smin(float a, float b, float k) { float h = clamp(0.5 + 0.5 * (b - a) / k,
 // front = true 时顺便找出盖住这个点、圆心最靠下（最前面）的那个圆：fc = (圆心 x, y, 半径, 色调)
 float cloudDist(vec2 q, bool front, inout vec4 fc) {
   float sF = mix(fieldS(uFA, q), fieldS(uFB, q), uMix);
-  float d = sF - uEdge + 0.6 * 95.0;                                              // 主体：把圆之间的缝填上
+  float d = max(sF, -uCore) - uEdge + 0.6 * 95.0;                               // 主体：把圆之间的缝填上 (no deeper than it ever was: the puffs still shape it)
   ivec2 cell = ivec2(floor(q / uCellG)) + 4;                                      // 格子比屏幕左、上多 4 格（右下方的云影要用到），右、下多 3 格
   if (cell.x < 0 || cell.y < 0 || float(cell.x) >= uCGrid.x || float(cell.y) >= uCGrid.y) return d;
   for (int k = 0; k < CIRC_K; k++) {
@@ -531,7 +539,7 @@ void main() {
   float bill = (N(pw, 210.0).r - 0.5) * 22.0 + (N(pw + 71.0, 90.0).g - 0.5) * 8.0;
   // only the rim billows; the middle stays whole. Weighted by the smooth body too: between puffs inside a thick cloud
   // the blended distance is shallow, and billowing by it alone opened see-through holes (more of them as a bank faded)
-  float body = mix(fieldS(uFA, p), fieldS(uFB, p), uMix) - uEdge + 0.6 * 95.0;
+  float body = max(mix(fieldS(uFA, p), fieldS(uFB, p), uMix), -uCore) - uEdge + 0.6 * 95.0;
   float de = d + bill * ss(-50.0, 0.0, d) * ss(-40.0, -8.0, body);
   if (de < 12.0) {
     // near the rim: which way the cloud's surface faces the sun, from its outline
@@ -766,7 +774,7 @@ function buildMassCircles() {
     for (let cy = Math.floor((OY - 2 * R) / G); cy <= Math.ceil((OY + H + 2 * R) / G); cy++) for (let cx = Math.floor((OX - 2 * R) / G); cx <= Math.ceil((OX + W + 2 * R) / G); cx++) {
       const ox = rnd1(cx, cy, k0), oy = rnd1(cx, cy, k0 + 1), rr = rnd1(cx, cy, k0 + 2), ph = rnd1(cx, cy, k0 + 3);
       const x = (cx + 0.1 + ox * 0.8) * G - OX, y = (cy + 0.1 + oy * 0.8) * G - OY;   // world cell, this display's coordinates
-      const ci = curS(x, y) - P.edge;                        // 圆心处离云团边多远（<0 在云团里）
+      const ci = Math.max(curS(x, y), -coreDepth()) - P.edge;   // 圆心处离云团边多远（<0 在云团里）(read no deeper than a core's flat floor)
       if (ci > 0 || ci < band[1] - 10) continue;
       let r = G * (size[0] + (size[1] - size[0]) * rr) * band[2](ci);
       // 要和云团连在一起：碰得到主体（主体边在 ci = -0.6R 处），或（小圆）和某个大圆叠住一截
@@ -1059,7 +1067,7 @@ function draw(now) {
     gl.uniform1f(U.uDebug, P.debug ? 1 : 0);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, circTex); gl.uniform1i(U.uCirc, 3);
     gl.uniform2f(U.uCGrid, cgW, cgH); gl.uniform1f(U.uCellG, CELL_G);
-    gl.uniform1f(U.uEdge, P.edge);
+    gl.uniform1f(U.uEdge, P.edge); if (U.uCore) gl.uniform1f(U.uCore, coreDepth());
     if(actor){
       gl.activeTexture(gl.TEXTURE5);gl.bindTexture(gl.TEXTURE_2D,actor.actor);gl.uniform1i(U.uActor,5);
       gl.activeTexture(gl.TEXTURE6);gl.bindTexture(gl.TEXTURE_2D,actor.shadow);gl.uniform1i(U.uActorShadow,6);
