@@ -1,8 +1,9 @@
 <!doctype html>
 <!--
-  Courtyard — a Tidewall theme. A sunlit Mediterranean courtyard seen from straight above: terracotta octagons with
-  glazed inserts, a limestone border along whitewashed walls, an olive tree in a stone planter, herbs in clay pots, a
-  well, a bench, three wall lanterns, and a ginger cat asleep in whichever sunny patch is left.
+  Courtyard — a Tidewall theme. A sunlit Mediterranean courtyard seen from straight above: big pale limestone flags
+  with sunken joints, a terracotta border along whitewashed walls, an olive tree on the sun's side of the yard (so its
+  dappled shade falls across the floor), big clay pots of herbs, a well under its winding frame, a slatted bench, three
+  wall lanterns, and a ginger cat asleep in whichever sunny patch is left.
 
   Your windows are panels floating a little above the floor. Each one casts a real shadow from the real sun at your
   place and time (long and golden in the morning, short and crisp at noon, long amber in the evening); at night the
@@ -10,8 +11,11 @@
   Desktop icons cast little shadows of their own.
 
   How it's built (one WebGL2 canvas):
-   · the floor is painted once by a shader into a texture (albedo + a height for the grout and tile bevels, so a low
-     sun rakes across the tiles); props are drawn once in 2D (albedo + height + material); the olive crown is a
+   · the floor is painted once by a shader into a texture (albedo + a height: the flags stand a little proud of
+     their joints, edges bevelled and worn). Lit per pixel from that height: the lit rim on a flag's sun side, a thin
+     shadow line in each joint on the side away from the light (a short march along the light), warm light bounced
+     down into the joints at a low sun, cool soft joints inside shade, and a shadow's edge that steps across a joint
+     (sampled where the light reaches the joint's floor) — all following sun, moon and lanterns through the day; props are drawn once in 2D (albedo + height + material); the olive crown is a
      leaf mask with mipmaps (its blur is the penumbra of the dappled shade);
    · SHADE: a low-resolution pass with every shadow worked out analytically — windows and icons are thin panels
      (the light-space translate of their rect), pots and the trunk are cylinders (a capsule whose penumbra widens with
@@ -118,26 +122,26 @@ let AREA = null, bootAt = performance.now(), U = 1, L = null;   // L: the layout
 function layout() {
   const top = AREA ? AREA[1] : 0, bot = AREA ? AREA[3] : H, hh = bot - top;
   U = clamp(Math.min(W, H) / 982, .75, 1.4);
-  const u = U, WB = 14 * u, BAND = 64 * u;
+  const u = U, WB = 14 * u, BAND = 46 * u;
   const X = f => W * f, Y = f => top + hh * f;
-  const inX = (x, r) => clamp(x, WB + r + 4, W - WB - r - 4), inY = (y, r) => clamp(y, top + WB + r + 4, bot - WB - r - 4);
-  const tree = { x: X(.77), y: Y(.33), R: 150 * u, zc: 150 * u };
-  const pots = [], potA = { x: inX(X(.075), 34 * u), y: inY(Y(.80), 34 * u) }, potB = { x: inX(X(.30), 30 * u), y: inY(Y(.06), 30 * u) };
-  pots.push({ x: potA.x, y: potA.y, r: 34 * u, h: 40 * u, kind: 'rosemary' });
-  pots.push({ x: potA.x + 64 * u, y: potA.y + 26 * u, r: 26 * u, h: 32 * u, kind: 'basil' });
-  pots.push({ x: potA.x + 10 * u, y: potA.y - 66 * u, r: 24 * u, h: 34 * u, kind: 'geranium' });
-  pots.push({ x: potB.x, y: potB.y, r: 30 * u, h: 38 * u, kind: 'lavender' });
-  if (Q.count >= 1) pots.push({ x: potB.x - 62 * u, y: potB.y + 8 * u, r: 22 * u, h: 30 * u, kind: 'basil' });
-  const can = { x: potA.x + 84 * u, y: potA.y - 40 * u, r: 12 * u, h: 20 * u };
-  const well = { x: X(.43), y: Y(.80), r: 46 * u, h: 30 * u };
-  const bucket = { x: well.x + 54 * u, y: well.y - 26 * u, r: 11 * u, h: 18 * u };
-  const bench = { x: X(.47) - 105 * u, y: top + WB + 20 * u, w: 210 * u, h: 50 * u, z: 26 * u };
-  const planter = { x: tree.x - 62 * u, y: tree.y - 62 * u, w: 124 * u, h: 124 * u, z: 22 * u };
-  const lamps = [{ x: WB + 9 * u, y: Y(.44), side: 'l' }, { x: W - WB - 9 * u, y: Y(.66), side: 'r' }, { x: X(.66), y: top + WB + 9 * u, side: 't' }];
+    const south = SITE.lat >= 0;                       // the tree stands on the sun's side of the yard, so its shade falls across the floor
+  const tree = { x: W - 250 * u, y: south ? bot - 225 * u : top + 225 * u, R: 250 * u, zc: 200 * u };
+  const pots = [];
+  pots.push({ x: WB + 112 * u, y: bot - 118 * u, r: 72 * u, h: 70 * u, kind: 'rosemary' });
+  pots.push({ x: WB + 262 * u, y: bot - 84 * u, r: 54 * u, h: 56 * u, kind: 'geranium' });
+  if (Q.count >= 1) pots.push({ x: WB + 92 * u, y: bot - 285 * u, r: 50 * u, h: 52 * u, kind: 'lavender' });
+  const can = { x: WB + 250 * u, y: bot - 215 * u, r: 22 * u, h: 30 * u };
+  const well = { x: W - WB - 165 * u, y: south ? top + 165 * u : bot - 165 * u, r: 88 * u, h: 44 * u };
+  const bucket = { x: well.x - 128 * u, y: well.y + (south ? 46 : -46) * u, r: 21 * u, h: 30 * u };
+  const beam = { x: well.x - well.r * 1.32, y: well.y - 9 * u, w: well.r * 2.64, h: 18 * u, z: 118 * u };
+  const bench = { x: WB + 22 * u, y: top + 150 * u, w: 92 * u, h: 340 * u, z: 36 * u };
+  const planter = { x: tree.x - 80 * u, y: tree.y - 80 * u, w: 160 * u, h: 160 * u, z: 26 * u };
+  const lamps = [{ x: WB + 13 * u, y: Y(.70), side: 'l' }, { x: W - WB - 13 * u, y: Y(.44), side: 'r' }, { x: X(.46), y: top + WB + 13 * u, side: 't' }];
   for (const l of lamps) { l.h = 100 * u; l.p = 1.4; }
-  const cyl = [...pots, can, well, bucket, { x: tree.x, y: tree.y, r: 10 * u, h: tree.zc - 20 * u }];
-  const boxes = [{ x: bench.x, y: bench.y, w: bench.w, h: bench.h, z: bench.z, grounded: false, rad: 7 * u }, { x: planter.x, y: planter.y, w: planter.w, h: planter.h, z: planter.z, grounded: true, rad: 8 * u }];
-  L = { top, bot, WB, BAND, TILE: 58 * u, HW: 46 * u, tree, pots, can, well, bucket, bench, planter, lamps, cyl, boxes, winZ: 44, iconZ: 6 };
+  const cyl = [...pots, can, well, bucket, { x: beam.x + 6 * u, y: well.y, r: 8 * u, h: beam.z }, { x: beam.x + beam.w - 6 * u, y: well.y, r: 8 * u, h: beam.z }, { x: tree.x, y: tree.y, r: 16 * u, h: tree.zc - 30 * u }];
+  const boxes = [{ x: bench.x, y: bench.y, w: bench.w, h: bench.h, z: bench.z, grounded: false, rad: 6 * u }, { x: planter.x, y: planter.y, w: planter.w, h: planter.h, z: planter.z, grounded: true, rad: 10 * u },
+    { x: beam.x, y: beam.y, w: beam.w, h: beam.h, z: beam.z, grounded: false, rad: 3 * u }];
+  L = { top, bot, WB, BAND, TILE: 150 * u, HW: 46 * u, tree, pots, can, well, bucket, beam, bench, planter, lamps, cyl, boxes, winZ: 44, iconZ: 6, catS: 1.9 * u };
 }
 
 /* ======================= your windows (and icons): panels a little above the floor ======================= */
@@ -184,12 +188,12 @@ function paintProps() {
 
   // fallen olive leaves round the tree (flat on the floor)
   const T = L.tree;
-  for (let i = 0; i < 46; i++) { const ang = R() * 6.283, r = T.R * (.5 + R() * .85), x = T.x + Math.cos(ang) * r, y = T.y + Math.sin(ang) * r;
+  for (let i = 0; i < 90; i++) { const ang = R() * 6.283, r = T.R * (.4 + R() * .75), x = T.x + Math.cos(ang) * r, y = T.y + Math.sin(ang) * r;
     if (x < L.WB + 4 || x > W - L.WB - 4) continue; const g = .35 + R() * .25;
-    ell(a, x, y, 5 * u, 1.4 * u, R() * 6.28, rgb(g * .9, g, g * .7, .9)); ell(b, x, y, 5 * u, 1.4 * u, 0, hm(.03)); }
+    ell(a, x, y, 7 * u, 2 * u, R() * 6.28, rgb(g * .9, g, g * .7, .9)); ell(b, x, y, 7 * u, 2 * u, 0, hm(.03)); }
 
   // the planter: a limestone box, soil, the old trunk
-  { const p = L.planter, r = 8 * u;
+  { const p = L.planter, u = p.w / 124, r = 8 * u;
     a.fillStyle = rgb(.83, .78, .67); a.beginPath(); a.roundRect(p.x, p.y, p.w, p.h, r); a.fill();
     for (let i = 0; i < 3; i++) { b.fillStyle = hm(.40 + i * .06); b.beginPath(); b.roundRect(p.x + i * 2 * u, p.y + i * 2 * u, p.w - i * 4 * u, p.h - i * 4 * u, r); b.fill(); }
     const m = 13 * u; a.fillStyle = rgb(.24, .17, .12); a.beginPath(); a.roundRect(p.x + m, p.y + m, p.w - 2 * m, p.h - 2 * m, 4 * u); a.fill();
@@ -203,61 +207,80 @@ function paintProps() {
     disc(a, T.x, T.y, 14 * u, rgb(.36, .30, .24)); disc(b, T.x, T.y, 14 * u, radial(b, T.x, T.y, 14 * u, [[0, hm(1)], [1, hm(.8)]])); }
 
   // pots with herbs
-  const pot = p => { const { x, y, r } = p;
+  const pot = p => { const { x, y, r } = p, u = r / 30;
     disc(a, x, y, r, radial(a, x, y, r, [[0, rgb(.74, .40, .24)], [.8, rgb(.76, .42, .26)], [1, rgb(.62, .32, .20)]]));
     disc(b, x, y, r, radial(b, x, y, r, [[0, hm(.50)], [.78, hm(.56)], [.9, hm(.58)], [1, hm(.40)]]));
     disc(a, x, y, r * .8, rgb(.22, .15, .10)); disc(b, x, y, r * .8, hm(.47, 0, .55));
-    for (let i = 0; i < 30; i++) { const an = R() * 6.28, rr = Math.sqrt(R()) * r * .76; disc(a, x + Math.cos(an) * rr, y + Math.sin(an) * rr, .9 * u, rgb(.32, .25, .18)); }
+    for (let i = 0; i < 60; i++) { const an = R() * 6.28, rr = Math.sqrt(R()) * r * .76; disc(a, x + Math.cos(an) * rr, y + Math.sin(an) * rr, .9 * u, rgb(.32, .25, .18)); }
     const leaf = (lx, ly, rx, ry, ang, col, h) => { ell(a, lx, ly, rx, ry, ang, col); ell(b, lx, ly, rx, ry, ang, hm(h, F)); };
-    if (p.kind === 'rosemary') for (let i = 0; i < 190; i++) { const an = R() * 6.28, r0 = R() * r * .3, r1 = r * (.55 + R() * .5), g = .22 + R() * .12;
+    if (p.kind === 'rosemary') for (let i = 0; i < 520; i++) { const an = R() * 6.28, r0 = R() * r * .3, r1 = r * (.55 + R() * .5), g = .22 + R() * .12;
       a.strokeStyle = rgb(g * .95, g * 1.3, g * 1.05); a.lineWidth = 1.7 * u; a.beginPath(); a.moveTo(x + Math.cos(an) * r0, y + Math.sin(an) * r0); a.lineTo(x + Math.cos(an + .15) * r1, y + Math.sin(an + .15) * r1); a.stroke();
       b.strokeStyle = hm(.95 - r1 / r * .3, F); b.lineWidth = 1.7 * u; b.beginPath(); b.moveTo(x + Math.cos(an) * r0, y + Math.sin(an) * r0); b.lineTo(x + Math.cos(an + .15) * r1, y + Math.sin(an + .15) * r1); b.stroke();
       if (R() < .12) disc(a, x + Math.cos(an) * r1 * .9, y + Math.sin(an) * r1 * .9, 1.3 * u, rgb(.62, .68, .90)); }
     if (p.kind === 'basil') for (let i = 0; i < 26; i++) { const an = i * 2.4, rr = r * (.85 - i / 26 * .75), g = .5 + R() * .15;
       const lx = x + Math.cos(an) * rr, ly = y + Math.sin(an) * rr; leaf(lx, ly, 8 * u, 5.5 * u, an, rgb(.25 * g * 1.6, .52 * g * 1.5, .14 * g * 1.4), .7 + (1 - rr / r) * .3);
       a.strokeStyle = rgb(.45, .68, .32, .7); a.lineWidth = .7 * u; a.beginPath(); a.moveTo(lx - Math.cos(an) * 6 * u, ly - Math.sin(an) * 6 * u); a.lineTo(lx + Math.cos(an) * 6 * u, ly + Math.sin(an) * 6 * u); a.stroke(); }
-    if (p.kind === 'lavender') { for (let i = 0; i < 150; i++) { const an = R() * 6.28, rr = Math.sqrt(R()) * r * .95, g = .42 + R() * .1;
+    if (p.kind === 'lavender') { for (let i = 0; i < 260; i++) { const an = R() * 6.28, rr = Math.sqrt(R()) * r * .95, g = .42 + R() * .1;
         leaf(x + Math.cos(an) * rr, y + Math.sin(an) * rr, 5 * u, 1.2 * u, an + (R() - .5), rgb(g, g * 1.12, g * .92), .75 + (1 - rr / r) * .2); }
-      for (let i = 0; i < 46; i++) { const an = R() * 6.28, rr = r * (.55 + R() * .6), lx = x + Math.cos(an) * rr, ly = y + Math.sin(an) * rr;
+      for (let i = 0; i < 80; i++) { const an = R() * 6.28, rr = r * (.55 + R() * .6), lx = x + Math.cos(an) * rr, ly = y + Math.sin(an) * rr;
         leaf(lx, ly, 4.5 * u, 2 * u, an, rgb(.46, .34, .64), .9); disc(a, lx + Math.cos(an) * 2 * u, ly + Math.sin(an) * 2 * u, 1.1 * u, rgb(.34, .22, .52)); } }
-    if (p.kind === 'geranium') { for (let i = 0; i < 13; i++) { const an = i * 2.4, rr = r * (.9 - i / 13 * .7), lx = x + Math.cos(an) * rr, ly = y + Math.sin(an) * rr, lr = (8 + R() * 3) * u;
+    if (p.kind === 'geranium') { for (let i = 0; i < 18; i++) { const an = i * 2.4, rr = r * (.9 - i / 18 * .7), lx = x + Math.cos(an) * rr, ly = y + Math.sin(an) * rr, lr = (8 + R() * 3) * u;
         disc(a, lx, ly, lr, rgb(.25, .45, .17)); a.strokeStyle = rgb(.18, .30, .12, .8); a.lineWidth = 1.6 * u; a.beginPath(); a.arc(lx, ly, lr * .55, 0, 7); a.stroke();
         disc(b, lx, ly, lr, radial(b, lx, ly, lr, [[0, hm(.85, F)], [1, hm(.7, F)]])); }
-      for (let c = 0; c < 3; c++) { const an = c * 2.1 + R(), cx = x + Math.cos(an) * r * .4, cy = y + Math.sin(an) * r * .4;
+      for (let c = 0; c < 5; c++) { const an = c * 1.3 + R(), cx = x + Math.cos(an) * r * .45, cy = y + Math.sin(an) * r * .45;
         for (let i = 0; i < 14; i++) { const a2 = R() * 6.28, rr = R() * 7 * u; leaf(cx + Math.cos(a2) * rr, cy + Math.sin(a2) * rr, 2.8 * u, 2.6 * u, 0, rgb(.86, .14 + R() * .08, .17), 1); } } }
   };
   L.pots.forEach(pot);
 
   // a watering can by the pots
-  { const c = L.can; ell(a, c.x, c.y, c.r * 1.25, c.r, .4, rgb(.56, .58, .58)); ell(b, c.x, c.y, c.r * 1.25, c.r, .4, radial(b, c.x, c.y, c.r * 1.2, [[0, hm(.6)], [1, hm(.35)]]));
+  { const c = L.can, u = c.r / 12; ell(a, c.x, c.y, c.r * 1.25, c.r, .4, rgb(.56, .58, .58)); ell(b, c.x, c.y, c.r * 1.25, c.r, .4, radial(b, c.x, c.y, c.r * 1.2, [[0, hm(.6)], [1, hm(.35)]]));
     a.strokeStyle = rgb(.50, .52, .52); a.lineWidth = 3 * u; a.beginPath(); a.moveTo(c.x + 10 * u, c.y + 4 * u); a.lineTo(c.x + 30 * u, c.y + 16 * u); a.stroke();
     b.strokeStyle = hm(.4); b.lineWidth = 3 * u; b.beginPath(); b.moveTo(c.x + 10 * u, c.y + 4 * u); b.lineTo(c.x + 30 * u, c.y + 16 * u); b.stroke();
     a.lineWidth = 2.2 * u; a.strokeStyle = rgb(.42, .44, .44); a.beginPath(); a.ellipse(c.x - 2 * u, c.y - 2 * u, c.r * .9, c.r * .5, .4, 3.4, 6.0); a.stroke(); disc(a, c.x - 9 * u, c.y - 5 * u, 4 * u, rgb(.3, .32, .32)); }
 
   // the well: a ring of stone blocks round dark water; a wooden bucket on the coping
-  { const w = L.well, ri = w.r * .72;
+  { const w = L.well, u = w.r / 46, ri = w.r * .72;
     disc(a, w.x, w.y, w.r, rgb(.58, .54, .47)); disc(b, w.x, w.y, w.r, radial(b, w.x, w.y, w.r, [[0, hm(.5)], [.7, hm(.62)], [.86, hm(.66)], [1, hm(.48)]]));
     for (let i = 0; i < 13; i++) { const a0 = i / 13 * 6.283 + .05, a1 = (i + 1) / 13 * 6.283 - .05, g = .74 + R() * .1;
       a.fillStyle = rgb(g, g * .95, g * .84); a.beginPath(); a.arc(w.x, w.y, w.r - 1.5 * u, a0, a1); a.arc(w.x, w.y, ri + 1.5 * u, a1, a0, true); a.closePath(); a.fill(); }
     disc(a, w.x, w.y, ri, rgb(.05, .08, .08)); disc(b, w.x, w.y, ri, hm(.12, WATER, .4));
-    const bk = L.bucket; disc(a, bk.x, bk.y, bk.r, rgb(.45, .30, .17)); disc(b, bk.x, bk.y, bk.r, radial(b, bk.x, bk.y, bk.r, [[0, hm(.6)], [1, hm(.75)]]));
+    const bk = L.bucket, ub = bk.r / 11; disc(a, bk.x, bk.y, bk.r, rgb(.45, .30, .17)); disc(b, bk.x, bk.y, bk.r, radial(b, bk.x, bk.y, bk.r, [[0, hm(.6)], [1, hm(.75)]]));
     disc(a, bk.x, bk.y, bk.r * .78, rgb(.09, .1, .09)); disc(b, bk.x, bk.y, bk.r * .78, hm(.4, WATER));
-    a.strokeStyle = rgb(.25, .25, .27); a.lineWidth = 1.5 * u; a.beginPath(); a.arc(bk.x, bk.y, bk.r * .9, 0, 7); a.stroke();
-    a.strokeStyle = rgb(.70, .62, .45); a.lineWidth = 1.6 * u; a.beginPath(); a.moveTo(bk.x - 4 * u, bk.y); a.bezierCurveTo(bk.x - 22 * u, bk.y + 6 * u, w.x + ri, w.y - 8 * u, w.x + ri * .7, w.y - 4 * u); a.stroke(); }
+    a.strokeStyle = rgb(.25, .25, .27); a.lineWidth = 1.5 * ub; a.beginPath(); a.arc(bk.x, bk.y, bk.r * .9, 0, 7); a.stroke();
+    a.strokeStyle = rgb(.70, .62, .45); a.lineWidth = 2.4 * ub; a.beginPath(); a.moveTo(bk.x + 4 * ub, bk.y); a.bezierCurveTo(bk.x + 40 * ub, bk.y - 10 * ub, w.x - ri * .5, w.y + 20 * u, w.x, w.y); a.stroke();
+    // the winding frame over it: two posts and a beam with the rope drum
+    const bm = L.beam, wood = (x0, y0, ww, hh, hv) => { a.fillStyle = rgb(.47, .33, .21); a.beginPath(); a.roundRect(x0, y0, ww, hh, 3 * u); a.fill();
+      a.strokeStyle = rgb(.36, .24, .15, .7); a.lineWidth = .8 * u; for (let i = 1; i < 4; i++) { a.beginPath(); a.moveTo(x0 + 3, y0 + hh * i / 4); a.lineTo(x0 + ww - 3, y0 + hh * i / 4 + (R() - .5) * 2); a.stroke(); }
+      b.fillStyle = hm(hv); b.beginPath(); b.roundRect(x0, y0, ww, hh, 3 * u); b.fill(); };
+    wood(bm.x, bm.y, bm.w, bm.h, 1);
+    for (const px of [bm.x - 4 * u, bm.x + bm.w - 14 * u]) { a.fillStyle = rgb(.40, .28, .18); a.beginPath(); a.roundRect(px, w.y - 12 * u, 18 * u, 24 * u, 3 * u); a.fill(); b.fillStyle = hm(1); b.beginPath(); b.roundRect(px, w.y - 12 * u, 18 * u, 24 * u, 3 * u); b.fill(); }
+    a.fillStyle = rgb(.55, .42, .28); a.beginPath(); a.roundRect(w.x - 26 * u, w.y - 13 * u, 52 * u, 26 * u, 10 * u); a.fill(); b.fillStyle = radial(b, w.x, w.y, 26 * u, [[0, hm(1)], [1, hm(.85)]]); b.beginPath(); b.roundRect(w.x - 26 * u, w.y - 13 * u, 52 * u, 26 * u, 10 * u); b.fill();
+    a.strokeStyle = rgb(.78, .70, .52); a.lineWidth = 1.3 * u; for (let i = -8; i <= 8; i += 3.2) { a.beginPath(); a.moveTo(w.x + i * u * 2.6, w.y - 12 * u); a.lineTo(w.x + i * u * 2.6 + 2 * u, w.y + 12 * u); a.stroke(); } }
 
-  // the bench: a limestone slab
-  { const p = L.bench, r = 7 * u; a.fillStyle = rgb(.80, .76, .68); a.beginPath(); a.roundRect(p.x, p.y, p.w, p.h, r); a.fill();
-    for (let i = 0; i < 4; i++) { b.fillStyle = hm(.55 + i * .05); b.beginPath(); b.roundRect(p.x + i * 1.6 * u, p.y + i * 1.6 * u, p.w - i * 3.2 * u, p.h - i * 3.2 * u, r); b.fill(); }
-    for (let i = 0; i < 60; i++) disc(a, p.x + 4 + R() * (p.w - 8), p.y + 4 + R() * (p.h - 8), (.5 + R()) * u, rgb(.68, .64, .56, .6));
-    // a folded linen cloth and a cup of tea
-    a.fillStyle = rgb(.86, .84, .80); a.beginPath(); a.roundRect(p.x + p.w * .62, p.y + 8 * u, 40 * u, 30 * u, 3 * u); a.fill();
-    b.fillStyle = hm(.68); b.beginPath(); b.roundRect(p.x + p.w * .62, p.y + 8 * u, 40 * u, 30 * u, 3 * u); b.fill();
-    a.strokeStyle = rgb(.55, .62, .78, .9); a.lineWidth = 1.2 * u; for (let i = 0; i < 3; i++) { a.beginPath(); a.moveTo(p.x + p.w * .62 + 4 * u, p.y + (14 + i * 8) * u); a.lineTo(p.x + p.w * .62 + 36 * u, p.y + (14 + i * 8) * u); a.stroke(); }
-    const cx = p.x + p.w * .28, cy = p.y + p.h * .5; disc(a, cx, cy, 8 * u, rgb(.93, .92, .88)); disc(b, cx, cy, 8 * u, hm(.72)); disc(a, cx, cy, 6 * u, rgb(.42, .22, .10)); disc(b, cx, cy, 6 * u, hm(.66, WATER));
-    a.strokeStyle = rgb(.93, .92, .88); a.lineWidth = 2 * u; a.beginPath(); a.arc(cx + 9 * u, cy, 3.5 * u, -1.2, 1.2); a.stroke(); }
+  // the bench: wooden slats on two stone ends, along the wall; a cushion, a book and a glass of tea
+  { const p = L.bench, u = p.w / 92, vert = p.h > p.w, n = 5, ends = 22 * u;
+    const R2 = (x, y, w, h, r, fa, fb) => { a.fillStyle = fa; a.beginPath(); a.roundRect(x, y, w, h, r); a.fill(); b.fillStyle = fb; b.beginPath(); b.roundRect(x, y, w, h, r); b.fill(); };
+    // stone ends
+    R2(p.x - 3 * u, p.y, p.w + 6 * u, ends, 5 * u, rgb(.78, .74, .66), hm(.7)); R2(p.x - 3 * u, p.y + p.h - ends, p.w + 6 * u, ends, 5 * u, rgb(.78, .74, .66), hm(.7));
+    // slats
+    const gap = 5 * u, sw = (p.w - gap * (n - 1)) / n;
+    for (let i = 0; i < n; i++) { const x0 = p.x + i * (sw + gap), tone = .9 + R() * .15;
+      R2(x0, p.y + 6 * u, sw, p.h - 12 * u, 3 * u, rgb(.56 * tone, .39 * tone, .25 * tone), hm(.86));
+      a.strokeStyle = rgb(.42, .28, .17, .55); a.lineWidth = .9 * u;
+      for (let k = 0; k < 3; k++) { a.beginPath(); a.moveTo(x0 + sw * (.25 + k * .25), p.y + 8 * u); a.bezierCurveTo(x0 + sw * (.2 + k * .25 + R() * .1), p.y + p.h * .4, x0 + sw * (.3 + k * .25 - R() * .1), p.y + p.h * .6, x0 + sw * (.25 + k * .25), p.y + p.h - 8 * u); a.stroke(); }
+      disc(a, x0 + sw / 2, p.y + ends + 6 * u, 1.6 * u, rgb(.25, .22, .2)); disc(a, x0 + sw / 2, p.y + p.h - ends - 6 * u, 1.6 * u, rgb(.25, .22, .2)); }
+    // a striped linen cushion, an open book, a glass of tea
+    const cy0 = p.y + p.h * .58; R2(p.x + 6 * u, cy0, p.w - 12 * u, 84 * u, 12 * u, rgb(.90, .87, .80), hm(.98));
+    a.strokeStyle = rgb(.36, .47, .66, .85); a.lineWidth = 4 * u; for (let i = 0; i < 4; i++) { a.beginPath(); a.moveTo(p.x + 10 * u, cy0 + (14 + i * 18) * u); a.lineTo(p.x + p.w - 10 * u, cy0 + (14 + i * 18) * u); a.stroke(); }
+    const bx = p.x + p.w * .5, by = p.y + p.h * .3; a.save(); a.translate(bx, by); a.rotate(.2);
+    a.fillStyle = rgb(.55, .20, .16); a.fillRect(-30 * u, -21 * u, 60 * u, 42 * u); a.fillStyle = rgb(.95, .93, .86); a.fillRect(-28 * u, -19 * u, 27 * u, 38 * u); a.fillRect(1 * u, -19 * u, 27 * u, 38 * u);
+    a.fillStyle = rgb(.5, .48, .45, .6); for (let i = 0; i < 9; i++) { a.fillRect(-25 * u, (-15 + i * 3.8) * u, 21 * u, 1 * u); a.fillRect(4 * u, (-15 + i * 3.8) * u, 21 * u, 1 * u); } a.restore();
+    b.fillStyle = hm(.9); b.save(); b.translate(bx, by); b.rotate(.2); b.fillRect(-30 * u, -21 * u, 60 * u, 42 * u); b.restore();
+    const gx = p.x + p.w * .5, gy = p.y + p.h * .13; disc(a, gx, gy, 11 * u, rgb(.85, .88, .86)); disc(b, gx, gy, 11 * u, hm(1)); disc(a, gx, gy, 8.5 * u, rgb(.55, .25, .10)); disc(b, gx, gy, 8.5 * u, hm(.95, WATER));
+    ell(a, gx + 3 * u, gy - 3 * u, 3 * u, 1.6 * u, .6, rgb(.40, .62, .30)); }
 
   // the lanterns: an iron bracket from the wall, a glass box with a cap
-  for (const l of L.lamps) { const s = 9 * u, wx = l.side === 'l' ? 0 : l.side === 'r' ? W : l.x, wy = l.side === 't' ? L.top : l.y;
+  for (const l of L.lamps) { const s = 13 * u, wx = l.side === 'l' ? 0 : l.side === 'r' ? W : l.x, wy = l.side === 't' ? L.top : l.y;
     a.strokeStyle = rgb(.10, .09, .09); a.lineWidth = 2.4 * u; a.beginPath(); a.moveTo(l.side === 't' ? l.x : wx + (l.side === 'l' ? L.WB - 2 : -L.WB + 2), l.side === 't' ? L.top + L.WB - 2 : l.y); a.lineTo(l.x, l.y); a.stroke();
     a.fillStyle = rgb(.12, .11, .10); a.beginPath(); a.roundRect(l.x - s, l.y - s, 2 * s, 2 * s, 2 * u); a.fill(); b.fillStyle = hm(1); b.beginPath(); b.roundRect(l.x - s, l.y - s, 2 * s, 2 * s, 2 * u); b.fill();
     for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { a.fillStyle = rgb(.90, .72, .42); a.beginPath(); a.rect(l.x + dx * s * .55 - s * .3, l.y + dy * s * .55 - s * .3, s * .6, s * .6); a.fill();
@@ -267,19 +290,32 @@ function paintProps() {
 }
 
 function paintLeaves(S) {
+  // channels: R = leaf tone (dark olive .. silver underside), G = how lit the clump is from inside (0 deep .. 1 outer),
+  // B = height in the crown (for its lighting), A = cover. The shader colours and lights it.
   const c = document.createElement('canvas'); c.width = c.height = S; const x = c.getContext('2d'), R = rng(23), cx = S / 2, rad = S / 2 / 1.1;
-  // boughs first (they cast shadows through the gaps too)
+  const col = (t, g, h) => `rgb(${clamp(t, 0, 1) * 255 | 0},${clamp(g, 0, 1) * 255 | 0},${clamp(h, 0, 1) * 255 | 0})`;
   x.lineCap = 'round';
-  for (let i = 0; i < 8; i++) { let a = i / 8 * 6.283 + R() * .5, px = cx, py = cx, w = 10; x.strokeStyle = 'rgb(78,66,52)';
-    for (let j = 0; j < 9; j++) { const nx = px + Math.cos(a) * rad * .1, ny = py + Math.sin(a) * rad * .1; x.lineWidth = w; x.beginPath(); x.moveTo(px, py); x.lineTo(nx, ny); x.stroke(); px = nx; py = ny; a += (R() - .5) * .6; w *= .8; } }
-  // the crown: clumps of narrow leaves, dark olive on top, silvery underneath, with gaps between the clumps
+  for (let i = 0; i < 9; i++) { let a = i / 9 * 6.283 + R() * .4, px = cx, py = cx, w = S * .028; x.strokeStyle = col(0, .1, .25);
+    for (let j = 0; j < 9; j++) { const nx = px + Math.cos(a) * rad * .095, ny = py + Math.sin(a) * rad * .095; x.lineWidth = w; x.beginPath(); x.moveTo(px, py); x.lineTo(nx, ny); x.stroke(); px = nx; py = ny; a += (R() - .5) * .5; w *= .8; } }
+  // clumps: rounded masses, the middle ones higher; a few left out near the edge so the outline is lobed
   const clumps = [];
-  for (let i = 0; i < 120; i++) { const a = R() * 6.283, r = rad * Math.pow(R(), .55) * .84; clumps.push([cx + Math.cos(a) * r, cx + Math.sin(a) * r, rad * (.12 + R() * .09)]); }
-  for (const [qx, qy, cr] of clumps) for (let k = 0; k < 64; k++) {
-    const a = R() * 6.283, r = cr * Math.sqrt(R()), lx = qx + Math.cos(a) * r, ly = qy + Math.sin(a) * r, ang = Math.atan2(ly - cx, lx - cx) + (R() - .5) * 1.6;
-    const silver = R() < .2, g = silver ? 96 + R() * 24 : 44 + R() * 24;
-    x.fillStyle = silver ? `rgb(${g | 0},${g * 1.08 | 0},${g * .86 | 0})` : `rgb(${g * .95 | 0},${g * 1.25 | 0},${g * .72 | 0})`;
-    x.beginPath(); x.ellipse(lx, ly, 8 + R() * 4, 2.2 + R() * 1.2, ang, 0, 7); x.fill(); }
+  for (let i = 0; i < 400 && clumps.length < 46; i++) { const a = R() * 6.283, r = rad * Math.sqrt(R()) * .7, cr = rad * (.15 + R() * .09), qx = cx + Math.cos(a) * r, qy = cx + Math.sin(a) * r;
+    if (clumps.some(([ox, oy, orr]) => Math.hypot(ox - qx, oy - qy) < (orr + cr) * .55)) continue;
+    clumps.push([qx, qy, cr, .45 + .45 * (1 - r / rad) + R() * .12]); }
+  clumps.sort((p, q) => p[3] - q[3]);
+  for (const [qx, qy, cr, hc] of clumps) {
+    const g = x.createRadialGradient(qx - cr * .15, qy - cr * .15, 0, qx, qy, cr);
+    g.addColorStop(0, col(.35, 1, hc)); g.addColorStop(.75, col(.3, .7, hc - .12)); g.addColorStop(1, col(.25, .35, hc - .22));
+    x.fillStyle = g; x.beginPath(); x.arc(qx, qy, cr * .9, 0, 7); x.fill();
+    const n = Math.round(cr * cr * .09);
+    for (let k = 0; k < n; k++) { const a = R() * 6.283, rr = cr * Math.pow(R(), .6) * 1.05, lx = qx + Math.cos(a) * rr, ly = qy + Math.sin(a) * rr;
+      const ang = a + (R() - .5) * 1.4, silver = R() < .38, t = silver ? .8 + R() * .2 : .1 + R() * .35, lit = 1 - rr / cr * .55;
+      x.fillStyle = col(t, lit * (.8 + R() * .3), hc - (rr / cr) * .22 + R() * .04);
+      x.beginPath(); x.ellipse(lx, ly, S * (.0075 + R() * .004), S * (.0024 + R() * .0012), ang, 0, 7); x.fill(); } }
+  // gaps through the crown: where the sun comes through in flecks
+  x.globalCompositeOperation = 'destination-out';
+  for (let i = 0; i < 34; i++) { const a = R() * 6.283, r = rad * Math.sqrt(R()) * .8; x.beginPath(); x.ellipse(cx + Math.cos(a) * r, cx + Math.sin(a) * r, S * (.006 + R() * .01), S * (.005 + R() * .007), R() * 3, 0, 7); x.fill(); }
+  x.globalCompositeOperation = 'source-over';
   return c;
 }
 
@@ -302,7 +338,7 @@ float vn(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f);
   return mix(mix(h21(i), h21(i + vec2(1, 0)), u.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), u.x), u.y); }
 float fbm(vec2 p) { float v = 0., a = .5; for (int i = 0; i < 5; i++) { v += a * vn(p); p = p * 2.03 + 17.1; a *= .5; } return v; }`;
 
-// the floor: whitewashed wall tops at the screen's edges, a limestone border, terracotta octagons with glazed inserts
+// the floor: whitewashed wall tops at the screen's edges, a terracotta border, big pale limestone flags (a few terracotta patches)
 const FLOOR = prog(`#version 300 es
 precision highp float; out vec4 o;
 uniform vec2 uCss; uniform float uS, uWB, uBand, uTile;
@@ -315,57 +351,45 @@ void main() {
   if (dW < uWB) {                                       // the wall's coping: lime-washed, a little uneven
     col = vec3(.93, .91, .86) * (.94 + .08 * mid) - .03 * smoothstep(.6, .9, fbm(p * .05 + 9.));
     float e = smoothstep(uWB - 2.5, uWB, dW); col *= 1. - .18 * e; h = 1. - .3 * e;
-  } else if (dW < uWB + uBand) {                        // the limestone border: slabs in a running row along each wall
+  } else if (dW < uWB + uBand) {                        // the border: two courses of terracotta tiles, staggered, along each wall
     bool lr = min(p.x, uCss.x - p.x) < min(p.y, uCss.y - p.y);
-    float a = lr ? p.y : p.x, across = dW - uWB;
-    float L = uBand * 1.9, sd = lr ? 1. : 2.;
-    float i = floor(a / L), j0 = i * L + (h21(vec2(i, sd)) - .5) * L * .5, j1 = (i + 1.) * L + (h21(vec2(i + 1., sd)) - .5) * L * .5, k2 = i;
-    if (a < j0) { j1 = j0; k2 = i - 1.; j0 = k2 * L + (h21(vec2(k2, sd)) - .5) * L * .5; }
-    else if (a > j1) { j0 = j1; k2 = i + 1.; j1 = (i + 2.) * L + (h21(vec2(i + 2., sd)) - .5) * L * .5; }
-    float s0 = j0, s1 = j1;
-    float dj = min(a - s0, s1 - a); float de = min(across, uBand - across);
-    vec2 id = vec2(k2, lr ? 3. : 4.) + (p.x < uCss.x * .5 ? 0. : 7.) + (p.y < uCss.y * .5 ? 0. : 13.);
-    // the four corners: a square slab each
+    float a = lr ? p.y : p.x, across = dW - uWB, hb = uBand * .5, tl = uBand * 1.05;
+    float course = floor(across / hb), aa = a + course * tl * .5, idx = floor(aa / tl);
+    float dj = min(aa - idx * tl, (idx + 1.) * tl - aa), de = min(across - course * hb, (course + 1.) * hb - across);
+    vec2 id = vec2(idx, course + (lr ? 10. : 20.) + (p.x < uCss.x * .5 ? 0. : 3.) + (p.y < uCss.y * .5 ? 0. : 5.));
     float cx = min(p.x, uCss.x - p.x) - uWB, cy = min(p.y, uCss.y - p.y) - uWB;
-    if (cx < uBand && cy < uBand) { dj = min(min(cx, uBand - cx), 1e3); de = min(cy, uBand - cy); id = vec2(p.x < uCss.x * .5 ? 91. : 92., p.y < uCss.y * .5 ? 93. : 94.); }
+    if (cx < uBand && cy < uBand) { vec2 g = floor(vec2(cx, cy) / hb); dj = min(cx - g.x * hb, (g.x + 1.) * hb - cx); de = min(cy - g.y * hb, (g.y + 1.) * hb - cy); id = g + vec2(91., p.y < uCss.y * .5 ? 93. : 97.); }
     float r = h21(id);
-    vec3 base = mix(vec3(.86, .81, .70), vec3(.80, .77, .69), r) * (.95 + .06 * h21(id + 3.));
-    col = base * (.93 + .1 * mid) + .025 * (fine - .5);
-    col -= .05 * smoothstep(.62, .64, abs(fbm(p * .012 + id) - .5) + .5) ;                 // faint veins
-    col -= .08 * smoothstep(.86, .97, vn(p * 1.1 + id * 5.));                                    // fossil specks
-    col = mix(col, col * .9, smoothstep(.55, .85, big) * .5);                            // weathering
+    vec3 base = mix(vec3(.70, .46, .35), vec3(.62, .40, .30), r) * (.94 + .08 * h21(id + 3.));
+    col = base * (.92 + .12 * fbm(p * .06 + id * 3.));
+    col = mix(col, vec3(.80, .64, .53), .3 * smoothstep(.55, .85, big));
     float edge = min(dj, de);
-    float j = 1. - smoothstep(.6, 1.6, edge);
-    col = mix(col, vec3(.56, .51, .43), j);
-    h = .66 + .02 * mid - .22 * (1. - smoothstep(.6, 3.5, edge));
-  } else {                                              // the field: terracotta octagons, little glazed squares at the corners
-    vec2 q = p - vec2(uWB + uBand);
-    vec2 cell = floor(q / uTile), l = q - (cell + .5) * uTile, al = abs(l);
-    float c = uTile * .2, g = 1.1 + .5 * vn(p * .3);
-    float dOct = max(max(al.x, al.y) - uTile * .5, (al.x + al.y - (uTile - c)) * .7071);
-    dOct += .8 * (vn(p * .35 + cell) - .5);                                             // hand-made edges
-    vec2 rr = l - sign(l) * uTile * .5; float dIns = (abs(rr.x) + abs(rr.y) - c) * .7071 + .6 * (vn(p * .4) - .5);
-    vec2 iid = cell + step(0., l) ;
-    if (dOct < -g * .5) {
-      float r = h21(cell), r2 = h21(cell + 17.);
-      vec3 base = r < .2 ? vec3(.72, .36, .22) : r < .4 ? vec3(.78, .45, .28) : r < .6 ? vec3(.66, .32, .20) : r < .8 ? vec3(.80, .50, .33) : vec3(.62, .29, .18);
-      base *= .94 + .1 * r2;
-      vec2 fl = normalize(vec2(h21(cell + 3.) - .5, h21(cell + 5.) - .5) + .001);
-      base *= 1. - .07 * dot(l / uTile, fl);                                             // kiln flashing across the tile
-      col = base * (.88 + .2 * fbm(p * .07 + cell * 3.1));
-      col *= 1. - .22 * smoothstep(.80, .95, vn(p * 1.4 + cell * 7.));                                  // sand grains
-      col = mix(col, vec3(.84, .66, .54), .35 * smoothstep(.56, .82, big));              // worn paler where people walk
-      col = mix(col, vec3(.88, .84, .78), .22 * smoothstep(.72, .92, fbm(p * .02 + 7.)));  // salt bloom
-      col *= 1. - .12 * (1. - smoothstep(1., 6., -dOct));                                // burnt rims
-      if (h21(cell + 9.) < .07) { float cr = abs(l.y - l.x * (h21(cell + 4.) - .5) * 1.5 + (vn(l * .2 + cell) - .5) * 8.); col *= 1. - .35 * (1. - smoothstep(.2, .9, cr)); }
-      h = .62 + .03 * mid - .2 * (1. - smoothstep(0., 2.6, -dOct - g * .5));
-    } else if (dIns < -g * .5) {
-      float r = h21(iid + 31.);
-      vec3 glaze = r < .72 ? vec3(.10, .36, .40) : vec3(.86, .81, .68);
-      col = glaze * (.9 + .15 * fbm(p * .1 + iid));
-      col = mix(col, vec3(.72, .48, .34), smoothstep(-2., -.2, dIns + g * .5) * .6);    // glaze worn off the edges
-      h = .64 - .2 * (1. - smoothstep(0., 1.8, -dIns - g * .5));
-    } else { col = vec3(.70, .64, .54) * (.85 + .2 * fine) * (.9 + .1 * mid); h = .40 + .03 * fine; }
+    col *= 1. - .1 * (1. - smoothstep(1., 5., edge));
+    col = mix(col, vec3(.74, .69, .60), 1. - smoothstep(.7, 1.7, edge));
+    h = .62 + .02 * mid - .26 * (1. - smoothstep(1., 3.6, edge));
+  } else {                                              // the field: big limestone flags in rows, joints jittered, a quarter split in two
+    vec2 q = p - vec2(uWB + uBand); float RH = uTile, row = floor(q.y / RH), ly = q.y - row * RH;
+    float L = RH * 1.5, sd = row * 7.13 + 1.;
+    float i = floor(q.x / L), j0 = i * L + (h21(vec2(i, sd)) - .5) * L * .6, j1 = (i + 1.) * L + (h21(vec2(i + 1., sd)) - .5) * L * .6, k2 = i;
+    if (q.x < j0) { j1 = j0; k2 = i - 1.; j0 = k2 * L + (h21(vec2(k2, sd)) - .5) * L * .6; }
+    else if (q.x > j1) { j0 = j1; k2 = i + 1.; j1 = (i + 2.) * L + (h21(vec2(i + 2., sd)) - .5) * L * .6; }
+    vec2 id = vec2(k2, row); float yl = ly, yh = RH;
+    if (h21(id + .7) < .28) { if (ly < RH * .5) yh = RH * .5; else { yl = ly - RH * .5; yh = RH * .5; id += vec2(.5, .5); }
+      float mx = mix(j0, j1, .3 + .4 * h21(id + 2.)); if (q.x < mx) j1 = mx; else { j0 = mx; id += vec2(.25, 0.); } }
+    float dj = min(q.x - j0, j1 - q.x), de = min(yl, yh - yl), edge = min(dj, de) + .7 * (vn(p * .25) - .5);
+    float r = h21(id), r2 = h21(id + 5.);
+    vec3 base = r < .4 ? vec3(.88, .85, .78) : r < .7 ? vec3(.86, .82, .73) : r < .9 ? vec3(.87, .86, .81) : vec3(.84, .79, .69);
+    base *= .96 + .06 * r2;
+    col = base * (1. + .09 * (fbm(p * .016 + id * 3.) - .5)) * (1. - .035 * (fine - .5));
+    col -= .014 * (1. - smoothstep(0., .02, abs(fbm(p * .007 + id * 1.7) - .5)));                 // faint veins
+    col -= .05 * smoothstep(.86, .97, vn(p * 1.2 + id * 5.));                                    // fossil specks
+    col *= 1. - .06 * (1. - smoothstep(1., 8., edge));                                          // a little dirt at the joints
+    col = mix(col, col * vec3(.95, .93, .9), smoothstep(.55, .8, big));                          // weathering
+    h = .66 + .012 * mid - .3 * (1. - smoothstep(1.1, 4.4 + .8 * vn(p * .5 + id), edge));          // a sunken joint, the flag's edge bevelled and worn
+    if (h21(id + 11.) < .035) {                                                                   // here and there, a patch of small terracotta squares
+      float ts = RH / 3.; vec2 lq = vec2(q.x - j0, yl); vec2 g = floor(lq / ts), f = lq - g * ts; float te = min(min(f.x, ts - f.x), min(f.y, ts - f.y));
+      float rr = h21(g + id * 3.); col = mix(vec3(.70, .46, .35), vec3(.64, .41, .31), rr) * (.92 + .12 * fbm(p * .07 + g)); col = mix(col, vec3(.74, .69, .6), 1. - smoothstep(.7, 1.6, te)); h = .62 - .2 * (1. - smoothstep(.7, 2.5, te)); }
+    col = mix(col, vec3(.70, .65, .56), 1. - smoothstep(.6, 1.8, edge));                         // the joints' mortar, down in the channel
   }
   o = vec4(clamp(col, 0., 1.), h);
 }`, 'floor');
@@ -437,16 +461,21 @@ uniform vec4 uSway;                    // offset x, y, amplitude, -
 uniform vec4 uCanS, uCanM;             // its sun / moon shadow: centre x, y, elongation, blur lod
 uniform vec4 uCat0, uCat1, uCat2;      // x, y, heading, curl | walk phase, legs, breath, tail sway | -, -, height, scale
 uniform vec4 uLamp[3]; uniform int uNL;
+float jointShade(vec2 p, float h0, vec4 Lg) {
+  float tE = 1. / max(Lg.z, .02), v = 1.;
+  for (int i = 1; i <= 3; i++) { float t = float(i) * 1.4; float hh = texture(uFloor, (p + Lg.xy * t) / uCss).a * 8.; v = min(v, smoothstep(-.35, .35, h0 + t * tE - hh)); }
+  return v;
+}
 float relief(vec3 n, vec3 L) { return clamp(dot(n, L) / max(L.z, .09), 0., 2.3); }
 vec2 shimmer(vec2 rel) { return uSway.z * .0042 * vec2(sin(uT * 1.3 + rel.y * .09) + .5 * sin(uT * 2.1 + rel.x * .15), cos(uT * 1.1 + rel.x * .08) + .5 * cos(uT * 1.9 + rel.y * .13)); }
 float canShadow(vec2 p, vec4 cs, vec2 d) {
   vec2 rel = p - cs.xy - uSway.xy * 1.3; vec2 pd = vec2(-d.y, d.x);
   float a = dot(rel, d) / cs.z, b = dot(rel, pd); rel = a * d + b * pd;
-  if (dot(rel, rel) > 1.25 * uCan.z * uCan.z * 1.21) return 1.;
+  if (dot(rel, rel) > 1.21 * uCan.z * uCan.z) return 1.;
   vec2 uv = rel / (2.2 * uCan.z) + .5 + shimmer(rel) * 1.6;
-  return 1. - .88 * textureLod(uLeaf, uv, cs.w).a;
+  return 1. - .9 * textureLod(uLeaf, uv, cs.w).a;
 }
-// ---- the cat: an arc of a spine that straightens to walk and curls to sleep ----
+// ---- the cat: walking, a spine (an arc) with legs, head and tail; asleep, a drawn curled pose; it morphs between the two ----
 vec3 arc(vec2 q, float k, float s0, float s1) {
   if (abs(k) < 1e-4) { float s = clamp(q.x, s0, s1); return vec3(length(q - vec2(s, 0.)), s, q.y); }
   float R = 1. / k; vec2 v = q - vec2(0., R); float th = atan(v.x * k, -v.y * k), s = th / k;
@@ -457,10 +486,8 @@ vec3 arc(vec2 q, float k, float s0, float s1) {
 float smin(float a, float b, float k) { float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
 float segD(vec2 p, vec2 a, vec2 b, out float u) { vec2 pa = p - a, ba = b - a; u = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-4), 0., 1.); return length(pa - ba * u); }
 // returns distance (cat units), part (0 body, 1 head, 2 tail, 3 legs, 4 ears), and a coordinate along it for stripes
-vec4 catSD(vec2 p, out float hgt) {
-  float sc = uCat2.w; vec2 q0 = (p - uCat0.xy) / sc; float hd = uCat0.z, cu = uCat0.w;
-  vec2 f = vec2(cos(hd), sin(hd)), r = vec2(-f.y, f.x); vec2 q = vec2(dot(q0, f), dot(q0, r));
-  const float Lb = 46.; float k = cu * 3.0 / Lb, br = uCat1.z;
+vec4 walkSD(vec2 q, out float hgt) {
+  const float Lb = 46.; float cu = 0., k = 0., br = 1.;
   vec3 A = arc(q, k, -Lb * .5, Lb * .5); float uu = (A.y + Lb * .5) / Lb;
   float w = (10. + 4.2 * sin(3.1416 * clamp(uu, 0., 1.))) * br;
   float dB = A.x - w; hgt = w * sqrt(clamp(1. - (A.x / w) * (A.x / w), 0., 1.)) * .85;
@@ -491,66 +518,135 @@ vec4 catSD(vec2 p, out float hgt) {
   else if (dT <= d + .01 && dT < dB) { part = 2.; co = Tl.y; }
   else if (dL <= d + .01 && dL < dB) { part = 3.; }
   hgt = 7. * sqrt(clamp(-d / 8., 0., 1.)) + 2.5 * smoothstep(1., -5., dH) - 1.5 * smoothstep(1., -2., dT) * step(dT, dB);   // one smooth surface: no seams where the parts meet
-  return vec4(d * sc, part, co, lat);
+  return vec4(d, part, co, lat);
+}
+vec3 furWalk(vec4 c) {
+  vec3 base = vec3(.76, .43, .17), dark = vec3(.50, .25, .08), cream = vec3(.93, .84, .68), fur = base;
+  if (c.y < .5) { float st = smoothstep(.35, .85, sin(c.z * .55 + sin(c.w * .35 + c.z * .1) * 1.3)); fur = mix(base, dark, st * .6 * smoothstep(15., 6., abs(c.w))); fur = mix(fur, dark, .35 * smoothstep(3., 0., abs(c.w))); }
+  else if (c.y < 1.5) { fur = mix(base, cream, smoothstep(4., 9., c.z) * .7); fur = mix(fur, dark, .3 * smoothstep(1.5, 0., abs(sin(c.z * .9)) * 3.) * step(c.z, 2.)); }
+  else if (c.y < 2.5) { fur = mix(base, dark, smoothstep(.2, .8, sin(c.z * .7)) * .8); fur = mix(fur, dark, smoothstep(34., 44., c.z)); }
+  else if (c.y < 3.5) fur = cream; else fur = mix(dark, vec3(.85, .55, .5), .25);
+  return fur;
+}
+// asleep: a round body with the haunch, the head resting on its front edge with the nose tucked down, ears up,
+// the tail wrapped round the outside to the nose, one white paw showing
+float ellD(vec2 q, vec2 ab) { return (length(q / ab) - 1.) * min(ab.x, ab.y); }
+vec4 curlSD(vec2 q, out float hgt, out vec3 fur) {
+  float br = uCat1.z;
+  float dBody = smin(ellD(q, vec2(23., 18.5) * br), length(q - vec2(-9., 4.)) - 15. * br, 5.);
+  vec2 hc = vec2(12.5, 7.5); vec2 F = normalize(vec2(.55, .85));               // the head, and which way the nose points
+  float dHead = smin(length(q - hc) - 11., length(q - hc - F * 7.5) - 6.5, 3.);
+  vec2 E0 = normalize(vec2(.75, -.65)); float c1 = cos(.55), s1 = sin(.55);
+  vec2 e1 = vec2(E0.x * c1 - E0.y * s1, E0.x * s1 + E0.y * c1), e2 = vec2(E0.x * c1 + E0.y * s1, -E0.x * s1 + E0.y * c1);
+  float u1, u2; float dE1 = segD(q, hc + e1 * 6., hc + e1 * 17., u1) - mix(5.5, .9, u1), dE2 = segD(q, hc + e2 * 6., hc + e2 * 17., u2) - mix(5.5, .9, u2);
+  float dEar = min(dE1, dE2), ue = dE1 < dE2 ? u1 : u2;
+  // tail: round the outside, from the back past the bottom to the nose
+  float ang = atan(q.y, q.x), a0 = 3.1, a1 = 1.15; float t = clamp((a0 - ang) / (a0 - a1), 0., 1.);
+  float tw = mix(5.8, 3.6, t); float dTail;
+  if (ang < a1 || ang > a0) { vec2 pe = vec2(cos(a1), sin(a1)) * vec2(25.5, 21.); vec2 pb = vec2(cos(a0), sin(a0)) * vec2(25.5, 21.);
+    dTail = min(length(q - pe) - 3.2, length(q - pb) - 5.); }
+  else dTail = abs(ellD(q, vec2(25.5, 21.))) - tw;
+  float dPaw = length((q - vec2(5., 17.)) * vec2(.8, 1.2)) - 4.;
+  float d = min(min(dBody, dHead), min(dEar, min(dTail, dPaw)));
+  // colour: tabby stripes across the back (they radiate in a curled cat), a dark spine line, the head's own stripes
+  vec3 base = vec3(.76, .43, .17), dark = vec3(.50, .25, .08), cream = vec3(.93, .84, .68);
+  float rq = length(q / vec2(23., 18.5));
+  fur = base;
+  float st = smoothstep(.5, .9, sin(q.x * .42 + sin(q.y * .25) * 1.6)); fur = mix(fur, dark, st * .38 * smoothstep(1.02, .55, rq));
+  fur = mix(fur, dark, .3 * smoothstep(.1, 0., abs(rq - .6)) * step(-1.4, ang) * step(ang, 2.6));
+  fur = mix(fur, cream, .35 * smoothstep(.88, 1.05, rq) * step(0., q.y));                          // the paler belly fur at the rim
+  hgt = 8. * sqrt(clamp(-dBody / 10., 0., 1.));
+  if (dTail < 0. && (dBody > -1.5 || dTail < dBody)) { fur = mix(base, dark, smoothstep(.2, .8, sin(t * 16.)) * .7); fur = mix(fur, dark, smoothstep(.8, 1., t)); hgt = max(hgt, 4. * sqrt(clamp(-dTail / tw, 0., 1.)) + (dBody < 0. ? 6. : 0.)); }
+  if (dPaw < 0. && dHead > 0.) { fur = cream; hgt = max(hgt, 6. + 3. * sqrt(clamp(-dPaw / 4.5, 0., 1.))); }
+  if (dHead < 0. || dEar < 0.) {
+    vec2 hq = q - hc; float along = dot(hq, F), side = dot(hq, vec2(-F.y, F.x));
+    fur = base; fur = mix(fur, dark, .4 * smoothstep(.55, .9, sin(side * 1.5)) * smoothstep(-2., -9., along) * smoothstep(7., 2., abs(side)));   // thin forehead stripes   // forehead stripes
+    fur = mix(fur, cream, smoothstep(6., 11., along) * .8);                                                     // muzzle
+    if (dEar < 0. && dHead > 0.) fur = mix(base * .92, dark, smoothstep(.35, .9, ue));
+    fur *= 1. - .35 * smoothstep(-2.5, 0., max(dHead, -dEar - 1.)) * step(dBody, 0.) * step(dHead, 0.);          // the head's outline where it lies on the body
+    hgt = max(hgt, 10. + 6. * sqrt(clamp(-dHead / 10., 0., 1.)) - (dEar < 0. ? 1. : 0.));
+  }
+  return vec4(d, 0., 0., 0.);
+}
+// the cat at a point: fur colour and signed distance (px); its height for the lighting
+vec4 catEval(vec2 p, out float hgt) {
+  float sc = uCat2.w; vec2 q0 = (p - uCat0.xy) / sc; float hd = uCat0.z, cu = uCat0.w;
+  vec2 f = vec2(cos(hd), sin(hd)), r = vec2(-f.y, f.x); vec2 q = vec2(dot(q0, f), dot(q0, r));
+  float dW = 1e3, dC = 1e3, hW = 0., hC = 0.; vec3 fW = vec3(0.), fC = vec3(0.);
+  if (cu < .999) { vec4 c = walkSD(q, hW); dW = c.x; fW = furWalk(c); }
+  if (cu > .001) { vec4 c = curlSD(q, hC, fC); dC = c.x; }
+  float m = smoothstep(0., 1., cu);
+  hgt = mix(hW, hC, m) * sc / 1.9;
+  return vec4(mix(fW, fC, smoothstep(.2, .8, cu)), mix(dW, dC, m) * sc);
 }
 void main() {
   vec2 fc = gl_FragCoord.xy; vec2 p = vec2(fc.x, uDev.y - fc.y) / uK, uv = p / uCss;
   vec4 fl = texture(uFloor, uv), pr = texture(uProps, uv), ph = texture(uPropsH, uv);
-  float hgt = mix(fl.a * 5., ph.r * 40., pr.a);
+  const float HS = 8.;                                                                     // the floor's relief, px: joints sit ~2 px below the flags
+  float hF = fl.a * HS, hgt = mix(hF, ph.r * 40., pr.a), onFloor = 1. - smoothstep(.1, .5, pr.a);
+  float hrel = min(0., fl.a - .66) * HS * onFloor;                                         // how far below the flags' faces this point is
+  float seam = smoothstep(.6, .42, fl.a) * onFloor;
   vec2 g = clamp(vec2(dFdx(hgt), -dFdy(hgt)) * uK, -1.6, 1.6);
   vec3 n = normalize(vec3(-g, 1.));
   vec3 alb = pow(fl.rgb * (1. - pr.a) + pr.rgb, vec3(2.2));
   float mat = ph.g * step(.02, pr.a);
   vec4 sh = texture(uShade, uv);
+  // down in a joint a shadow's edge lands a little further on (the light has further to come): the edge steps across the seams
+  if (hrel < -.05) { sh.r = texture(uShade, (p - uSunG.xy * hrel * uSunG.z) / uCss).r; sh.g = texture(uShade, (p - uMoonG.xy * hrel * uMoonG.z) / uCss).g; }
+  // and the joint's own wall shades its floor on the side away from the light
+  float selfS = 1., selfM = 1.;
+  if (onFloor > .5 && uSunC.r > .001) selfS = jointShade(p, hF, uSunG);
+  if (onFloor > .5 && uMoonC.b > .0005) selfM = jointShade(p, hF, uMoonG);
   float cs = uSunC.r > .001 ? canShadow(p, uCanS, uSunG.xy) : 1., cm = uMoonC.b > .0005 ? canShadow(p, uCanM, uMoonG.xy) : 1.;
   // the cat's own shadow
   float catS = 1., catM = 1., ch;
-  { vec2 q = p + uSunG.xy * uCat2.z * uSunG.z; if (length(q - uCat0.xy) < 80. * uCat2.w && uSunC.r > .001) catS = smoothstep(-1.2 - uCat2.z / uSunG.w * .03, 1.5, catSD(q, ch).x);
-    vec2 qm = p + uMoonG.xy * uCat2.z * uMoonG.z; if (length(qm - uCat0.xy) < 80. * uCat2.w && uMoonC.b > .0005) catM = smoothstep(-1.5, 2., catSD(qm, ch).x); }
-  float sunV = sh.r * cs * catS, moonV = sh.g * cm * catM;
-  vec3 sky = uSkyC * sh.a, lant = uLantC * sh.b * 2.6;
+  { vec2 q = p + uSunG.xy * uCat2.z * uSunG.z; if (length(q - uCat0.xy) < 80. * uCat2.w && uSunC.r > .001) catS = smoothstep(-1.2 - uCat2.z / uSunG.w * .03, 1.5, catEval(q, ch).w);
+    vec2 qm = p + uMoonG.xy * uCat2.z * uMoonG.z; if (length(qm - uCat0.xy) < 80. * uCat2.w && uMoonC.b > .0005) catM = smoothstep(-1.5, 2., catEval(qm, ch).w); }
+  float sunV = sh.r * cs * catS * selfS, moonV = sh.g * cm * catM * selfM;
+  vec3 sky = uSkyC * sh.a * (1. - .22 * seam), lant = uLantC * sh.b * 2.6 * (1. - .25 * seam);
   vec3 lit = sky * (.74 + .26 * n.z) + uSunC * sunV * relief(n, uSunL) + uMoonC * moonV * relief(n, uMoonL) + lant;
   if (abs(mat - .353) < .1) lit += (uSunC * sunV + uMoonC * moonV) * .18;                 // leaves let a little light through
   vec3 col = alb * lit;
-  { vec3 cool = alb * (sky * (.74 + .26 * n.z) + uMoonC * moonV * relief(n, uMoonL)); col += (vec3(dot(cool, vec3(.3, .55, .15))) * vec3(.55, .78, 1.3) - cool) * uNight * .75; }
+  // light raking into a joint: the lit flag edges bounce warm light down into it (most at a low sun)
+  col += alb * uSunC * sh.r * cs * seam * .5 * (1. - uSunL.z) * vec3(1., .78, .55);  { vec3 cool = alb * (sky * (.74 + .26 * n.z) + uMoonC * moonV * relief(n, uMoonL)); col += (vec3(dot(cool, vec3(.3, .55, .15))) * vec3(.55, .78, 1.3) - cool) * uNight * .75; }
   if (abs(mat - .667) < .1) {                                                             // water: the sky (and a lantern) looked at in it
     col = mix(col, uSkyC * .22 + uLantC * sh.b * .5 + uSunC * sunV * .03 + vec3(.004, .008, .008), .8); }
   if (mat > .95) col += alb * uLantC * uLantOn * 2.2;                                     // a lantern's glass, lit
   // ---- the cat ----
   if (length(p - uCat0.xy) < 75. * uCat2.w) {
-    vec4 c = catSD(p, ch);
-    if (c.x < 1.) {
-      float e = .8 / uK, hx, hy; vec4 cx = catSD(p + vec2(e, 0.), hx), cy = catSD(p + vec2(0., e), hy);
+    vec4 c = catEval(p, ch);
+    if (c.w < 1.) {
+      float e = .8 / uK, hx, hy; catEval(p + vec2(e, 0.), hx); catEval(p + vec2(0., e), hy);
       vec3 cn = normalize(vec3(-(hx - ch) / e * .6, -(hy - ch) / e * .6, 1.));
-      vec3 base = vec3(.80, .43, .19), dark = vec3(.55, .25, .09), cream = vec3(.95, .85, .70);
-      vec3 fur = base;
-      if (c.y < .5) { float st = smoothstep(.35, .85, sin(c.z * .55 + sin(c.w * .35 + c.z * .1) * 1.3)); fur = mix(base, dark, st * .6 * smoothstep(15., 6., abs(c.w))); fur = mix(fur, dark, .35 * smoothstep(3., 0., abs(c.w))); }
-      else if (c.y < 1.5) { fur = mix(base, cream, smoothstep(4., 9., c.z) * .7); fur = mix(fur, dark, .3 * smoothstep(1.5, 0., abs(sin(c.z * .9)) * 3.) * step(c.z, 2.)); fur *= 1. - .45 * smoothstep(3., 0., c.w); }   // forehead stripes; a crease where the head lies on the body
-      else if (c.y < 2.5) { fur = mix(base, dark, smoothstep(.2, .8, sin(c.z * .7)) * .8); fur = mix(fur, dark, smoothstep(30., 40., c.z)); }
-      else if (c.y < 3.5) fur = cream; else fur = mix(dark, vec3(.85, .55, .5), .25);
-      vec3 ca = pow(fur, vec3(2.2));
+      vec3 ca = pow(c.rgb, vec3(2.2));
       float sv = sh.r * cs, mv = sh.g * cm;
       vec3 cl = sky * (.6 + .4 * cn.z) + uSunC * sv * relief(cn, uSunL) + uMoonC * mv * relief(cn, uMoonL) + lant;
-      col = mix(col, ca * cl, 1. - smoothstep(-.6, .9, c.x));
+      col = mix(col, ca * cl, 1. - smoothstep(-.6, .9, c.w));
     }
   }
   // ---- the olive crown ----
   vec2 crel = p - uCan.xy - uSway.xy;
-  if (dot(crel, crel) < 1.25 * uCan.z * uCan.z * 1.21) {
+  if (dot(crel, crel) < 1.21 * uCan.z * uCan.z) {
     vec2 cuv = crel / (2.2 * uCan.z) + .5 + shimmer(crel);
     vec4 lf = texture(uLeaf, cuv);
     if (lf.a > .004) {
-      vec3 la = pow(lf.rgb, vec3(2.2)); vec2 rr = crel / uCan.z; float nz = sqrt(max(.1, 1. - dot(rr, rr) * .8));
-      vec3 cn = normalize(vec3(rr * .8, nz)); float dens = textureLod(uLeaf, cuv, 4.).a;
-      vec3 cl = uSkyC * (.5 + .5 * nz) * mix(1., .6, dens) + uSunC * relief(cn, uSunL) * mix(1., .7, dens) * .95 + uMoonC * relief(cn, uMoonL) + uLantC * sh.b * 1.4
-        + uSunC * .12 * (1. - dens);
+      float e = 1.5 / 1024.; float hx = texture(uLeaf, cuv + vec2(e, 0.)).b, hy = texture(uLeaf, cuv + vec2(0., e)).b;
+      float px = e * 2.2 * uCan.z, hs = .35 * uCan.z;
+      vec2 rr = crel / uCan.z; float nz = sqrt(max(.1, 1. - dot(rr, rr) * .7));
+      vec3 cn = normalize(vec3(rr * .55 - vec2(hx - lf.b, hy - lf.b) / px * hs, nz));
+      vec3 la = pow(mix(vec3(.24, .29, .16), vec3(.56, .60, .50), lf.r), vec3(2.2)) * (.5 + .5 * lf.g);
+      float inner = 1. - lf.g;
+      vec3 cl = uSkyC * (.45 + .55 * cn.z) * (1. - .45 * inner) + uSunC * relief(cn, uSunL) * (1. - .35 * inner) * .9 + uMoonC * relief(cn, uMoonL) + uLantC * sh.b * 1.2
+        + uSunC * .08 * lf.g;
       col = mix(col, la * cl, lf.a);
     }
   }
   // the lanterns' own glow round them
   for (int i = 0; i < 3; i++) { if (i >= uNL) break; float d = length(p - uLamp[i].xy); col += uLantC * uLantOn * (.55 * exp(-d * d / 300.) + .08 * exp(-d / 40.)); }
   col *= uExpo;
-  col = clamp(col * (2.51 * col + .03) / (col * (2.43 * col + .59) + .14), 0., 1.);
+  { float l = dot(col, vec3(.2126, .7152, .0722)), t = l * (2.51 * l + .03) / (l * (2.43 * l + .59) + .14);
+    vec3 c2 = col * (t / max(l, 1e-5)); float over = max(max(c2.r, c2.g), c2.b);
+    col = clamp(mix(c2, vec3(t), clamp(over - 1., 0., 1.)), 0., 1.); }
   o = vec4(pow(col, vec3(1. / 2.2)), 1.);
 }`, 'comp');
 
@@ -566,7 +662,7 @@ function texOf(w, h, opts = {}) {
   return t;
 }
 function fboOf(t) { const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return f; }
-let T = {}, SW = 1, SHh = 1, SS = .5, LEAF_N = 768, booted = false, shadeDirty = true, full = true;
+let T = {}, SW = 1, SHh = 1, SS = .5, LEAF_N = 1024, booted = false, shadeDirty = true, full = true;
 function freeGL() { for (const k in T) { const v = T[k]; if (v instanceof WebGLTexture) gl.deleteTexture(v); else if (v instanceof WebGLFramebuffer) gl.deleteFramebuffer(v); } T = {}; }
 function build() {
   W = innerWidth; H = innerHeight; K = devicePixelRatio || 1;
@@ -623,7 +719,7 @@ function render(now) {
     add(t.x, t.y, t.R * 1.25 + 6);
     if (s.sunC[0] > .001) add(cS[0], cS[1], t.R * 1.3 * cS[2] + 12);
     if (s.moonOn) add(cM[0], cM[1], t.R * 1.3 * cM[2] + 12);
-    const cr = 80 * U, so = Math.min(8 * U * s.sCot, 140) + 8;
+    const cr = 75 * L.catS, so = Math.min(12 * U * s.sCot, 180) + 8;
     add(cat.x, cat.y, cr + so); if (cat.px !== undefined) add(cat.px, cat.py, cr + so);
     box = bx.reduce((a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]);
   }
@@ -640,7 +736,7 @@ function render(now) {
   gl.uniform1f(u.uExpo, s.expo); gl.uniform1f(u.uNight, s.night);
   gl.uniform4f(u.uCan, t.x, t.y, t.R, t.zc); gl.uniform4f(u.uSway, ox, oy, sw, 0);
   gl.uniform4f(u.uCanS, ...cS); gl.uniform4f(u.uCanM, ...cM);
-  gl.uniform4f(u.uCat0, cat.x, cat.y, cat.hd, cat.curl); gl.uniform4f(u.uCat1, cat.phase, cat.legs, cat.breath, cat.tail); gl.uniform4f(u.uCat2, 0, 0, 8 * U, 1.15 * U);
+  gl.uniform4f(u.uCat0, cat.x, cat.y, cat.hd, cat.curl); gl.uniform4f(u.uCat1, cat.phase, cat.legs, cat.breath, cat.tail); gl.uniform4f(u.uCat2, 0, 0, 12 * U, L.catS);
   gl.uniform4fv(u.uLamp, bufL); gl.uniform1i(u.uNL, L.lamps.length);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.disable(gl.SCISSOR_TEST);
@@ -665,17 +761,17 @@ function sunVisAt(x, y, d, ct) {
 function lampAt(x, y) { let E = 0; for (const l of L.lamps) { const r2 = (x - l.x) ** 2 + (y - l.y) ** 2 + l.h * l.h; E += Math.pow(l.h * l.h / r2, 1.5); } return E; }
 const covered = (x, y, m) => panels.some(p => !p.dying && x > p.tx - m && x < p.tx + p.tw + m && y > p.ty - m && y < p.ty + p.th + m);
 function blocked(x, y, m = 0) {
-  if (x < L.WB + 30 || x > W - L.WB - 30 || y < L.top + L.WB + 30 || y > L.bot - L.WB - 30) return true;
-  for (const c of L.cyl) if (Math.hypot(x - c.x, y - c.y) < c.r + 26 * U + m) return true;
-  for (const b of L.boxes) if (b.grounded && x > b.x - 26 * U && x < b.x + b.w + 26 * U && y > b.y - 26 * U && y < b.y + b.h + 26 * U) return true;
+  if (x < L.WB + 50 * U || x > W - L.WB - 50 * U || y < L.top + L.WB + 50 * U || y > L.bot - L.WB - 50 * U) return true;
+  for (const c of L.cyl) if (Math.hypot(x - c.x, y - c.y) < c.r + 44 * U + m) return true;
+  for (const b of L.boxes) if (x > b.x - 44 * U && x < b.x + b.w + 44 * U && y > b.y - 44 * U && y < b.y + b.h + 44 * U) return true;
   if (Math.hypot(x - L.tree.x, y - L.tree.y) < L.tree.R * 1.05) return true;     // (under the crown you'd never see it)
-  for (const l of L.lamps) if (Math.hypot(x - l.x, y - l.y) < 30 * U) return true;
+  for (const l of L.lamps) if (Math.hypot(x - l.x, y - l.y) < 55 * U) return true;
   return false;
 }
 function warmth(x, y) {
-  if (covered(x, y, 18 * U)) return 0;
+  if (covered(x, y, 34 * U)) return 0;
   const sunS = sky.sunOn ? Math.max(0, sky.sunC[0] + sky.sunC[1]) / 4 : 0, lampS = sky.lant * .9;
-  let sv = 0; if (sunS > .01) { const o = 18 * U; for (const [dx, dy] of [[0, 0], [o, 0], [-o, 0], [0, o], [0, -o]]) sv += sunVisAt(x + dx, y + dy, sky.sd, sky.sCot) / 5; }
+  let sv = 0; if (sunS > .01) { const o = 34 * U; for (const [dx, dy] of [[0, 0], [o, 0], [-o, 0], [0, o], [0, -o]]) sv += sunVisAt(x + dx, y + dy, sky.sd, sky.sCot) / 5; }
   return sunS * sv + lampS * Math.min(1, lampAt(x, y) * 1.3);
 }
 function bestSpot() {
@@ -689,7 +785,7 @@ function bestSpot() {
 }
 function pathClear(x0, y0, x1, y1) { const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 12);
   for (let i = 1; i < n; i++) { const x = lerp(x0, x1, i / n), y = lerp(y0, y1, i / n);
-    for (const c of L.cyl) if (c !== L.cyl[L.cyl.length - 1] && Math.hypot(x - c.x, y - c.y) < c.r + 14 * U) return false;
+    for (const c of L.cyl) if (c !== L.cyl[L.cyl.length - 1] && Math.hypot(x - c.x, y - c.y) < c.r + 24 * U) return false;
     for (const b of L.boxes) if (b.grounded && x > b.x - 10 && x < b.x + b.w + 10 && y > b.y - 10 && y < b.y + b.h + 10) return false; }
   return true; }
 function placeCat() {
@@ -716,9 +812,9 @@ function stepCat(now, dt) {
     c.curl = 1 - e; c.legs = e; c.breath = 1; c.hd = c.h0 + wrapA(toward - c.h0) * e;
     if (u >= 1) { c.state = 'walk'; c.t0 = now; c.speed = 0; } return true; }
   if (c.state === 'walk') { const dx = c.tx - c.x, dy = c.ty - c.y, dist = Math.hypot(dx, dy);
-    const want = 26 * U * clamp(dist / (50 * U), .25, 1); c.speed += (want - c.speed) * Math.min(1, dt * 2.5);
+    const want = 40 * U * clamp(dist / (70 * U), .25, 1); c.speed += (want - c.speed) * Math.min(1, dt * 2.5);
     c.hd += clamp(wrapA(toward - c.hd), -1.8 * dt, 1.8 * dt);
-    const st = Math.min(dist, c.speed * dt); c.x += Math.cos(c.hd) * st; c.y += Math.sin(c.hd) * st; c.phase += st / (6.5 * U); c.tail = .012 * Math.sin(now / 1000 * 2.2);
+    const st = Math.min(dist, c.speed * dt); c.x += Math.cos(c.hd) * st; c.y += Math.sin(c.hd) * st; c.phase += st / (6.5 * L.catS); c.tail = .012 * Math.sin(now / 1000 * 2.2);
     if (dist < 2) { c.state = 'settle'; c.t0 = now; c.h0 = c.hd; } return true; }
   if (c.state === 'settle') { const u = clamp(el / 2.6, 0, 1), e = u * u * (3 - 2 * u);   // turns round once, and curls up
     c.curl = e; c.legs = 1 - e; c.hd = c.h0 + 4.1 * e; c.phase += dt * 4 * (1 - e);
@@ -775,6 +871,7 @@ wake(); scheduleCatCheck(3000);
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { build(); wake(); }, 250); });
 window.__twProbe = (x, y) => { const px = new Uint8Array(4); gl.bindFramebuffer(gl.FRAMEBUFFER, T.shadeF); gl.readPixels(Math.round(x * SS), Math.round(y * SS), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   return { shade: [...px].map(v => +(v / 255).toFixed(3)), sky: sky.skyC.map(v => +v.toFixed(3)), sun: sky.sunC.map(v => +v.toFixed(3)), moon: sky.moonC.map(v => +v.toFixed(4)), lant: sky.lant, expo: sky.expo }; };   // (tests: what the shade pass found at a point)
+window.__twCatPose = (x, y, hd, curl = 1) => { clearTimeout(catTimer); Object.assign(cat, { x, y, hd, curl, legs: 1 - curl, state: curl >= 1 ? 'nap' : 'pose' }); full = true; wake(); };   // (tests: hold the cat in a pose)
 window.__twCat = () => { cat = null; placeCat(); full = true; wake(); return `${cat.x | 0},${cat.y | 0}`; };   // (tests: the cat where it would choose to be, now)
 window.__dbg = () => { const s = sky, f = v => v.toFixed(1);
   let when = ''; try { when = new Date(s.ms).toLocaleString('en-GB', { timeZone: SITE.tz, hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' }); } catch (_) {}
