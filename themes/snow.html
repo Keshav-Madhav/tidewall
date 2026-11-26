@@ -417,7 +417,7 @@ void main() { float r = length(gl_PointCoord - .5) * 2.;
   o = vec4(c, core * .95); }`);
 const WIRE = program(`#version 300 es
 in vec2 aP; uniform vec2 uRes; void main() { gl_Position = vec4(aP.x / uRes.x * 2. - 1., 1. - aP.y / uRes.y * 2., 0., 1.); }`, `#version 300 es
-precision mediump float; out vec4 o; void main() { o = vec4(vec3(.05, .07, .08) * .42, .42); }`);
+precision mediump float; uniform float uA; out vec4 o; void main() { o = vec4(vec3(.05, .07, .08) * .42, .42) * uA; }`);
 const bBuf = gl.createBuffer(), wBuf = gl.createBuffer(), bVao = gl.createVertexArray(), wVao = gl.createVertexArray();
 gl.bindVertexArray(bVao); gl.bindBuffer(gl.ARRAY_BUFFER, bBuf);
 { const l = gl.getAttribLocation(BULB, 'aB'), lc = gl.getAttribLocation(BULB, 'aC'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 4, gl.FLOAT, false, 28, 0); gl.enableVertexAttribArray(lc); gl.vertexAttribPointer(lc, 3, gl.FLOAT, false, 28, 16); }
@@ -431,6 +431,12 @@ function drawLights(now) {
   const grow = (a, need) => { if (need <= a.length) return a; const g = new Float32Array(Math.max(need, a.length * 2)); g.set(a); return g; };
   for (const c of cur) {
     if (c.owner === '__icon' || c.rad || c.w < 160) continue;               // windows only: not icons, widgets or slivers
+    // only on snow that has settled on its window: a ledge still sliding into place (a window just uncovered, moved,
+    // resized) or a bare top had its lights hanging in the air; they fade in and out, never pop
+    let depth = 0; for (const v of c.cols) depth += v; depth /= c.cols.length;
+    const want = Math.abs(c.x - c.tx) < 1.5 && Math.abs(c.y - c.ty) < 1.5 && Math.abs(c.w - c.tw) < 2 && depth > 3.5 ? 1 : 0;
+    c.la = (c.la ?? 0) + (want - (c.la ?? 0)) * Math.min(1, (t - (c.lt ?? t)) * 2.5); c.lt = t;
+    if (c.la < .02) continue;
     const n = Math.floor((c.w - 24) / GAP); if (n < 3) continue;
     const off = (c.w - (n - 1) * GAP) / 2, start = nw;
     let px = 0, py = 0;
@@ -444,15 +450,16 @@ function drawLights(now) {
       px = x; py = y;
       // each bulb twinkles on its own slow beat (seeded by where it sits on the window, so it doesn't change as you move it)
       const seed = (b * 7.31 + c.cols.length * .13) % 1, col = BULB_COLS[(b + (c.owner ? c.owner.length : 0)) % 5];
-      const lit = .55 + .45 * Math.sin(t * (.5 + seed * .9) + seed * 40);
+      const lit = .55 + .45 * Math.sin(t * (.5 + seed * .9) + seed * 40), here = c.la * Math.min(1, Math.max(0, c.cols[i] - 1) / 2.5);   // (none where the snow's too thin to hold them)
+      if (here < .03) { px = x; py = y; continue; }
       bArr = grow(bArr, (nb + 1) * 7); const o = nb * 7;
-      bArr[o] = x; bArr[o + 1] = y; bArr[o + 2] = 17; bArr[o + 3] = lit; bArr[o + 4] = col[0]; bArr[o + 5] = col[1]; bArr[o + 6] = col[2]; nb++;
+      bArr[o] = x; bArr[o + 1] = y; bArr[o + 2] = 17 * here; bArr[o + 3] = lit; bArr[o + 4] = col[0]; bArr[o + 5] = col[1]; bArr[o + 6] = col[2]; nb++;
     }
-    wires.push([start, nw - start]);
+    wires.push([start, nw - start, c.la]);
   }
   if (!nb) return;
   gl.useProgram(WIRE); gl.uniform2f(U(WIRE, 'uRes'), W, H); gl.bindVertexArray(wVao); gl.bindBuffer(gl.ARRAY_BUFFER, wBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, wArr.subarray(0, nw * 2), gl.DYNAMIC_DRAW); for (const [s, n] of wires) gl.drawArrays(gl.LINE_STRIP, s, n);
+  gl.bufferData(gl.ARRAY_BUFFER, wArr.subarray(0, nw * 2), gl.DYNAMIC_DRAW); for (const [s, n, a] of wires) { gl.uniform1f(U(WIRE, 'uA'), a); gl.drawArrays(gl.LINE_STRIP, s, n); }
   gl.useProgram(BULB); gl.uniform2f(U(BULB, 'uRes'), W, H); gl.uniform1f(U(BULB, 'uK'), K); gl.bindVertexArray(bVao); gl.bindBuffer(gl.ARRAY_BUFFER, bBuf);
   gl.bufferData(gl.ARRAY_BUFFER, bArr.subarray(0, nb * 7), gl.DYNAMIC_DRAW); gl.drawArrays(gl.POINTS, 0, nb);
 }
