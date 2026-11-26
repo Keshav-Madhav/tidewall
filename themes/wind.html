@@ -307,7 +307,10 @@ function buildTarget(seedVelocity) {
 }
 
 /* ---------- the base chart, painted once: R ink (coast, cities, labels), G land, B graticule ---------- */
-let COAST = null, ELEV = null, LABEL_BOXES = [], NAME_HALO = [];   // NAME_HALO: every name drawn on this display, [cx, cy, w, h, angle], for the halo
+let COAST = null, ELEV = null, LABEL_BOXES = [], NAME_HALO = [];   // NAME_HALO: every name drawn on this display, [cx, cy, w, h, angle, big], for the halo
+// the big lettering (ranges, plateaus, seas) as screen boxes: a report beside a window keeps off it when it has a choice
+const bigNames = () => NAME_HALO.filter(n => n[5]).map(([cx, cy, w, h, a]) => { const ex = Math.abs(Math.cos(a)) * w / 2 + Math.abs(Math.sin(a)) * h / 2, ey = Math.abs(Math.sin(a)) * w / 2 + Math.abs(Math.cos(a)) * h / 2; return [cx - ex - 4, cy - ey - 3, cx + ex + 4, cy + ey + 3]; });
+let BIG = [];
 // real elevation, a global 0.25° grid (from the AWS Terrain Tiles, built once and shipped with the theme), cubic-interpolated
 function elevAt(lon, lat) {
   const E = ELEV; if (!E) return 0;
@@ -396,7 +399,7 @@ function drawRelief(y) {
     const mg = 40 + w / 2;                                              // (a long name may be set at an angle)
     if (hit(mine, box) || box[2] < D.ox - mg || box[0] > D.ox + W + mg || box[3] < D.oy - mg || box[1] > D.oy + H + mg) continue;   // under your icons, or off this display
     y.save(); y.translate(L.x - D.ox, L.y - D.oy); y.rotate(L.a); y.textAlign = 'center'; y.fillText(L.t, 0, 0); y.restore();
-    NAME_HALO.push([L.x - D.ox + Math.sin(L.a) * size * .32, L.y - D.oy - Math.cos(L.a) * size * .32, w, size * 1.05, L.a]);
+    NAME_HALO.push([L.x - D.ox + Math.sin(L.a) * size * .32, L.y - D.oy - Math.cos(L.a) * size * .32, w, size * 1.05, L.a, 1]);
   }
   y.letterSpacing = '0px'; LABEL_BOXES = boxes;
   window.__relief = 'done ' + peaks.length;
@@ -432,7 +435,7 @@ function paintMap() {
   layer(y => {
     y.fillStyle = 'rgb(150,0,0)';
     const sea = (t, lon, lat, size, rot = 0) => { y.save(); y.translate(X(lon), Y(lat)); y.rotate(rot); y.font = `italic ${size}px ${SERIF}`; y.textAlign = 'center';
-      y.letterSpacing = `${size * .35}px`; y.fillText(t, 0, 0); NAME_HALO.push([X(lon), Y(lat) - size * .32, y.measureText(t).width, size * 1.05, rot]); y.restore(); };
+      y.letterSpacing = `${size * .35}px`; y.fillText(t, 0, 0); NAME_HALO.push([X(lon), Y(lat) - size * .32, y.measureText(t).width, size * 1.05, rot, 1]); y.restore(); };
     const D = WD(), PU = PJU || PJ, XW = lon => X(lon) + D.ox, YW = lat => Y(lat) + D.oy;   // (desk coordinates: every display chooses alike)
     const taken = LABEL_BOXES.slice(), free = b => !taken.some(o => o[0] < b[2] && o[2] > b[0] && o[1] < b[3] && o[3] > b[1]);
     const mine = deskIc.map(([l, t, r, b]) => [l - 8 + D.ox, t - 6 + D.oy, r + 8 + D.ox, b + 6 + D.oy]), underIcon = b => mine.some(o => o[0] < b[2] && o[2] > b[0] && o[1] < b[3] && o[3] > b[1]);
@@ -633,8 +636,8 @@ function wxFor(lat, lon) {
     Promise.all([fetch(f).then(r => r.json()), fetch(a).then(r => r.json()).catch(() => null)])
       .then(([w, q]) => {
         if (!w || !w.current) throw new Error((w && w.reason) || 'no data');       // e.g. the API's per-minute limit: try again shortly
-        e.d = { w, q: q && q.current ? q : (e.d && e.d.q) }; e.t = Date.now(); e.busy = false; e.v = (e.v || 0) + 1; })
-      .catch(err => { e.busy = false; e.t = /daily/i.test(err.message) ? untilTomorrow() - 15 * 60e3 : Date.now() - 15 * 60e3 + 75e3; e.v = (e.v || 0) + 1; post('JSERR wx ' + err.message); });   // retry in ~75 s
+        e.d = { w, q: q && q.current ? q : (e.d && e.d.q) }; e.t = Date.now(); e.busy = false; e.fail = ''; e.v = (e.v || 0) + 1; })
+      .catch(err => { e.busy = false; e.fail = /daily/i.test(err.message) ? 'daily' : 'again'; e.t = /daily/i.test(err.message) ? untilTomorrow() - 15 * 60e3 : Date.now() - 15 * 60e3 + 75e3; e.v = (e.v || 0) + 1; post('JSERR wx ' + err.message); });   // retry in ~75 s
   }
   return e;
 }
@@ -664,7 +667,7 @@ function makeCard() {
 }
 const rgbOf = a => `rgb(${a.map(v => Math.round(v * 255)).join(',')})`;
 // the report, inked straight onto the chart: no panel, just type in the map's own hand
-function paintCard(c, lat, lon) {
+function paintCard(c, lat, lon, now = false) {   // now: the card is off the chart, so it's rewritten at once (no wipe to wait for)
   const pk = lat.toFixed(4) + ',' + lon.toFixed(4); if (c._pk !== pk || !c._place) { c._pk = pk; c._place = placeName(lat, lon); }   // the nearest of 1,251 places: only when the card moves
   const e = wxFor(lat, lon), d = e.d, place = c._place, has = !!(d && d.w && d.w.current);
   const tz = has ? { off: d.w.utc_offset_seconds || 0, name: d.w.timezone || '' } : (DATA && DATA.tz);
@@ -674,10 +677,15 @@ function paintCard(c, lat, lon) {
   // no report (the weather service busy, or its per-minute limit): the card still says what the air is doing here, from
   // the same forecast grid the streaks ride (a lone "no report just now" read as a broken widget)
   const fb = !has && DATA ? windAt(lat, lon) : null;
-  const key = `${place}|${t}|${e.v || 0}|${fb ? fb.dir + fb.kmh : ''}|${dayF.toFixed(2)}|${inkF.toFixed(2)}`; if (key === c._key) { c._for = [lat, lon]; return; }
+  // and with neither (the service out of reach and no forecast yet), an honest line under the place: never a bare header
+  // ("no report just now" / "reading the weather…" read as a report on its way; an empty header read as a broken one)
+  const note = has || fb ? '' : e.busy && !e.fail ? 'reading the weather…' : e.fail === 'daily' ? 'no report today · the free service\u2019s daily limit' : 'no report just now · asking again shortly';
+  const key = `${place}|${t}|${has ? e.v || 0 : note}|${fb ? fb.dir + fb.kmh : ''}|${dayF.toFixed(2)}|${inkF.toFixed(2)}`; if (key === c._key) { c._for = [lat, lon]; return; }
   // a new place or a new report: the old words are wiped off, the new ones inked on (rewritten in place, they popped)
-  const major = `${place}|${e.v || 0}|${has}|${!!fb}`;
-  if (c._key && c._major !== major && !c._dipAt) { c._dipAt = performance.now() + 400; return; }   // (as long as the wipe takes)
+  // (a retry that failed again changes nothing on the card: no wipe for the same words)
+  const major = `${place}|${has ? e.v || 0 : note}|${has}|${!!fb}`;
+  if (now) c._dipAt = 0;
+  else if (c._key && c._major !== major && !c._dipAt) { c._dipAt = performance.now() + 400; return; }   // (as long as the wipe takes)
   if (c._dipAt && performance.now() < c._dipAt) return;
   c._dipAt = 0; c._major = major; c._key = key; c._for = [lat, lon];
   const x = c.getContext('2d'); x.setTransform(K, 0, 0, K, 0, 0); x.clearRect(0, 0, CW, CH);
@@ -691,7 +699,7 @@ function paintCard(c, lat, lon) {
     if (fb) { drawBarb(x, 28, 46, fb.from, fb.ms * 1.944, ink, fb.south);
       x.fillStyle = ink; x.font = `12px ${SERIF}`; x.letterSpacing = '.5px'; ft(fb.ms < 1.3 ? 'calm' : `${fb.dir} · ${fb.kmh} km/h`, 62, 43);
       x.letterSpacing = '0px'; x.fillStyle = soft; x.font = `italic 10.5px ${SERIF}`; ft('surface wind, from the forecast', 62, 57); c._th = 76; }
-    else c._th = 18;                                                     // nothing to say yet: the place and the time, like a label
+    else { x.fillStyle = soft; x.font = `italic 11px ${SERIF}`; ft(note, 0, 31); c._th = 36; }
     c._tw = tw; return;
   }
   const cu = d.w.current, [cond, kind] = WMO(cu.weather_code), dl = d.w.daily, hr = d.w.hourly;
@@ -734,20 +742,31 @@ function stepCards(now) {
     // (still easing, or the window itself moving: under the hand it's drawn exactly where it is, so it never lags)
     const moving = Math.abs(w.x - w.tx) + Math.abs(w.y - w.ty) > .5 || c._was !== `${w.tx},${w.ty}`; c._was = `${w.tx},${w.ty}`;
     if (moving) c._still = now;
-    // the report is for the place under the window; asked for once the window has settled
-    if (now - c._still > 500 || !c._key || c._dipAt) { if (!c._polled || now - c._polled > 5000) { c._polled = now; c._key += '~'; } paintCard(c, LAT(w.y + w.h / 2), LON(w.x + w.w / 2)); }
-    // a report for where the window was (a big jump: out of full screen, or dragged across the country) stays off the
-    // chart until it's rewritten for where the window is now (it showed the old place for a second, then swapped)
-    const stale = !c._for || Math.abs(c._for[0] - LAT(w.ty + w.th / 2)) > GS || Math.abs(c._for[1] - LON(w.tx + w.tw / 2)) > GS;
+    // the report is for the place the window is going to (not where its glide has got to: out of full screen that held
+    // the card back for the whole glide); asked for once the window has settled
+    const live = now < liveUntil, la = LAT(w.ty + w.th / 2), lo = LON(w.tx + w.tw / 2);
+    const far = !c._for || Math.abs(c._for[0] - la) > GS || Math.abs(c._for[1] - lo) > GS;
+    // a report for somewhere else (a jump: out of full screen, a window back from hiding, a long drag let go) is wiped
+    // off, and the moment it's off it's rewritten for the new place and inked straight back on: no waiting for the
+    // weather service, which may never answer (cards went missing for good); while you drag, it rides along as it was
+    if (far && !live && c._rv < .05) paintCard(c, la, lo, true);
+    else if (now - c._still > 500 || !c._key || c._dipAt) { if (!c._polled || now - c._polled > 5000) { c._polled = now; c._key += '~'; } paintCard(c, la, lo); }
+    else if (c._for) paintCard(c, c._for[0], c._for[1]);                // moving: the same report, its clock kept to the minute
+    const stale = far && !live;
     const at = (k, x0, y0, ww, hh) => { const [r, b] = CARD_SPOTS[k], x = clamp(r ? x0 + ww - CW - 4 : x0 + 4, 8, W - CW - 8), y = b ? y0 + hh + 12 : y0 - CH - 6; return [x, y]; };
     const fits = k => { const [x, y] = at(k, w.tx, w.ty, w.tw, w.th), box = [x, y, x + CW, y + CH];
       return y >= AREA_T + 8 && y + CH <= H - 8 && !R.some(o => hitR(box, o, 4)) && !placed.some(o => hitR(box, o, 6)) && !onIcon(x, y, x + CW, y + CH); };   // (never up under the menu bar)
+    // and of the clear spots, the one off the map's big lettering (a report sat across HIMALAYAS, BAY OF BENGAL), chosen
+    // only while the report is off the chart (new, or wiped off to be rewritten): one in sight never hops for a name
+    const clash = k => { const [x, y] = at(k, w.tx, w.ty, w.tw, w.th), r = x + (c._tw || 200), b = y + (c._th || 40); let s = 0;
+      for (const n of BIG) s += Math.max(0, Math.min(r, n[2]) - Math.max(x, n[0])) * Math.max(0, Math.min(b, n[3]) - Math.max(y, n[1])); return s; };
     let k = c._spot != null && fits(c._spot) ? c._spot : CARD_SPOTS.findIndex((_, i) => fits(i));
+    if (k >= 0 && BIG.length && c._rv < .05) { let bs = clash(k); if (bs > 0) for (let i = 0; i < CARD_SPOTS.length; i++) if (i !== k && fits(i)) { const s = clash(i); if (s < bs - 60) { k = i; bs = s; } } }
     const show = k >= 0; if (!show) k = c._spot ?? 0;
     const [tx, ty] = at(k, w.x, w.y, w.w, w.h);
     if (show) { const [px, py] = at(k, w.tx, w.ty, w.tw, w.th); placed.push([px, py, px + CW, py + CH]); }
     // a new spot is reached by a short glide from where the report was, not a jump
-    if (c._spot != null && k !== c._spot && c._at) c._glide = { t0: now, x: c._at[0], y: c._at[1] };
+    if (c._spot != null && k !== c._spot && c._at && c._rv > .05) c._glide = { t0: now, x: c._at[0], y: c._at[1] };   // (one that's off the chart is simply inked on at the new spot)
     c._spot = k;
     let x = tx, y = ty;
     if (c._glide) { const u = Math.min(1, (now - c._glide.t0) / 380), e = 1 - (1 - u) ** 3; x = c._glide.x + (tx - c._glide.x) * e; y = c._glide.y + (ty - c._glide.y) * e; if (u >= 1) c._glide = null; else window.__twSettle && window.__twSettle(150); }
@@ -835,7 +854,7 @@ function loop0(now) {
 }
 
 /* ======================= boot + host protocol ======================= */
-function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; project(); const c = loadCache(); if (c) DATA = c; buildTargets(); palette(); paintMap(); paintHalo(); drawCaption(); placeCaption(); }   // (the halo reads the names the map just placed)
+function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; project(); const c = loadCache(); if (c) DATA = c; buildTargets(); palette(); paintMap(); BIG = bigNames(); paintHalo(); drawCaption(); placeCaption(); }   // (the halo reads the names the map just placed)
 const handle = m => {
   if (m.t === 'desk') { DESK = m; deskSeen(); if (booted) build(); return; }
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
@@ -846,7 +865,7 @@ const handle = m => {
     cur.x = x; cur.y = y; cur.t = t; cur.on = true; return; }
   if (m.t === 'cursorOff') { cur.on = false; return; }
   if (m.t === 'dicons') { const k = [m.r].join('|'); if (k === iconKey) return; iconKey = k;   // your desktop icons: haloed, and the map lettered round them
-    deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]); if (booted) { paintMap(); paintHalo(); placeCaption(); } return; }
+    deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]); if (booted) { paintMap(); BIG = bigNames(); paintHalo(); placeCaption(); } return; }
   if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
     setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
 };
