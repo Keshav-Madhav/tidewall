@@ -624,7 +624,12 @@ void main() {
   vec2 crel = p - uCan.xy - uSway.xy;
   if (dot(crel, crel) < 1.21 * uCan.z * uCan.z) {
     vec2 cuv = crel / (2.2 * uCan.z) + .5 + shimmer(crel);
-    vec4 lf = texture(uLeaf, cuv);
+    vec4 lf = texture(uLeaf, cuv); lf.a *= smoothstep(1.1, 1.02, length(crel) / uCan.z);   // (nothing from the texture's own edge: it drew a dotted ring)
+    // the crown's depths: where leaves are thick round a gap, the gap shows shaded leaves further down, never the
+    // planter or the floor (only near the crown's rim does the floor show through)
+    float deep = smoothstep(.12, .4, textureLod(uLeaf, cuv, 4.5).a) * smoothstep(1.05, .7, length(crel) / uCan.z);
+    vec3 under = pow(vec3(.15, .19, .10), vec3(2.2)) * (uSkyC * .55 + uSunC * .07 + uMoonC * .4 + uLantC * sh.b * .7);
+    col = mix(col, under, deep);                                                            // (under the leaves too: no pale fringe round a gap)
     if (lf.a > .004) {
       vec3 la = pow(lf.rgb, vec3(2.2)); vec2 rr = crel / uCan.z; float nz = sqrt(max(.1, 1. - dot(rr, rr) * .8));
       vec3 cn = normalize(vec3(rr * .8, nz)); float dens = textureLod(uLeaf, cuv, 4.).a;
