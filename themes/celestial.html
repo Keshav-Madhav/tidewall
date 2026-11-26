@@ -7,6 +7,7 @@
   little, a few px right at their edges (the full lens round every window was distracting); Stage Manager thumbnails
   and Notification Centre keep the full one.
   Perf: the sky is painted once into a texture; the lensing pass runs only while a window or the cursor moves.
+  The names are small text elements over it, placed round your windows without repainting the sky; at rest they cost nothing.
 -->
 <html>
 <head>
@@ -19,10 +20,14 @@
   .shoot { position: fixed; left: 0; top: 0; height: 2.2px; pointer-events: none; transform-origin: 100% 50%; opacity: 0;
            background: linear-gradient(90deg, rgba(255,240,200,0), rgba(255,244,215,.75) 88%, #fffaf0);
            clip-path: polygon(0 50%, 100% 0, 100% 100%); }
+  /* the names: each its own little element over the chart, so one can come or go without touching the rest */
+  #names { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  #names > div { position: absolute; left: 0; top: 0; white-space: pre; opacity: 0; }
 </style>
 </head>
 <body>
 <canvas id="gl" class="layer"></canvas>
+<div id="names"></div>
 <script>
 'use strict';
 window.__opaque = true;
@@ -124,7 +129,7 @@ function drawMoon(x, px, py, moon, P) {
   x.globalCompositeOperation = 'multiply'; const R4 = rng(5);                                              // a few maria
   for (let i = 0; i < 7; i++) { x.fillStyle = 'rgba(170,165,150,.55)'; x.beginPath(); x.arc((R4() - .5) * R * 1.1, (R4() - .5) * R * 1.1, 2 + R4() * 3.5, 0, 7); x.fill(); }
   x.restore();
-  x.font = `italic 11px ${SERIF}`; x.fillStyle = 'rgba(236,232,214,.85)'; x.textAlign = 'left'; x.textBaseline = 'middle'; x.fillText(`Moon · ${Math.round(k * 100)}%`, px + R + 8, py + R + 4);
+  return k;
 }
 function bvColor(bv) {
   const t = [[-0.4, [155, 176, 255]], [0, [202, 216, 255]], [0.4, [248, 247, 255]], [0.8, [255, 236, 210]], [1.2, [255, 214, 165]], [1.8, [255, 186, 120]]];
@@ -254,20 +259,28 @@ function paintSky(date = new Date()) {
   // names keep clear of the cartouche where it actually hangs (a fixed bottom-right box let them print under it when it
   // moved), of the rose, and of your windows: a name half under a window edge ("Den" of Deneb) reads as a mistake
   const lastScreen = DESK.i === DESK.n - 1; if (lastScreen) cartAt = cartoucheSpot();
-  const roseY = Math.max(82, AREA_T + 78), boxes = placeWins().map(([l, t, r, b]) => [l - 4, t - 4, r + 4, b + 4]);
+  // (the names themselves are no longer painted into the sky: see the names layer below. Here only where each could go)
+  const roseY = Math.max(82, AREA_T + 78), boxes = [];
   if (lastScreen) boxes.push([cartAt[0] - 168, cartAt[1] - 58, cartAt[0] + 168, cartAt[1] + 58]);
   if (DESK.i === 0) boxes.push([16, roseY - 66, 150, roseY + 68]);
-  const bodies = solarSystem(date); nameCands = [];
+  const bodies = solarSystem(date), cands = [];
+  // a body's name may sit on any side of it (Mars ran under the cartouche: "Ma"); it takes the first side that's clear
+  const sides = (px, py, r, w, h) => [[px + r + 7, py - 1], [px - r - 7 - w, py - 1], [px - w / 2, py - r - 4 - h / 2], [px - w / 2, py + r + 4 + h / 2],
+    [px + r + 4, py - r - 3 - h / 2], [px - r - 4 - w, py - r - 3 - h / 2], [px + r + 4, py + r + 3 + h / 2], [px - r - 4 - w, py + r + 3 + h / 2]]
+    .map(([lx, cy]) => [lx, cy, [lx - 3, cy - h / 2 - 2, lx + w + 3, cy + h / 2 + 2]]);
   for (const b of bodies) {
     const [px, py, alt] = P(b.ra, b.dec); if (alt < -1 || !on(px, py, 30)) continue;
-    if (b.name === 'Moon') { drawMoon(x, px, py, b, P); boxes.push([px - 30, py - 30, px + 30, py + 30]); }
+    x.font = `italic 11px ${SERIF}`;
+    if (b.name === 'Moon') { const k = drawMoon(x, px, py, b, P), text = `Moon · ${Math.round(k * 100)}%`, w = x.measureText(text).width; boxes.push([px - 16, py - 16, px + 16, py + 16]);
+      cands.push({ k: 'moon', text, font: `italic 11px ${SERIF}`, color: 'rgba(236,232,214,.85)', ls: 0,
+        opts: [[px + 21, py + 17], [px - 21 - w, py + 17], [px + 21, py - 17], [px - 21 - w, py - 17]].map(([lx, cy]) => [lx, cy, [lx - 3, cy - 8, lx + w + 3, cy + 8]]) }); }
     else {
       const r = b.size, g = x.createRadialGradient(px, py, 0, px, py, r * 5); g.addColorStop(0, `rgba(${b.rgb},.55)`); g.addColorStop(1, `rgba(${b.rgb},0)`);
       x.fillStyle = g; x.fillRect(px - r * 5, py - r * 5, r * 10, r * 10);
       x.fillStyle = `rgb(${b.rgb})`; x.beginPath(); x.arc(px, py, r, 0, 7); x.fill();
       if (b.name === 'Saturn') { x.strokeStyle = `rgba(${b.rgb},.85)`; x.lineWidth = .8; x.beginPath(); x.ellipse(px, py, r * 2.3, r * .75, -.35, 0, 7); x.stroke(); }
-      x.font = `italic 11px ${SERIF}`; x.fillStyle = `rgba(${b.rgb},.9)`; x.textAlign = 'left'; x.textBaseline = 'middle'; x.fillText(b.name, px + r + 7, py - 1);
-      boxes.push([px - r - 4, py - 9, px + r + 12 + x.measureText(b.name).width, py + 9]);
+      const rr = b.name === 'Saturn' ? r * 2.3 : r; boxes.push([px - rr - 2, py - r - 2, px + rr + 2, py + r + 2]);
+      cands.push({ k: 'p' + b.name, text: b.name, font: `italic 11px ${SERIF}`, color: `rgba(${b.rgb},.9)`, ls: 0, opts: sides(px, py, rr, x.measureText(b.name).width, 12) });
     }
   }
   // your desktop icons sit in dark nebulae: dust that hides the stars behind it, as real dark clouds do (the Coalsack,
@@ -283,21 +296,23 @@ function paintSky(date = new Date()) {
   }
   for (const [l, t, r, b] of deskIc) boxes.push([l - 10, t - 10, r + 10, b + 10]);
   // names: constellations (Latin, spaced capitals) and the bright named stars
-  const free = b => b[0] > 6 && b[1] > 6 && b[2] < W - 6 && b[3] < H - 6 && !boxes.some(o => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
+  // a constellation's name with a star just past either end read as punctuation ("AURIGA ·"): it moves up or down a line
+  const dots = []; for (const [px, py, mag] of pos.values()) if (mag < 5.8) dots.push([px, py]);
+  const stray = (l, cy, r) => dots.some(([sx, sy]) => Math.abs(sy - cy) < 4.5 && ((sx > r - 1 && sx < r + 9) || (sx > l - 9 && sx < l + 1)));
   for (const f of SKY.consts.features) {
     const rank = +f.properties.rank; if (rank > 3) continue;              // (the smaller ones too, where there's room: Denebola was named, LEO's neighbours weren't)
     const [ra, de] = f.geometry.coordinates, [px, py, alt] = P(ra, de); if (alt < 4) continue;
     const label = f.properties.la.toUpperCase(), size = rank === 1 ? 11 : rank === 2 ? 9.5 : 8.5;
     x.font = `italic ${size}px ${SERIF}`; let w = -2.2; for (const ch of label) w += x.measureText(ch).width + 2.2;
-    const b = [px - w / 2 - 4, py - size, px + w / 2 + 4, py + size]; nameCands.push(b); if (!free(b)) continue; boxes.push(b);
-    x.fillStyle = GOLD + (rank === 1 ? '.66)' : rank === 2 ? '.5)' : '.4)'); x.textAlign = 'left'; x.textBaseline = 'middle';
-    let cxp = px - w / 2; for (const ch of label) { x.fillText(ch, cxp, py); cxp += x.measureText(ch).width + 2.2; }
+    const opts = [0, -9, 9].map(dy => [px - w / 2, py + dy, [px - w / 2 - 4, py + dy - size, px + w / 2 + 4, py + dy + size], stray(px - w / 2, py + dy, px + w / 2)]);
+    cands.push({ k: 'c' + f.id, text: label, font: `italic ${size}px ${SERIF}`, color: GOLD + (rank === 1 ? '.66)' : rank === 2 ? '.5)' : '.4)'), ls: 2.2, opts });
   }
   for (const [id, name] of Object.entries(SKY.names)) {
     const p = pos.get(+id); if (!p) continue; const [px, py] = p;
-    x.font = `italic 10px ${SERIF}`; const w = x.measureText(name).width, b = [px + 6, py + 2, px + 10 + w, py + 15]; nameCands.push(b); if (!free(b)) continue; boxes.push(b);
-    x.fillStyle = 'rgba(232,222,196,.6)'; x.textAlign = 'left'; x.textBaseline = 'middle'; x.fillText(name, px + 8, py + 9);
+    x.font = `italic 10px ${SERIF}`; const w = x.measureText(name).width;
+    cands.push({ k: 's' + id, text: name, font: `italic 10px ${SERIF}`, color: 'rgba(232,222,196,.6)', ls: 0, opts: [[px + 8, py + 9, [px + 6, py + 2, px + 10 + w, py + 15]]] });
   }
+  nameCands = cands; nameFixed = boxes;
   // zenith mark and a small orientation rose (north up, east left — as when you lie on your back and look up)
   x.strokeStyle = GOLD + '.4)'; x.lineWidth = .7; x.beginPath(); const zx = (DESK.uw || W) / 2 - DESK.x, zy = (DESK.uh || H) / 2 - DESK.y; x.moveTo(zx - 6, zy); x.lineTo(zx + 6, zy); x.moveTo(zx, zy - 6); x.lineTo(zx, zy + 6); x.stroke();
   if (DESK.i === 0) {                                                  // the rose once, on the leftmost screen, clear of the menu bar
@@ -337,15 +352,52 @@ function paintSky(date = new Date()) {
   x.font = `italic 11px ${SERIF}`; x.fillStyle = GOLD + '.65)';
   x.fillText(`${SITE.name} · ${deg(SITE.lat, 'N', 'S')} ${deg(SITE.lon, 'E', 'W')}`, tx, ty + 9); x.fillText(when, tx, ty + 23);
   }
-  nameSig = sigOf(placeWins());
   return c;
 }
-// which candidate names a set of windows covers: when a settled layout changes that, the chart is repainted round it
-let nameCands = [], nameSig = '';
 // the windows names are placed round: not one that fills the screen (full screen, a maximised window). Nobody sees
 // the sky under it, and names cleared away for it left a bare chart for a second when it went ("Moon ·" and little else)
 const placeWins = () => allWins.filter(([l, t, r, b]) => (r - l) * (b - t) < .8 * W * H);
-const sigOf = wins => nameCands.map(b => wins.some(([l, t, r, q]) => b[0] < r + 4 && b[2] > l - 4 && b[1] < q + 4 && b[3] > t - 4) ? 1 : 0).join('');
+
+/* ---------- the names: a layer of their own, each name coming and going by itself ---------- */
+// They were painted into the sky, so any change of layout re-placed every name and cross-faded the whole chart: for
+// most of a second after a drag, a close or an uncover whole groups (Hercules, Bootes, Corona Borealis…) were gone or
+// half there. Now a name whose spot is still clear stays exactly as it is; only a name a window now covers or cuts
+// fades out, and only a name with a new place fades in; where it would overlap one going, it waits for that to go.
+// While a window is dragged, names it cuts fade at once; freed sky is named once it's let go.
+// nameCands: every name that could be shown, in order of priority, each with the places it may take ([left, middle y,
+// box, beside a stray star]); nameFixed: what no name may sit on (cartouche, rose, the bodies, your icons).
+let nameCands = [], nameFixed = [], nameT = null, leaving = [];
+const shown = new Map(), NAMES = $('names'), NAME_OUT = 350, NAME_IN = 500;
+const meets = (a, b, m = 0) => a[0] < b[2] + m && a[2] > b[0] - m && a[1] < b[3] + m && a[3] > b[1] - m;
+function dropName(k, s, ms = NAME_OUT) {
+  shown.delete(k); s.el.style.transition = `opacity ${ms}ms ease`; s.el.style.opacity = 0;
+  const until = performance.now() + ms; leaving.push({ b: s.b, until }); setTimeout(() => s.el.remove(), ms + 60);
+}
+// mode 'cut': only take away names a window (being dragged) now cuts; 'full': settle the whole set
+// glide: when the names' places themselves moved (the sky turned a minute), how long they slide with it
+function layoutNames(mode, glide = 0, inMs = NAME_IN) {
+  const wins = placeWins(), hitW = (b, m) => wins.some(w => meets(b, w, m));
+  if (mode === 'cut') { for (const [k, s] of shown) if (hitW(s.b, 0)) dropName(k, s, 250); return; }
+  const taken = nameFixed.slice(), free = b => b[0] > 6 && b[1] > 6 && b[2] < W - 6 && b[3] < H - 6 && !hitW(b, 4) && !taken.some(o => meets(b, o));
+  for (const c of nameCands) { const s = shown.get(c.k); if (s && s.text !== c.text) dropName(c.k, s); }      // (the Moon's phase ticked over: the old reading goes first)
+  const next = new Map();
+  for (const c of nameCands) { const s = shown.get(c.k), o = s && c.opts[s.oi]; if (o && free(o[2])) { next.set(c.k, s.oi); taken.push(o[2]); } }   // names on show keep their places
+  for (const c of nameCands) { if (next.has(c.k)) continue;                                                     // then the rest, where there's room
+    let oi = c.opts.findIndex(o => !o[3] && free(o[2])); if (oi < 0) oi = c.opts.findIndex(o => free(o[2])); if (oi < 0) continue;
+    next.set(c.k, oi); taken.push(c.opts[oi][2]); }
+  for (const [k, s] of shown) if (!next.has(k)) dropName(k, s);
+  const now = performance.now(); leaving = leaving.filter(l => l.until > now);
+  for (const c of nameCands) { const oi = next.get(c.k); if (oi === undefined) continue; const [lx, cy, b] = c.opts[oi], s = shown.get(c.k), lh = Math.ceil(parseFloat(c.font.split(' ')[1]) * 1.6);
+    const tf = `translate(${lx.toFixed(1)}px,${(cy - lh / 2).toFixed(1)}px)`;
+    if (s) { if (s.tf !== tf) { s.el.style.transition = glide ? `opacity ${NAME_OUT}ms ease, transform ${glide}ms cubic-bezier(.45,0,.55,1)` : ''; s.el.style.transform = tf; s.tf = tf; } s.b = b; continue; }
+    const el = document.createElement('div'); el.textContent = c.text;
+    Object.assign(el.style, { font: c.font, color: c.color, letterSpacing: c.ls ? `${c.ls}px` : '', lineHeight: `${lh}px`, transform: tf });
+    NAMES.appendChild(el); void el.offsetWidth;
+    const wait = leaving.some(l => meets(b, l.b, 2)) ? Math.max(...leaving.filter(l => meets(b, l.b, 2)).map(l => l.until - now)) : 0;   // the old one goes before this inks in
+    el.style.transition = `opacity ${inMs}ms ease ${Math.round(wait)}ms`; el.style.opacity = 1;
+    shown.set(c.k, { el, oi, b, tf, text: c.text });
+  }
+}
 
 // the cartouche hangs in whichever corner no black hole is near (it would be lensed to pieces), and where your windows
 // leave it in sight: half a cartouche peeking out from under a window reads as a mistake. It stays put unless another
@@ -374,15 +426,9 @@ function setTargets(list) {
   for (const c of cur) if (!used.has(c)) c.alive = false;
   // the cartouche moves only once the layout has settled (Show Desktop, Mission Control and the like shuffle windows for a moment)
   // (and the names, when the settled windows now cover a different set of them)
-  // A jump you didn't drag (a window closed, windows back from hiding, full screen ended) re-places them at once: names
-  // sliced by a window's edge, or a freed patch of sky left unnamed, stayed for over a second. A name a window now cuts
-  // fades out as its new place fades in; names a window has freed come in a little quicker.
-  // (the cartouche alone still waits for a settled second: it isn't cut, just better placed elsewhere)
-  const check = cartToo => { const sp = cartoucheSpot(), sig = sigOf(placeWins()), moved = cartAt && (sp[0] !== cartAt[0] || sp[1] !== cartAt[1]);
-    if (!SKY || !(sig !== nameSig || (cartToo && moved))) { if (moved && !cartToo) cartT = setTimeout(() => check(true), 900); return; }
-    const freed = [...sig].every((b, i) => b === '0' || nameSig[i] === '1');   // nothing newly covered: only names to bring back
-    newSky(freed ? 500 : 800); };
-  clearTimeout(cartT); cartT = setTimeout(() => check(performance.now() >= liveUntil + 1000), performance.now() < liveUntil ? 1500 : 120);
+  // (the names have a layer of their own now: see layoutNames. The sky is repainted only when the cartouche moves)
+  const check = () => { const sp = cartoucheSpot(); if (SKY && cartAt && (sp[0] !== cartAt[0] || sp[1] !== cartAt[1])) newSky(800); };
+  clearTimeout(cartT); cartT = setTimeout(check, performance.now() < liveUntil ? 1500 : 1000);
   wake();
 }
 function stepWins(dt) {
@@ -420,7 +466,7 @@ void lens(vec2 p, float d, vec2 n, float E, float L, float horizon, float glowSc
   float reach = exp(-max(d - 3. * E, 0.) / (1.2 * E + 1.));
   src -= n * (E * E / r) * reach;
   if (!rim) return;                                                   // windows: pure lensing, no border
-  shade *= mix(1., smoothstep(0., horizon, d), L);                    // the dark horizon
+  shade *= mix(1., .62 + .38 * smoothstep(0., horizon, d), L);        // a dim horizon, not a black blot under the pointer
   // just a faint, thin photon ring — no accretion disk
   float ring = exp(-abs(d - horizon * .22) / (horizon * .05 + .5));
   glow += L * glowScale * vec3(1., .9, .72) * ring * .22;
@@ -456,7 +502,7 @@ gl.bindVertexArray(gl.createVertexArray());
 let skyTex = gl.createTexture(), skyTexB = gl.createTexture(), skyMix = 0, skyFadeT0 = -1e9;
 let SKY_FADE_MS = 2500, skyPending = 0;
 // a new sky while one is still fading in waits for it: starting over would cut the running fade short (a visible jump)
-function newSky(ms = 2500) { if (performance.now() - skyFadeT0 < SKY_FADE_MS) { skyPending = ms; return; } SKY_FADE_MS = ms; uploadSky(paintSky(), true); }
+function newSky(ms = 2500) { if (performance.now() - skyFadeT0 < SKY_FADE_MS) { skyPending = ms; return; } SKY_FADE_MS = ms; uploadSky(paintSky(), true); layoutNames('full', ms); }
 // a new sky (the minute moved on): upload it as B and cross-fade A → B, then B becomes A
 function uploadSky(canvas, fade) {
   if (fade && skyMix > 0) [skyTex, skyTexB] = [skyTexB, skyTex];
@@ -526,8 +572,8 @@ function loop0(now) {
 }
 
 /* ---------- boot + host protocol ---------- */
-function build() { W = innerWidth; H = innerHeight; cv.width = Math.round(W * K); cv.height = Math.round(H * K); uploadSky(paintSky(), false); render(); }
-loadSky().then(() => { const t0 = performance.now(); const c = paintSky(); fieldMs = Math.round(performance.now() - t0); uploadSky(c, true); }).catch(e => { try { webkit.messageHandlers.host.postMessage('JSERR sky data ' + e); } catch (_) {} });
+function build() { W = innerWidth; H = innerHeight; cv.width = Math.round(W * K); cv.height = Math.round(H * K); uploadSky(paintSky(), false); layoutNames('full'); render(); }
+loadSky().then(() => { const t0 = performance.now(); const c = paintSky(); fieldMs = Math.round(performance.now() - t0); uploadSky(c, true); layoutNames('full', 0, 1600); }).catch(e => { try { webkit.messageHandlers.host.postMessage('JSERR sky data ' + e); } catch (_) {} });
 // the sky turns: repaint for the new minute and cross-fade (≈0.25° of rotation per minute)
 setTimeout(function tickMinute() { if (!paused && SKY) newSky(); setTimeout(tickMinute, 60000 - Date.now() % 60000 + 50); }, 60000 - Date.now() % 60000 + 50);
 let FB = null; function commit() { } function refresh() { }
@@ -538,7 +584,7 @@ const handle = m => {
   if (m.t === 'me') return;
   if (m.t === 'area') { const t = m.r[1] / K, b = m.r[3] / K; if (t === AREA_T && b === AREA_B) return; AREA_T = t; AREA_B = b; if (SKY) newSky(1200); return; }   // below the menu bar, above the Dock
   if (m.t === 'desk') { const k = [m.x, m.y, m.w, m.h, m.uw, m.uh, m.i, m.n].join('|'); if (k === deskKey) return; deskKey = k;
-    DESK = m; if (SKY) { uploadSky(paintSky(), false); dirty = true; wake(); } return; }
+    DESK = m; if (SKY) { uploadSky(paintSky(), false); layoutNames('full'); dirty = true; wake(); } return; }
   if (m.t === 'cursor' && m.w) { curs.away = true; if (curs.here) { curs.here = false; wake(); } return; }   // over a window: its little black hole can't be seen; let it fade, and redraw nothing for it
   if (m.t === 'cursor') { const x = m.x / K, y = m.y / K;
     if (curs.hop || (curs.away && curs.a > .02 && Math.hypot(x - curs.x, y - curs.y) > 24)) curs.hop = [x, y]; else { curs.x = x; curs.y = y; }
@@ -554,11 +600,13 @@ const handle = m => {
   // windows only bend the starlight right at their edges, very gently
   if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
     allWins = m.r.map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]);
+    if (m.live) layoutNames('cut');                                   // names a dragged window cuts go now; the rest settle once it's let go
+    clearTimeout(nameT); nameT = setTimeout(() => layoutNames('full'), m.live ? 350 : 120);
     setTargets(m.r.map(([l, t, r, b], i) => { const sm = !!(m.sm && m.sm[i]), owner = (m.n || [])[i]; return { x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner, sm, gentle: !(sm || owner === 'Notification Centre') }; })); }
 };
 build(); setTimeout(shootingStar, 8000);
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 200); });
-window.__dbg = () => `run=${running} fps=${fpsEMA | 0} paint=${fieldMs}ms cart=${cartAt ? cartAt.map(Math.round).join(',') : '-'} holes=${cur.filter(c => !c.gentle).length} gentle=${cur.filter(c => c.gentle).length} area=${AREA_T},${AREA_B > 1e8 ? '-' : AREA_B}`;
+window.__dbg = () => `names=${shown.size} run=${running} fps=${fpsEMA | 0} paint=${fieldMs}ms cart=${cartAt ? cartAt.map(Math.round).join(',') : '-'} holes=${cur.filter(c => !c.gentle).length} gentle=${cur.filter(c => c.gentle).length} area=${AREA_T},${AREA_B > 1e8 ? '-' : AREA_B}`;
 const host = window.chrome && window.chrome.webview;
 if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
 else { handle({ t: 'windows', r: [[W * .35 * K, H * .3 * K, W * .7 * K, H * .66 * K]], n: ['Slack'] }); addEventListener('mousemove', e => handle({ t: 'cursor', x: e.clientX * K, y: e.clientY * K })); }
