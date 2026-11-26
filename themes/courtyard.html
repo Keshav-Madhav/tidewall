@@ -706,7 +706,7 @@ function renderShade() {
   gl.uniform1f(u.uSunOn, sky.sunOn ? 1 : 0); gl.uniform1f(u.uMoonOn, sky.moonOn ? 1 : 0); gl.uniform1f(u.uLantOn, sky.lant);
   gl.uniform4fv(u.uL, bufL); gl.uniform1i(u.uNL, L.lamps.length); gl.uniform2f(u.uWall, L.WB, L.HW);
   gl.drawArrays(gl.TRIANGLES, 0, 3); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  shadeMs = shadeMs * .8 + (performance.now() - t0) * .2;
+  shadeMs = shadeMs * .8 + (performance.now() - t0) * .2; fieldMs = +shadeMs.toFixed(2);
 }
 // the crown's shadow for a light: where it falls, how it stretches (a flattened crown seen from a low sun), how soft
 function crownShadow(d, ct, sE) {
@@ -806,7 +806,7 @@ function checkCat() {
   if (!b || b.w < .05) return;
   const shaded = here < b.w * .55 && b.w - here > .06;
   if (!shaded) { catPending = 0; return; }
-  if (!catPending) { catPending = performance.now(); scheduleCatCheck(6000 + Math.random() * 9000); return; }
+  if (!catPending) { catPending = performance.now(); scheduleCatCheck(20000 + Math.random() * 20000); return; }   // (a cat is in no hurry: 20-40 s)
   catPending = 0; cat.state = 'rise'; cat.t0 = performance.now(); cat.tx = b.x; cat.ty = b.y; cat.h0 = cat.hd; wake();
 }
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -854,6 +854,7 @@ setTimeout(function tick() { if (!paused && booted) { retime(clockNow(), 3000); 
 
 /* ======================= boot + host protocol ======================= */
 let FB = null; function commit() { } function refresh() { }
+const P = { quality: 2 }; let fieldMs = 0;   // (the host's test probe reads these: fieldMs is the shadow pass's time)
 function sendPanels(live) {
   const list = [];
   if (lastWinMsg) { const m = lastWinMsg; (m.r || []).forEach(([l, t, r, b], i) => { if (m.sm && m.sm[i]) return; list.push({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, n: (m.n || [])[i] || '' }); }); }
@@ -883,7 +884,7 @@ window.__dbg = () => { const s = sky, f = v => v.toFixed(1);
   let when = ''; try { when = new Date(s.ms).toLocaleString('en-GB', { timeZone: SITE.tz, hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' }); } catch (_) {}
   return `run=${running} paused=${paused} fps=${fpsEMA | 0} draws=${draws} partial=${partials} rafs=${rafs} t=${when} ${SITE.name} sun=${f(s.se)}°/${f(s.saz)}° moon=${f(s.me)}° ${(s.frac * 100) | 0}% lant=${s.lant.toFixed(2)} sway=${s.sway.toFixed(2)} cat=${cat.state}@${cat.x | 0},${cat.y | 0} panels=${panels.length} shade=${shadeMs.toFixed(2)}ms ${SW}x${SHh}`; };
 const host = window.chrome && window.chrome.webview;
-if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('nocursor'); host.postMessage('ready'); }   // (the yard ignores the pointer)
 else { handle({ t: 'windows', r: [[W * .2 * K, H * .22 * K, W * .55 * K, H * .6 * K], [W * .58 * K, H * .52 * K, W * .86 * K, H * .82 * K]], n: ['Notes', 'Safari'] }); }
 </script>
 </body>

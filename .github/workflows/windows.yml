@@ -42,7 +42,7 @@ jobs:
         shell: pwsh
         run: |
           $bad = 0
-          $walls = 'inkmap','railway','garden','estate','gallery','celestial','snow','lava','wind','reef','tunnel','meadow','beach'
+          $walls = 'inkmap','railway','garden','estate','gallery','celestial','courtyard','snow','lava','wind','reef','tunnel','meadow','beach'
           if ('${{ inputs.walls }}') { $walls = '${{ inputs.walls }}'.Split(',') }
           foreach ($t in $walls) {
             New-Item -ItemType Directory -Force "test-out/$t" | Out-Null

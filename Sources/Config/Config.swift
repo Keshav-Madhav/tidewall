@@ -51,6 +51,7 @@ enum Cfg {
     ("reef", "Koi Reef · medium"),
     ("snow", "Snowfall · low"),
     ("celestial", "Celestial Atlas · none"),
+    ("courtyard", "Courtyard · low"),
     ("garden", "Garden Plan · very low"),
     ("railway", "Model Railway · very low"),
     ("meadow", "Meadow · high"),

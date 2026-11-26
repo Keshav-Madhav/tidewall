@@ -14,7 +14,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 upd=""; out=""; walls=()
 for a in "$@"; do case "$a" in --update) upd=--update;; */*) out="$a";; *) walls+=("$a");; esac; done
-[ ${#walls[@]} -gt 0 ] || walls=(inkmap beach meadow garden estate railway reef snow celestial wind gallery lava tunnel)
+[ ${#walls[@]} -gt 0 ] || walls=(inkmap beach meadow garden estate railway reef snow celestial courtyard wind gallery lava tunnel)
 out="${out:-${TMPDIR:-/tmp}/tidewall-smooth-$(date +%Y%m%d-%H%M%S)}"; mkdir -p "$out"
 if [ "$(pmset -g | awk '/powermode/ {print $2}')" = 1 ] || { pmset -g batt | grep -q "Battery Power" && [ "${TIDEWALL_SMOOTH_ANY_POWER:-}" != 1 ]; }; then
   echo "⚠ smoothness not measured: plug in and turn Low Power Mode off (on battery, macOS throttles every app)"; exit 2; fi

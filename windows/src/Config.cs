@@ -47,6 +47,7 @@ internal static class Config
         ("inkmap", "Ink Map · very low"), ("estate", "Marauders · very low"), ("gallery", "Gallery · none"),
         ("wind", "Wind Map · medium"), ("lava", "Lava Lamp · low"), ("tunnel", "Wind Tunnel · high"),
         ("reef", "Koi Reef · medium"), ("snow", "Snowfall · low"), ("celestial", "Celestial Atlas · none"),
+        ("courtyard", "Courtyard · low"),
         ("garden", "Garden Plan · very low"), ("railway", "Model Railway · very low"), ("meadow", "Meadow · high"),
         ("beach", "Beach · medium"),
     ];

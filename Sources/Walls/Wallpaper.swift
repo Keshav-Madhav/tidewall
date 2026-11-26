@@ -42,6 +42,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   private static let pageFiles = [
     "beach": "flat", "meadow": "meadow", "inkmap": "inkmap", "celestial": "celestial", "snow": "snow", "reef": "reef",
     "wind": "wind", "lava": "lava", "tunnel": "tunnel", "gallery": "gallery", "garden": "garden", "railway": "railway",
+    "courtyard": "courtyard",
   ]
 
   init(screen: NSScreen, hidden: Bool = false, fakeID: CGDirectDisplayID? = nil, fakeFrame: CGRect? = nil) {

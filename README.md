@@ -27,6 +27,7 @@ paintings on a museum wall. Drag a window and the world re-arranges itself aroun
 | **Gallery** | a museum wall: every window hangs in a real frame with a brass label, among public-domain masterpieces | none |
 | **Ink Map** | a pen-and-ink archipelago; a little boat sails to your cursor | very low |
 | **Celestial Atlas** | tonight's real sky over your city, as an antique star chart; windows are black holes | none |
+| **Courtyard** | a sunlit Mediterranean courtyard from above; your windows cast real shadows from your own sun, and the moon and lanterns light it at night | low |
 | **Snowfall** | a painted moonlit valley; snow settles on the tops of your windows | low |
 | **Lava Lamp** | soft-body wax with real buoyancy, heat and coalescence, in nine colourways | low |
 | **Wind Map** | live surface wind over your country (or any other) on hand-inked relief, following day and night | medium |
@@ -36,11 +37,11 @@ paintings on a museum wall. Drag a window and the world re-arranges itself aroun
 
 **Several displays are one world.** Show a wall on more than one display and it becomes one continuous scene: trains
 run, koi swim and boats sail from screen to screen; one garden, one castle plan, one sea of islands, one long museum
-wall. Every wall but Lava Lamp and Wind Tunnel spans, and each display can also have its own wall.
+wall. Every wall but Courtyard, Lava Lamp and Wind Tunnel spans, and each display can also have its own wall.
 
 **Your desktop icons get room too**, each wall in its own way: a village green with a hedge on the railway, a
 flagstone terrace in the garden, shelves in a niche on the gallery wall, an island on the ink map and the beach, a
-lily pad on the reef, a cap of snow in the valley, a dark nebula on the star chart, a cartographer's halo on the wind
+lily pad on the reef, a cap of snow in the valley, a dark nebula on the star chart, little shadows on the courtyard floor, a cartographer's halo on the wind
 map, and obstacles in the wind tunnel (which can run on your icons alone, with no model).
 
 **Make it yours.** Settings ▸ *What the wallpaper reacts to* turns each of windows, Stage Manager, desktop widgets,

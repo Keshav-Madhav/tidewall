@@ -6,6 +6,7 @@ const WALLS = [
   ['estate', 'Marauders', 'very low', 'An enchanted castle plan on parchment; footprints follow your cursor.'],
   ['gallery', 'Gallery', 'none', 'A museum wall: every window hangs in a real frame, among public-domain masterpieces.'],
   ['celestial', 'Celestial Atlas', 'none', "Tonight's real sky over your city, as an antique star chart. Windows are black holes."],
+  ['courtyard', 'Courtyard', 'low', 'A sunlit courtyard seen from above: your windows cast real shadows from your own sun, and the moon and lanterns light it at night.'],
   ['snow', 'Snowfall', 'low', 'A painted moonlit valley. Snow settles on the tops of your windows.'],
   ['lava', 'Lava Lamp', 'low', 'Soft-body wax with real buoyancy, heat and coalescence, in nine colourways.'],
   ['wind', 'Wind Map', 'medium', 'Live surface wind over your country, on hand-inked relief that follows day and night.'],

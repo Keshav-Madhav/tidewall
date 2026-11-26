@@ -62,7 +62,7 @@ judge() {   # <label> <log> <exit status> <answers needed> [stress]: JS errors (
 # the screen's own pixel scale (2 on a retina display): every wall must draw at it, never below (1.1.0 drew seven at 1.5)
 NATIVE=$(swift -e 'import AppKit; print(NSScreen.screens.first.map { Int($0.backingScaleFactor) } ?? 1)' 2>/dev/null || echo 0)
 echo "== solo"
-for t in railway garden estate gallery inkmap celestial snow lava wind reef tunnel meadow beach; do
+for t in railway garden estate gallery inkmap celestial courtyard snow lava wind reef tunnel meadow beach; do
   timeout 40 ./tidewall --bench --behind --themes "$TH" --theme $t --solo --layout mine --secs 12 --fakeicons 9 > "$out/solo-$t.log" 2>&1
   judge "$t" "$out/solo-$t.log" $? 3
   k=$(grep "bench fps" "$out/solo-$t.log" | tail -1 | grep -oE 'dpr=[0-9.]+' | head -1 | cut -d= -f2)

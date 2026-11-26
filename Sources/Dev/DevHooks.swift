@@ -228,7 +228,7 @@ extension App {
   }
 
   private static let randomUIAction = """
-    (() => { const T = ['railway','garden','estate','gallery','inkmap','celestial','snow','lava','wind','reef','tunnel','meadow','beach'];
+    (() => { const T = ['railway','garden','estate','gallery','inkmap','celestial','courtyard','snow','lava','wind','reef','tunnel','meadow','beach'];
       const r = Math.random(), th = T[Math.floor(Math.random() * T.length)], ids = (S.displays || []).map(d => d.id);
       let a;
       if (r < .3) a = { t: 'apply', theme: th };
