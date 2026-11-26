@@ -254,7 +254,7 @@ function paintSky(date = new Date()) {
   // names keep clear of the cartouche where it actually hangs (a fixed bottom-right box let them print under it when it
   // moved), of the rose, and of your windows: a name half under a window edge ("Den" of Deneb) reads as a mistake
   const lastScreen = DESK.i === DESK.n - 1; if (lastScreen) cartAt = cartoucheSpot();
-  const roseY = Math.max(82, AREA_T + 78), boxes = allWins.map(([l, t, r, b]) => [l - 4, t - 4, r + 4, b + 4]);
+  const roseY = Math.max(82, AREA_T + 78), boxes = placeWins().map(([l, t, r, b]) => [l - 4, t - 4, r + 4, b + 4]);
   if (lastScreen) boxes.push([cartAt[0] - 168, cartAt[1] - 58, cartAt[0] + 168, cartAt[1] + 58]);
   if (DESK.i === 0) boxes.push([16, roseY - 66, 150, roseY + 68]);
   const bodies = solarSystem(date); nameCands = [];
@@ -337,11 +337,14 @@ function paintSky(date = new Date()) {
   x.font = `italic 11px ${SERIF}`; x.fillStyle = GOLD + '.65)';
   x.fillText(`${SITE.name} · ${deg(SITE.lat, 'N', 'S')} ${deg(SITE.lon, 'E', 'W')}`, tx, ty + 9); x.fillText(when, tx, ty + 23);
   }
-  nameSig = sigOf(allWins);
+  nameSig = sigOf(placeWins());
   return c;
 }
 // which candidate names a set of windows covers: when a settled layout changes that, the chart is repainted round it
 let nameCands = [], nameSig = '';
+// the windows names are placed round: not one that fills the screen (full screen, a maximised window). Nobody sees
+// the sky under it, and names cleared away for it left a bare chart for a second when it went ("Moon ·" and little else)
+const placeWins = () => allWins.filter(([l, t, r, b]) => (r - l) * (b - t) < .8 * W * H);
 const sigOf = wins => nameCands.map(b => wins.some(([l, t, r, q]) => b[0] < r + 4 && b[2] > l - 4 && b[1] < q + 4 && b[3] > t - 4) ? 1 : 0).join('');
 
 // the cartouche hangs in whichever corner no black hole is near (it would be lensed to pieces), and where your windows
@@ -351,7 +354,7 @@ function cartoucheSpot(list = cur.filter(c => c.alive)) {
   const B = Math.min(H, AREA_B), spots = [[W - 175, B - 68], [175, B - 68], [W - 175, Math.max(92, AREA_T + 68)]];   // clear of the menu bar, and of the Dock when it shows
   const near = ([tx, ty]) => list.some(c => !c.gentle && tx + 150 + 150 > c.tx && tx - 150 - 150 < c.tx + c.tw && ty + 40 + 150 > c.ty && ty - 40 - 150 < c.ty + c.th)
     || deskIc.some(([l, t, r, b]) => tx + 150 + 20 > l && tx - 150 - 20 < r && ty + 40 + 20 > t && ty - 40 - 20 < b);   // nor over your icons
-  const hidden = ([tx, ty]) => Math.min(24000, allWins.reduce((s, [l, t, r, b]) => s + Math.max(0, Math.min(r, tx + 158) - Math.max(l, tx - 158)) * Math.max(0, Math.min(b, ty + 48) - Math.max(t, ty - 48)), 0));
+  const hidden = ([tx, ty]) => Math.min(24000, placeWins().reduce((s, [l, t, r, b]) => s + Math.max(0, Math.min(r, tx + 158) - Math.max(l, tx - 158)) * Math.max(0, Math.min(b, ty + 48) - Math.max(t, ty - 48)), 0));
   const score = sp => (near(sp) ? 1e6 : 0) + hidden(sp);
   let best = spots[0], bs = Infinity; for (const sp of spots) { const v = score(sp); if (v < bs) { bs = v; best = sp; } }
   const here = cartAt && spots.find(sp => sp[0] === cartAt[0] && sp[1] === cartAt[1]);
@@ -371,7 +374,15 @@ function setTargets(list) {
   for (const c of cur) if (!used.has(c)) c.alive = false;
   // the cartouche moves only once the layout has settled (Show Desktop, Mission Control and the like shuffle windows for a moment)
   // (and the names, when the settled windows now cover a different set of them)
-  clearTimeout(cartT); cartT = setTimeout(() => { const sp = cartoucheSpot(); if (SKY && ((cartAt && (sp[0] !== cartAt[0] || sp[1] !== cartAt[1])) || sigOf(allWins) !== nameSig)) newSky(1200); }, performance.now() < liveUntil ? 1500 : 1000);
+  // A jump you didn't drag (a window closed, windows back from hiding, full screen ended) re-places them at once: names
+  // sliced by a window's edge, or a freed patch of sky left unnamed, stayed for over a second. A name a window now cuts
+  // fades out as its new place fades in; names a window has freed come in a little quicker.
+  // (the cartouche alone still waits for a settled second: it isn't cut, just better placed elsewhere)
+  const check = cartToo => { const sp = cartoucheSpot(), sig = sigOf(placeWins()), moved = cartAt && (sp[0] !== cartAt[0] || sp[1] !== cartAt[1]);
+    if (!SKY || !(sig !== nameSig || (cartToo && moved))) { if (moved && !cartToo) cartT = setTimeout(() => check(true), 900); return; }
+    const freed = [...sig].every((b, i) => b === '0' || nameSig[i] === '1');   // nothing newly covered: only names to bring back
+    newSky(freed ? 500 : 800); };
+  clearTimeout(cartT); cartT = setTimeout(() => check(performance.now() >= liveUntil + 1000), performance.now() < liveUntil ? 1500 : 120);
   wake();
 }
 function stepWins(dt) {
