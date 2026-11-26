@@ -381,8 +381,8 @@ void main() {
     vec3 base = r < .4 ? vec3(.88, .85, .78) : r < .7 ? vec3(.86, .82, .73) : r < .9 ? vec3(.87, .86, .81) : vec3(.84, .79, .69);
     base *= .96 + .06 * r2;
     col = base * (1. + .09 * (fbm(p * .016 + id * 3.) - .5)) * (1. - .035 * (fine - .5));
-    col -= .014 * (1. - smoothstep(0., .02, abs(fbm(p * .007 + id * 1.7) - .5)));                 // faint veins
-    col -= .05 * smoothstep(.86, .97, vn(p * 1.2 + id * 5.));                                    // fossil specks
+    col *= 1. - .04 * smoothstep(.45, .85, fbm(p * .045 + id * 2.3));                            // soft clouding in the stone
+    col -= .035 * smoothstep(.82, .97, vn(p * .55 + id * 5.)) + .02 * smoothstep(.9, .99, vn(p * 1.3 + id * 9.));   // pitting, soft
     col *= 1. - .06 * (1. - smoothstep(1., 8., edge));                                          // a little dirt at the joints
     col = mix(col, col * vec3(.95, .93, .9), smoothstep(.55, .8, big));                          // weathering
     h = .66 + .012 * mid - .3 * (1. - smoothstep(1.1, 4.4 + .8 * vn(p * .5 + id), edge));          // a sunken joint, the flag's edge bevelled and worn
@@ -445,7 +445,7 @@ void main() {
       float dist = segD(c.xy, p, p + (Lk.xy - p) * min(1., c.w / hL), u); float pen = .8 + .06 * length(p - c.xy);
       occ = max(occ, 1. - smoothstep(c.z - pen, c.z + pen, dist)); }
     E += Lk.w * irr * (1. - occ); }
-  o = vec4(sv, mv, clamp(E * uLantOn * .5, 0., 1.), sky);
+  o = vec4(sv, mv, E * uLantOn * .5, sky);
 }`, 'shade');
 
 // the picture: the floor and props lit by sun, moon, sky and lanterns; the crown, its dappled shadow; the cat
@@ -473,7 +473,7 @@ float canShadow(vec2 p, vec4 cs, vec2 d) {
   float a = dot(rel, d) / cs.z, b = dot(rel, pd); rel = a * d + b * pd;
   if (dot(rel, rel) > 1.21 * uCan.z * uCan.z) return 1.;
   vec2 uv = rel / (2.2 * uCan.z) + .5 + shimmer(rel) * 1.6;
-  return 1. - .9 * textureLod(uLeaf, uv, cs.w).a;
+  return 1. - .9 * textureLod(uLeaf, uv, cs.w).a * smoothstep(1.1, .9, length(rel) / uCan.z);   // (faded out before the edge of its square: no ring)
 }
 // ---- the cat: walking, a spine (an arc) with legs, head and tail; asleep, a drawn curled pose; it morphs between the two ----
 vec3 arc(vec2 q, float k, float s0, float s1) {
@@ -606,6 +606,7 @@ void main() {
   vec3 sky = uSkyC * sh.a * (1. - .22 * seam), lant = uLantC * sh.b * 2.6 * (1. - .25 * seam);
   vec3 lit = sky * (.74 + .26 * n.z) + uSunC * sunV * relief(n, uSunL) + uMoonC * moonV * relief(n, uMoonL) + lant;
   if (abs(mat - .353) < .1) lit += (uSunC * sunV + uMoonC * moonV) * .18;                 // leaves let a little light through
+  lit += (uSkyC * 1.6 + uMoonC * .5 + vec3(.010, .012, .020) * uNight) * (1. - onFloor);         // pots and plants: dark but present at night
   vec3 col = alb * lit;
   // light raking into a joint: the lit flag edges bounce warm light down into it (most at a low sun)
   col += alb * uSunC * sh.r * cs * seam * .5 * (1. - uSunL.z) * vec3(1., .78, .55);  { vec3 cool = alb * (sky * (.74 + .26 * n.z) + uMoonC * moonV * relief(n, uMoonL)); col += (vec3(dot(cool, vec3(.3, .55, .15))) * vec3(.55, .78, 1.3) - cool) * uNight * .75; }
@@ -647,10 +648,11 @@ void main() {
   { float l = dot(col, vec3(.2126, .7152, .0722)), t = l * (2.51 * l + .03) / (l * (2.43 * l + .59) + .14);
     vec3 c2 = col * (t / max(l, 1e-5)); float over = max(max(c2.r, c2.g), c2.b);
     col = clamp(mix(c2, vec3(t), clamp(over - 1., 0., 1.)), 0., 1.); }
-  o = vec4(pow(col, vec3(1. / 2.2)), 1.);
+  o = vec4(pow(col, vec3(1. / 2.2)) + (fract(sin(dot(fc, vec2(12.9898, 78.233))) * 43758.5453) - .5) / 255., 1.);   // a dither: no banding in the dark
 }`, 'comp');
 
 const vao = gl.createVertexArray();
+let HALF = !!gl.getExtension('EXT_color_buffer_float');   // the shadow/light pass at half-float precision: smooth lantern pools
 function texOf(w, h, opts = {}) {
   const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
   if (opts.src) { gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, !!opts.premul); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, opts.src); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false); }
@@ -677,7 +679,11 @@ function build() {
   const [A, B] = paintProps(); T.props = texOf(0, 0, { src: A, premul: true }); T.propsH = texOf(0, 0, { src: B });
   T.leaf = texOf(0, 0, { src: paintLeaves(LEAF_N), mip: true });
   SS = .5 * (Q.sim < 1 ? .8 : 1) * (Q.tier === 2 ? 1.3 : 1); SW = Math.max(1, Math.round(W * SS)); SHh = Math.max(1, Math.round(H * SS));
-  T.shade = texOf(SW, SHh); T.shadeF = fboOf(T.shade);
+  T.shade = HALF ? (() => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, SW, SHh, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v); return t; })() : texOf(SW, SHh);
+  T.shadeF = fboOf(T.shade);
+  if (HALF && gl.checkFramebufferStatus && (gl.bindFramebuffer(gl.FRAMEBUFFER, T.shadeF), gl.checkFramebufferStatus(gl.FRAMEBUFFER)) !== gl.FRAMEBUFFER_COMPLETE) { gl.bindFramebuffer(gl.FRAMEBUFFER, null); HALF = false; return build(); }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   shadeDirty = true; full = true; booted = true;
   if (!cat) placeCat(); else { cat.x = clamp(cat.x, 40, W - 40); cat.y = clamp(cat.y, 40, H - 40); }
 }
@@ -761,11 +767,11 @@ function sunVisAt(x, y, d, ct) {
 function lampAt(x, y) { let E = 0; for (const l of L.lamps) { const r2 = (x - l.x) ** 2 + (y - l.y) ** 2 + l.h * l.h; E += Math.pow(l.h * l.h / r2, 1.5); } return E; }
 const covered = (x, y, m) => panels.some(p => !p.dying && x > p.tx - m && x < p.tx + p.tw + m && y > p.ty - m && y < p.ty + p.th + m);
 function blocked(x, y, m = 0) {
-  if (x < L.WB + 50 * U || x > W - L.WB - 50 * U || y < L.top + L.WB + 50 * U || y > L.bot - L.WB - 50 * U) return true;
+  const m0 = L.WB + L.BAND + 40 * U; if (x < m0 || x > W - m0 || y < L.top + m0 || y > L.bot - m0) return true;   // on the floor, out from the walls
   for (const c of L.cyl) if (Math.hypot(x - c.x, y - c.y) < c.r + 44 * U + m) return true;
   for (const b of L.boxes) if (x > b.x - 44 * U && x < b.x + b.w + 44 * U && y > b.y - 44 * U && y < b.y + b.h + 44 * U) return true;
   if (Math.hypot(x - L.tree.x, y - L.tree.y) < L.tree.R * 1.05) return true;     // (under the crown you'd never see it)
-  for (const l of L.lamps) if (Math.hypot(x - l.x, y - l.y) < 55 * U) return true;
+  for (const l of L.lamps) if (Math.hypot(x - l.x, y - l.y) < 125 * U) return true;   // in a lantern's pool, not under it
   return false;
 }
 function warmth(x, y) {
@@ -869,8 +875,8 @@ const handle = m => {
 try { retime(clockNow(), 0); build(); } catch (e) { post('JSERR boot ' + e.message + ' ' + (e.stack || '').split('\n')[0]); }
 wake(); scheduleCatCheck(3000);
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { build(); wake(); }, 250); });
-window.__twProbe = (x, y) => { const px = new Uint8Array(4); gl.bindFramebuffer(gl.FRAMEBUFFER, T.shadeF); gl.readPixels(Math.round(x * SS), Math.round(y * SS), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  return { shade: [...px].map(v => +(v / 255).toFixed(3)), sky: sky.skyC.map(v => +v.toFixed(3)), sun: sky.sunC.map(v => +v.toFixed(3)), moon: sky.moonC.map(v => +v.toFixed(4)), lant: sky.lant, expo: sky.expo }; };   // (tests: what the shade pass found at a point)
+window.__twProbe = (x, y) => { const px = HALF ? new Float32Array(4) : new Uint8Array(4); gl.bindFramebuffer(gl.FRAMEBUFFER, T.shadeF); gl.readPixels(Math.round(x * SS), Math.round(y * SS), 1, 1, gl.RGBA, HALF ? gl.FLOAT : gl.UNSIGNED_BYTE, px); gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { shade: [...px].map(v => +(HALF ? v : v / 255).toFixed(3)), sky: sky.skyC.map(v => +v.toFixed(3)), sun: sky.sunC.map(v => +v.toFixed(3)), moon: sky.moonC.map(v => +v.toFixed(4)), lant: sky.lant, expo: sky.expo }; };   // (tests: what the shade pass found at a point)
 window.__twCatPose = (x, y, hd, curl = 1) => { clearTimeout(catTimer); Object.assign(cat, { x, y, hd, curl, legs: 1 - curl, state: curl >= 1 ? 'nap' : 'pose' }); full = true; wake(); };   // (tests: hold the cat in a pose)
 window.__twCat = () => { cat = null; placeCat(); full = true; wake(); return `${cat.x | 0},${cat.y | 0}`; };   // (tests: the cat where it would choose to be, now)
 window.__dbg = () => { const s = sky, f = v => v.toFixed(1);
