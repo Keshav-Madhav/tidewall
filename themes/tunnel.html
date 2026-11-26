@@ -24,13 +24,11 @@
     clip-path: inset(0 100% 0 0); transition: clip-path .9s cubic-bezier(.3, .1, .3, 1), opacity .5s ease; }
   #cap.on { clip-path: inset(0 0 0 0); }                                /* wiped on with the first picture, not floating over a void */
   #cap.right { left: auto; right: 26px; }
-  #rake { position: fixed; top: 0; width: 16px; height: 100%; pointer-events: none; }
 </style>
 </head>
 <body>
 <script type="importmap">{ "imports": { "three": "./lib/three/build/three.module.min.js" } }</script>
 <canvas id="gl"></canvas>
-<canvas id="rake"></canvas>
 <div id="cap"></div>
 <script>
 'use strict';
@@ -274,7 +272,7 @@ void main() { float a = vA * clamp(uW * .5 + .5 - abs(vD), 0., 1.); o = vec4(a);
 const COMP = prog(FSQ, `#version 300 es
 precision highp float; in vec2 vUV; out vec4 o;
 uniform sampler2D uSmoke, uModel, uPrev; uniform vec2 uRes, uMTex; uniform vec4 uMBox; uniform float uReal, uFlip, uMCY; uniform vec3 uBallPx;
-uniform float uFront, uRest, uLineGapPx; uniform int uBehind;          // the sweep's edge (0..1 along the air), the rake's lines at rest; behind it: 0 bare, 1 at rest, 2 the last frame
+uniform float uFront, uRest, uLineGapPx, uRestLines; uniform int uBehind;          // the sweep's edge (0..1 along the air), the rake's lines at rest; behind it: 0 bare, 1 at rest, 2 the last frame
 float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 void main() {
   vec2 uv = vUV, px = vec2(uv.x, 1. - uv.y) * uRes, q = (px - uRes * vec2(.42, .5)) / uRes.y;
@@ -287,7 +285,9 @@ void main() {
   vec3 restSmoke = vec3(0.);
   if (uRest > .5 || (uFront < 1.25 && uBehind == 1)) {                 // (only while it's on screen: nothing extra at rest)
     float yl = px.y / uLineGapPx, rl = 1. - smoothstep(.06, .16, abs(fract(yl) - .5) * uLineGapPx / 11.), bandR = mix(.08, .62, exp(-pow((px.y / uRes.y - uMCY) / .17, 2.)));
-    restSmoke = vec3(.74, .77, .82) * rl * bandR;
+    // (only with no model: straight lines running past a model, as if it weren't there, read as a picture pasted on a
+    // dead tunnel; a model waits on the bare slate and the first smoke comes in round it)
+    restSmoke = vec3(.74, .77, .82) * rl * bandR * uRestLines;
   }
   vec3 smoke = restSmoke;
   if (uRest < .5) {
@@ -449,7 +449,7 @@ async function build() {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   smokeF = fbo([smokeT]);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  simT = 0; warm = 0; warmUntil = 0; shown = 0; restIn = 0; ready = true; paintRake();
+  simT = 0; warm = 0; warmUntil = 0; shown = 0; restIn = 0; ready = true;
   capEl.textContent = `Wind tunnel  ·  ${MODEL.name}  ·  Re ≈ ${(Math.round((MODEL.none ? RE_ICONS : RE) / 100) * 100).toLocaleString('en-US')}`; measureCap();
 }
 // The cursor's ball (grid units). The air can only be pushed so fast (well under the lattice's speed of sound), so the
@@ -531,6 +531,7 @@ function render(front = 9, rest = false, behind = 0) {
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, maskDisp); gl.uniform1i(COMP.u.uModel, 1);
   gl.uniform2f(COMP.u.uRes, W, H); gl.uniform2f(COMP.u.uMTex, 1 / MBOX[4], 1 / MBOX[5]); gl.uniform4f(COMP.u.uMBox, MBOX[0], MBOX[1], MBOX[2], MBOX[3]); gl.uniform1f(COMP.u.uReal, MODEL.glb ? 1 : 0); gl.uniform1f(COMP.u.uFlip, FLIP ? 1 : 0);
   gl.uniform1f(COMP.u.uMCY, MCY); gl.uniform1f(COMP.u.uFront, front); gl.uniform1f(COMP.u.uRest, rest ? 1 : 0); gl.uniform1i(COMP.u.uBehind, behind); gl.uniform1f(COMP.u.uLineGapPx, NY / LINES * CELL);
+  gl.uniform1f(COMP.u.uRestLines, MODEL.none ? 1 : 0);
   if (behind === 2) { gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, prevT); gl.uniform1i(COMP.u.uPrev, 2); }
   gl.uniform3f(COMP.u.uBallPx, FLIP ? W - ball.x * CELL : ball.x * CELL, ball.y * CELL, ball.r * CELL);
   gl.bindVertexArray(vao); gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -595,19 +596,15 @@ function modelSpot() {
   if (MODEL.none) return .5;
   const bw = (MODEL.circle ? MODEL.h : MODEL.w || .3) * H, bh = (MODEL.circle ? MODEL.h : MODEL.foil ? MODEL.w * .25 : MODEL.h) * H, cx = W * .3;
   const cover = (l, t, r, b) => { const A = Math.max(1, (r - l) * (b - t)); let s = 0; for (const [L, T, R, B] of WINR) s += Math.max(0, Math.min(r, R) - Math.max(l, L)) * Math.max(0, Math.min(b, B) - Math.max(t, T)); return Math.min(1, s / A); };
-  const cost = f => { const cy = f * H; return cover(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2) + .35 * cover(cx + bw / 2, cy - bh * .7, cx + bw / 2 + W * .35, cy + bh * .7) + .25 * Math.abs(f - .5) / .22; };
-  let best = .5, bc = Infinity; for (const f of [.5, .38, .62, .3, .7]) { const c = cost(f); if (c < bc - 1e-6) { bc = c; best = f; } }
+  // Mid-height is home: the wake rolls over and past your windows there. In order: the model in sight (hidden, its wake
+  // came from nowhere), clear of window edges (one just touching a window counts as partly hidden: its tail sat pressed
+  // on window bottoms), then as near the middle as that allows. The wake's own cover barely counts (weighted heavily, it
+  // sent the model to 0.7 of the height with the middle free and half the tunnel empty above it). A side view fills
+  // only about half of its box's height: the box overstated how much a window hid.
+  const sh = MODEL.view === 'side' ? bh * .6 : bh, pad = 18;
+  const cost = f => { const cy = f * H; return 2 * cover(cx - bw / 2 - pad, cy - sh / 2 - pad, cx + bw / 2 + pad, cy + sh / 2 + pad) + .1 * cover(cx + bw / 2, cy - bh * .6, cx + bw / 2 + W * .3, cy + bh * .6) + .5 * ((f - .5) / .22) ** 2; };
+  let best = .5, bc = Infinity; for (const f of [.5, .44, .56, .38, .62, .32, .68, .26, .74]) { const c = cost(f); if (c < bc - 1e-6) { bc = c; best = f; } }
   return cost(MCY) <= bc + .08 ? MCY : best;                              // (a rebuild keeps it where it was unless another height is clearly better)
-}
-// the rake: a comb of small steel injector tips along the inlet, one for each smoke line (the lines began from nowhere)
-function paintRake() {
-  const c = document.getElementById('rake'), k = K; c.width = Math.ceil(16 * k); c.height = Math.round(H * k); c.style.left = FLIP ? 'auto' : '0'; c.style.right = FLIP ? '0' : 'auto';
-  const x = c.getContext('2d'); x.setTransform(FLIP ? -k : k, 0, 0, k, FLIP ? c.width : 0, 0);
-  const gap = NY / LINES * CELL;
-  for (let i = 0; i < LINES; i++) { const y = (i + .5) * gap, b = MODEL.none ? .5 : .35 + .5 * Math.exp(-((((y / H) - MCY) / .2) ** 2));   // lit like the smoke: brightest round the model
-    x.fillStyle = `rgba(52,56,64,${.75 * b + .2})`; x.fillRect(0, y - 1.3, 11, 2.6);                           // the tube
-    x.fillStyle = `rgba(190,198,210,${.32 * b})`; x.fillRect(0, y - 1.3, 11, .7);                               // the sheet catching its top
-    x.fillStyle = `rgba(210,216,226,${.45 * b})`; x.fillRect(10.2, y - 1.1, 1.3, 2.2); }                        // the bright lip it leaves from
 }
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v;
