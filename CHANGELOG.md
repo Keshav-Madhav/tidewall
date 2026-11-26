@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0]
+
+### A new wall: Courtyard
+- A sunlit Mediterranean courtyard seen from above, and your windows cast real shadows in it: from the actual sun at
+  your location, long and golden in the morning, short at noon, stretching amber towards evening. At night the moon
+  takes over, with warm lantern light along the walls.
+- Pale limestone flags with sunken joints that catch the light, an olive tree whose dappled shade sways, pots of
+  rosemary, lavender and geranium, a bench, an old well, and a cat that naps in whatever sun is left, getting up and
+  moving when the shade reaches it.
+- Light on your battery: the sun moves slowly, so the yard is redrawn only when it or your windows move; at night it
+  rests completely.
+
 ## [1.4.3]
 
 ### Every wall, polished
