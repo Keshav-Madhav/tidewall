@@ -553,7 +553,9 @@ function loop(now) { try { loop0(now); } catch (e) { running = false; try { webk
 function loop0(now) {
   if (paused) { running = false; return; }
   const dt = lastT ? Math.min((now - lastT) / 1000, .05) : 1 / 60; lastT = now; fpsEMA = fpsEMA ? fpsEMA * .95 + .05 / dt : 1 / dt;
-  const moving = stepWins(dt);
+  // while a window is in your hand the lens at its edge follows it every frame (the names no longer repaint the sky on
+  // a window change, and the loop had gone to sleep between the window's messages: the lens lagged the window)
+  const moving = stepWins(dt) || performance.now() < liveUntil;
   // the cursor hole fades in while the pointer is over the sky and out a few seconds after it stops
   // back on the sky far from where its hole was left (after crossing a window, or another screen): the old one fades
   // out quickly and the new one grows in at the pointer, never a hole jumping across the screen
