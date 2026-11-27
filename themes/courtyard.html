@@ -156,7 +156,25 @@ function setPanels(list, live) {
       const s = (p.n === r.n ? 0 : 250) + Math.hypot(p.tx + p.tw / 2 - r.x - r.w / 2, p.ty + p.th / 2 - r.y - r.h / 2) + Math.abs(p.tw - r.w) + Math.abs(p.th - r.h);
       if (s < bs) { bs = s; best = p; } }
     if (best && bs < (r.icon ? 160 : 900)) { used.add(best); Object.assign(best, { tx: r.x, ty: r.y, tw: r.w, th: r.h, n: r.n });
-      if (live) Object.assign(best, { x: r.x, y: r.y, w: r.w, h: r.h }); next.push(best); }
+      if (live) {
+        // a window in your hand: its position reaches the page a couple of frames after you moved it, and a shadow at
+        // its very edge shows that as lag. Track its speed and lead it by about that delay (see stepPanels)
+        // (the speed from a straight-line fit over the last ~80 ms of reports, then smoothed: two reports alone made it
+        // twitch with every uneven gap between messages)
+        const t = performance.now(), h = (best.hist = (best.hist || []).filter(q => t - q[0] < 80));
+        h.push([t, r.x, r.y]);
+        if (h.length >= 3) { let st = 0, sx = 0, sy = 0, stt = 0, stx = 0, sty = 0; const n = h.length, t0 = h[0][0];
+          for (const [ti, xi, yi] of h) { const u = (ti - t0) / 1000; st += u; sx += xi; sy += yi; stt += u * u; stx += u * xi; sty += u * yi; }
+          const den = n * stt - st * st;
+          if (den > 1e-9) { const fx = (n * stx - st * sx) / den, fy = (n * sty - st * sy) / den;
+            best.vx = (best.vx || 0) * .5 + fx * .5; best.vy = (best.vy || 0) * .5 + fy * .5; } }
+        else if (h.length === 1) { best.vx = best.vy = 0; }
+        // how fast it's going this instant (the last two reports): slowing down shrinks the lead at once
+        if (h.length >= 2) { const a = h[h.length - 2], dtl = (t - a[0]) / 1000; best.inst = dtl > .003 ? Math.hypot(r.x - a[1], r.y - a[2]) / dtl : best.inst; }
+        best.mx = r.x; best.my = r.y; best.mt = t;
+        Object.assign(best, { x: r.x, y: r.y, w: r.w, h: r.h });
+      } else { best.vx = best.vy = 0; best.mt = 0; }
+      next.push(best); }
     else { const z0 = r.icon ? L.iconZ : L.winZ; next.push({ x: r.x, y: r.y, w: r.w, h: r.h, tx: r.x, ty: r.y, tw: r.w, th: r.h, n: r.n, icon: r.icon, z: booted ? 0 : z0, zt: z0 }); }
   }
   for (const p of panels) if (!used.has(p)) { if (!p.dying) { p.dying = true; p.zt = 0; } next.push(p); }
@@ -164,7 +182,15 @@ function setPanels(list, live) {
 }
 function stepPanels(dt) {
   let moving = false; const k = 1 - Math.exp(-dt * 16), kz = 1 - Math.exp(-dt * 7);
+  const now = performance.now(), live = now < liveUntil, LEAD = .032;
   for (const p of panels) {
+    if (live && p.mt && (p.vx || p.vy)) {   // in your hand: where it is now, not where it was when last reported
+      // led only when it's moving fast (slow, the delay can't be seen and leading it only added jitter), never by more
+      // than it's going right now (so a slowing hand isn't overshot), and never more than 40 pt ahead
+      const sp = Math.hypot(p.vx, p.vy), fast = Math.min(1, Math.max(0, (sp - 250) / 750)), now_ = Math.min(sp, p.inst ?? sp);
+      const k = fast * (sp > 0 ? now_ / sp : 0), ahead = Math.min(now - p.mt, 60) / 1000 * k + LEAD * k;
+      let dx = p.vx * ahead, dy = p.vy * ahead; const d = Math.hypot(dx, dy); if (d > 40) { dx *= 40 / d; dy *= 40 / d; }
+      p.x = p.mx + dx; p.y = p.my + dy; moving = true; continue; }
     if (p.dying) { const cx = p.x + p.w / 2, cy = p.y + p.h / 2; p.w *= 1 - kz; p.h *= 1 - kz; p.x = cx - p.w / 2; p.y = cy - p.h / 2; p.z += (0 - p.z) * kz; moving = true; continue; }
     for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = p[b] - p[a]; if (Math.abs(d) > .05) { p[a] += d * k; moving = true; } else p[a] = p[b]; }
     const dz = p.zt - p.z; if (Math.abs(dz) > .05) { p.z += dz * kz; moving = true; } else p.z = p.zt;

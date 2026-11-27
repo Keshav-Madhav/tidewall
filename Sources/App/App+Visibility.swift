@@ -27,7 +27,7 @@ extension App {
     let now = ProcessInfo.processInfo.systemUptime
     for w in walls.values {
       let world = Cfg.spanThemes.contains(Cfg.theme(for: w.screenID)) ? worldFrames(for: w.screenID) : [w.cgFrame]
-      let shown = lastRects.indices.filter { i in world.contains { lastRects[i].intersects($0) } && reacts(i) }
+      let shown = lastRects.indices.filter { i in world.contains { lastRects[i].intersects($0) } && reacts(i) && !isFullScreenApp(lastRects[i]) }
       w.realRects = lastRects.filter { $0.intersects(w.cgFrame) }
       w.usable = benchMode ? nil : usableFrame(w)
       // never pause while windows move: a sliver of the scene may still show and must keep up
@@ -40,6 +40,14 @@ extension App {
   }
 
   private func owner(_ i: Int) -> String { i < lastOwners.count ? lastOwners[i] : "" }
+
+  /// A window exactly the size of a whole display, menu bar and all: a full-screen app on a Space of its own. Your
+  /// desktop can't be seen behind it, so the walls aren't told about it (it still counts for covering a screen). They
+  /// were: switching back from a full-screen app, every wall laid itself out round one giant window as it slid away,
+  /// then again round your desktop, both mid-animation (matched by size alone: it slides sideways as Spaces change).
+  private func isFullScreenApp(_ r: CGRect) -> Bool {
+    NSScreen.screens.contains { s in abs(s.frame.width - r.width) < 2 && abs(s.frame.height - r.height) < 2 }
+  }
 
   /// Whether the scene reshapes around this window (Settings ▸ The wallpaper reacts to).
   private func reacts(_ i: Int) -> Bool {
