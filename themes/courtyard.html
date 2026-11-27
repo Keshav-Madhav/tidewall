@@ -149,6 +149,8 @@ function layout() {
 // floor when it opens (its shadow slides out from under it, in about 25 ms) and sinks and shrinks to its middle when it
 // closes (as fast: the window itself is already gone by the time we hear of it).
 let panels = [], liveUntil = 0, lastWinChange = 0, lastWinMsg = null, iconRects = [];
+// how high a panel floats: a window, Stage Manager's cards a little lower (they're small), badges and icons just up
+const zOf = r => r.icon ? L.iconZ : r.badge ? L.iconZ * 1.6 : r.sm ? L.winZ * .7 : L.winZ;
 function setPanels(list, live) {
   const used = new Set(), next = [];
   for (const r of list) {
@@ -156,7 +158,7 @@ function setPanels(list, live) {
     for (const p of panels) { if (used.has(p) || p.dying || p.icon !== r.icon) continue;
       const s = (p.n === r.n ? 0 : 250) + Math.hypot(p.tx + p.tw / 2 - r.x - r.w / 2, p.ty + p.th / 2 - r.y - r.h / 2) + Math.abs(p.tw - r.w) + Math.abs(p.th - r.h);
       if (s < bs) { bs = s; best = p; } }
-    if (best && bs < (r.icon ? 160 : 900)) { used.add(best); Object.assign(best, { tx: r.x, ty: r.y, tw: r.w, th: r.h, n: r.n });
+    if (best && bs < (r.icon ? 160 : 900)) { used.add(best); Object.assign(best, { tx: r.x, ty: r.y, tw: r.w, th: r.h, n: r.n, qn: r.qn, badge: r.badge, zt: best.dying ? best.zt : zOf(r) });
       if (live) {
         // a window in your hand: its position reaches the page a couple of frames after you moved it, and a shadow at
         // its very edge shows that as lag. Track its speed and lead it by about that delay (see stepPanels)
@@ -176,7 +178,7 @@ function setPanels(list, live) {
         Object.assign(best, { x: r.x, y: r.y, w: r.w, h: r.h });
       } else { best.vx = best.vy = 0; best.mt = 0; }
       next.push(best); }
-    else { const z0 = r.icon ? L.iconZ : L.winZ; next.push({ x: r.x, y: r.y, w: r.w, h: r.h, tx: r.x, ty: r.y, tw: r.w, th: r.h, n: r.n, icon: r.icon, z: booted ? 0 : z0, zt: z0 }); }
+    else { const z0 = zOf(r); next.push({ x: r.x, y: r.y, w: r.w, h: r.h, tx: r.x, ty: r.y, tw: r.w, th: r.h, n: r.n, icon: r.icon, qn: r.qn, badge: r.badge, z: booted ? 0 : z0, zt: z0 }); }
   }
   for (const p of panels) if (!used.has(p)) { if (!p.dying) { p.dying = true; p.zt = 0; } next.push(p); }
   panels = next; shadeDirty = true; lastWinChange = performance.now();
@@ -410,16 +412,25 @@ void main() {
 }`, 'floor');
 
 // the shadows: every caster worked out analytically, at a fraction of the screen's resolution
-const NR = 64, NC = 16;
+const NR = 64, NC = 16, NQ = 12;
 const SHADE = prog(`#version 300 es
 precision highp float; out vec4 o;
 uniform vec2 uCss; uniform float uS;
-uniform vec4 uR[${NR}]; uniform vec4 uZ[${NR}]; uniform int uNR;     // rect l,t,r,b | height, grounded, corner radius, solid (a surface)
+uniform vec4 uR[${NR}]; uniform vec4 uZ[${NR}]; uniform int uNR;     // rect l,t,r,b | height, grounded (1) or quad (2 + its slot), corner radius, solid (a surface)
+uniform vec4 uQ[${NQ * 2}];                                              // Stage Manager's cards, turned: four corners each
 uniform vec4 uC[${NC}]; uniform int uNC;                                 // cylinders: x, y, r, h
 uniform vec4 uSun, uMoon; uniform float uSunOn, uMoonOn, uLantOn;     // dx, dy, cot(elevation), sin(elevation)
 uniform vec4 uL[3]; uniform int uNL;                                     // lanterns: x, y, height, power
 uniform vec2 uWall;                                                      // width, height
 float boxSD(vec2 q, vec4 b, float rad) { vec2 c = (b.xy + b.zw) * .5, e = (b.zw - b.xy) * .5 - rad; vec2 d = abs(q - c) - e; return length(max(d, 0.)) + min(max(d.x, d.y), 0.) - rad; }
+// a card turned in perspective: a convex quad (a polygon's signed distance)
+float quadSD(vec2 p, int k) {
+  vec2 v[4]; v[0] = uQ[2 * k].xy; v[1] = uQ[2 * k].zw; v[2] = uQ[2 * k + 1].xy; v[3] = uQ[2 * k + 1].zw;
+  float d = dot(p - v[0], p - v[0]), s = 1.;
+  for (int i = 0, j = 3; i < 4; j = i, i++) { vec2 e = v[j] - v[i], w = p - v[i], b = w - e * clamp(dot(w, e) / dot(e, e), 0., 1.);
+    d = min(d, dot(b, b)); bvec3 c = bvec3(p.y >= v[i].y, p.y < v[j].y, e.x * w.y > e.y * w.x); if (all(c) || all(not(c))) s = -s; }
+  return s * sqrt(d) - 3.; }   // (rounded a little, like the cards)
+float panSD(vec2 q, int i) { vec4 z = uZ[i]; return z.y > 1.5 ? quadSD(q, int(z.y - 1.5)) : boxSD(q, uR[i], z.z); }
 float cov(float sd, float pen) { return 1. - smoothstep(-pen, pen, sd); }
 float segD(vec2 p, vec2 a, vec2 b, out float u) { vec2 pa = p - a, ba = b - a; u = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-4), 0., 1.); return length(pa - ba * u); }
 // how high the surface at p stands: the floor, or the top of a pot, the well, the planter, the bench. A caster only
@@ -433,7 +444,7 @@ float zAt(vec2 p) { float z = 0.;
 float dirVis(vec2 p, float zr, vec4 Lg, float kA) {
   vec2 d = Lg.xy; float ct = Lg.z, sE = Lg.w, occ = 0.;
   for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 b = uR[i], z = uZ[i]; float top = z.x - zr; if (top <= .5) continue;
-    if (z.y < .5) { vec2 q = p + d * top * ct; occ = max(occ, cov(boxSD(q, b, z.z), .6 + top / sE * kA)); }
+    if (abs(z.y - 1.) > .5) { vec2 q = p + d * top * ct; occ = max(occ, cov(panSD(q, i), .6 + top / sE * kA)); }
     else for (int k = 1; k <= 3; k++) { float zz = top * float(k) / 3.; vec2 q = p + d * zz * ct; occ = max(occ, cov(boxSD(q, b, z.z), .6 + zz / sE * kA)); } }
   for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u, top = c.w - zr; if (top <= .5) continue;
     float dist = segD(p, c.xy, c.xy - d * top * ct, u); float pen = .6 + u * top / sE * kA;
@@ -451,8 +462,8 @@ void main() {
   float mv = uMoonOn > .5 ? dirVis(p, zr, uMoon, .03) : 1.;
   // the sky's own shade: panels hide a little of the sky from the floor round them; pots and walls darken their feet
   float sky = 1.;
-  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; if (z.x <= zr + .5) continue; float w = z.y > .5 ? .5 : .2 * smoothstep(0., 30., z.x - zr);
-    sky *= 1. - w * cov(boxSD(p, uR[i], z.z), 10. + z.x * 1.4); }
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; if (z.x <= zr + .5) continue; float w = abs(z.y - 1.) < .5 ? .5 : .2 * smoothstep(0., 30., z.x - zr);
+    sky *= 1. - w * cov(panSD(p, i), 10. + z.x * 1.4); }
   for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; if (c.w <= zr + .5) continue; float dd = length(p - c.xy); sky *= 1. - .45 * (1. - smoothstep(c.z, c.z + c.w * .9, dd)); }
   float dWall = min(min(p.x, uCss.x - p.x), min(p.y, uCss.y - p.y)) - uWall.x; sky *= 1. - .28 * (1. - smoothstep(0., uWall.y, zr)) * exp(-max(dWall, 0.) / 26.);
   // the lanterns: point lights, each blocked by what stands between it and the floor
@@ -460,10 +471,10 @@ void main() {
   if (uLantOn > .001) for (int k = 0; k < 3; k++) { if (k >= uNL) break; vec4 Lk = uL[k]; float hL = max(Lk.z - zr, 1.); vec2 dv = p - Lk.xy; float r2 = dot(dv, dv) + hL * hL;
     float irr = pow(hL * hL / r2, 1.5) + .008 * exp(-sqrt(r2) / (hL * 3.)); float occ = 0.;
     for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; vec4 b = uR[i];
-      int nk = z.y > .5 ? 3 : 1;
+      int nk = abs(z.y - 1.) < .5 ? 3 : 1;
       float top = z.x - zr; if (top <= .5) continue;
-      for (int s = 1; s <= 3; s++) { if (s > nk) break; float zz = z.y > .5 ? top * float(s) / 3. : top; if (zz >= hL - 1.) continue;
-        vec2 q = p + (Lk.xy - p) * (zz / hL); float pen = .8 + 7. * zz / (hL - zz); occ = max(occ, cov(boxSD(q, b, z.z), pen)); } }
+      for (int s = 1; s <= 3; s++) { if (s > nk) break; float zz = nk == 3 ? top * float(s) / 3. : top; if (zz >= hL - 1.) continue;
+        vec2 q = p + (Lk.xy - p) * (zz / hL); float pen = .8 + 7. * zz / (hL - zz); occ = max(occ, cov(panSD(q, i), pen)); } }
     for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u; if (c.w <= zr + .5) continue;
       float dist = segD(c.xy, p, p + (Lk.xy - p) * min(1., (c.w - zr) / hL), u); float pen = .8 + .06 * length(p - c.xy);
       occ = max(occ, 1. - smoothstep(c.z - pen, c.z + pen, dist)); }
@@ -756,19 +767,23 @@ function build() {
   if (!cat) placeCat(); else { cat.x = clamp(cat.x, 40, W - 40); cat.y = clamp(cat.y, 40, H - 40); }
 }
 const f32 = (n) => new Float32Array(n * 4);
-const bufR = f32(NR), bufZ = f32(NR), bufC = f32(NC), bufL = f32(3);
+const bufR = f32(NR), bufZ = f32(NR), bufC = f32(NC), bufL = f32(3), bufQ = f32(NQ * 2);
 function renderShade() {
   const t0 = performance.now();
   let n = 0;
-  const addR = (x, y, w, h, z, grounded, rad, solid = 0) => { if (n >= NR || w < 1 || h < 1) return; bufR.set([x, y, x + w, y + h], n * 4); bufZ.set([z, grounded ? 1 : 0, Math.min(rad, w / 2, h / 2), solid], n * 4); n++; };
-  for (const p of panels) addR(p.x, p.y, p.w, p.h, p.z, false, p.icon ? 9 : 10);
+  let nq = 0;
+  const addR = (x, y, w, h, z, grounded, rad, solid = 0, qn = null) => { if (n >= NR || w < 1 || h < 1) return; bufR.set([x, y, x + w, y + h], n * 4);
+    let kind = grounded ? 1 : 0;
+    if (qn && nq < NQ) { bufQ.set(qn.map((v, j) => j % 2 ? y + v * h : x + v * w), nq * 8); kind = 2 + nq; nq++; }
+    bufZ.set([z, kind, Math.min(rad, w / 2, h / 2), solid], n * 4); n++; };
+  for (const p of panels) addR(p.x, p.y, p.w, p.h, p.z, false, p.badge ? p.w * .23 : p.icon ? 9 : 10, 0, p.qn);
   for (const b of L.boxes) addR(b.x, b.y, b.w, b.h, b.z, b.grounded, b.rad, 1);   // (solid: their tops are surfaces)
   let c = 0; for (const q of L.cyl) { if (c >= NC) break; bufC.set([q.x, q.y, q.r, q.h], c * 4); c++; }
   L.lamps.forEach((l, i) => bufL.set([l.x, l.y, l.h, l.p], i * 4));
   gl.bindFramebuffer(gl.FRAMEBUFFER, T.shadeF); gl.viewport(0, 0, SW, SHh); gl.disable(gl.SCISSOR_TEST); gl.useProgram(SHADE); gl.bindVertexArray(vao);
   const u = SHADE.u;
   gl.uniform2f(u.uCss, W, H); gl.uniform1f(u.uS, SW / W);
-  gl.uniform4fv(u.uR, bufR); gl.uniform4fv(u.uZ, bufZ); gl.uniform1i(u.uNR, n);
+  gl.uniform4fv(u.uR, bufR); gl.uniform4fv(u.uZ, bufZ); gl.uniform1i(u.uNR, n); gl.uniform4fv(u.uQ, bufQ);
   gl.uniform4fv(u.uC, bufC); gl.uniform1i(u.uNC, c);
   gl.uniform4f(u.uSun, sky.sd[0], sky.sd[1], sky.sCot, sky.sSin); gl.uniform4f(u.uMoon, sky.md[0], sky.md[1], sky.mCot, sky.mSin);
   gl.uniform1f(u.uSunOn, sky.sunOn ? 1 : 0); gl.uniform1f(u.uMoonOn, sky.moonOn ? 1 : 0); gl.uniform1f(u.uLantOn, sky.lant);
@@ -926,7 +941,10 @@ let FB = null; function commit() { } function refresh() { }
 const P = { quality: 2 }; let fieldMs = 0;   // (the host's test probe reads these: fieldMs is the shadow pass's time)
 function sendPanels(live) {
   const list = [];
-  if (lastWinMsg) { const m = lastWinMsg; (m.r || []).forEach(([l, t, r, b], i) => { if (m.sm && m.sm[i]) return; list.push({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, n: (m.n || [])[i] || '' }); }); }
+  // (Stage Manager's strip too: a card's corners as fractions of its box, so the shape rides the box's easing; an app's
+  // badge, already its icon's box, is a rounded square)
+  if (lastWinMsg) { const m = lastWinMsg; (m.r || []).forEach(([l, t, r, b], i) => { const w = r - l, h = b - t, q = m.q && m.q[i], sm = !!(m.sm && m.sm[i]);
+    list.push({ x: l / K, y: t / K, w: w / K, h: h / K, n: (m.n || [])[i] || '', sm, badge: sm && !q, qn: q ? q.map((v, j) => j % 2 ? (v - t) / h : (v - l) / w) : null }); }); }
   iconRects.forEach((r, i) => list.push({ ...r, n: 'icon' + i, icon: true }));
   setPanels(list, live);
 }

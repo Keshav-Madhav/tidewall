@@ -232,8 +232,8 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     if pause && firstLayout { pauseSoon() }
 
     let k = scale, o = cgFrame.origin
-    let local = rects.map { $0.offsetBy(dx: -o.x, dy: -o.y) }
-    send([windowsMessage(local, rects: rects, owners: owners, scale: k, live: live), roomMessage(local, scale: k, live: live), areaMessage(scale: k)].compactMap { $0 }, live: live)
+    let (local, quads) = stageShapes(rects.map { $0.offsetBy(dx: -o.x, dy: -o.y) }, rects: rects, owners: owners)
+    send([windowsMessage(local, rects: rects, owners: owners, quads: quads, scale: k, live: live), roomMessage(local, scale: k, live: live), areaMessage(scale: k)].compactMap { $0 }, live: live)
   }
 
   /// The part of the display you see the wallpaper in: below the menu bar, above (or beside) the Dock. A wall that sets
@@ -246,8 +246,32 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     return m
   }
 
-  /// The windows' own edges and app names, for themes that draw around the real window (Estate, say).
-  private func windowsMessage(_ local: [CGRect], rects: [CGRect], owners: [String], scale k: CGFloat, live: Bool) -> String? {
+  /// Stage Manager's strip as you see it. The window list knows only boxes: an app's badge is a ~32 pt icon in a window
+  /// twice its size, and a card is drawn turned in perspective, the edge by the screen's side at full height and the far
+  /// edge at 0.91 of it, drawn toward the middle of the screen (measured off the real strip: every card's box matches).
+  /// Badges become their icon's box; cards also get their four corners (near top, far top, far bottom, near bottom).
+  private func stageShapes(_ local: [CGRect], rects: [CGRect], owners: [String]) -> ([CGRect], [[CGPoint]?]) {
+    var out = local, quads = [[CGPoint]?](repeating: nil, count: local.count)
+    guard !Tracker.stageRects.isEmpty else { return (out, quads) }
+    let u = (usable ?? cgFrame).offsetBy(dx: -cgFrame.minX, dy: -cgFrame.minY), vy = u.midY, s: CGFloat = 0.91
+    for i in local.indices where i < rects.count && Tracker.stageRects.contains("\(rects[i])") {
+      let r = local[i]
+      if i < owners.count && owners[i] == "WindowManager" {
+        let side = r.width * 0.5
+        out[i] = CGRect(x: r.midX - side / 2, y: r.minY + r.height * 0.18, width: side, height: side)
+        continue
+      }
+      // the near edge spans whichever of the box's top and bottom it reaches (the far edge, drawn toward vy, the other)
+      let y0 = r.minY < vy ? r.minY : vy + (r.minY - vy) / s, y1 = r.maxY > vy ? r.maxY : vy + (r.maxY - vy) / s
+      let nearLeft = r.midX < u.midX, xn = nearLeft ? r.minX : r.maxX, xf = nearLeft ? r.maxX : r.minX
+      quads[i] = [CGPoint(x: xn, y: y0), CGPoint(x: xf, y: vy + (y0 - vy) * s), CGPoint(x: xf, y: vy + (y1 - vy) * s), CGPoint(x: xn, y: y1)]
+    }
+    return (out, quads)
+  }
+
+  /// The windows' own edges and app names, for themes that draw around the real window (Estate, say). Stage Manager's
+  /// cards are flagged (sm) and, turned as they're drawn, have their corners in q (0 for everything else).
+  private func windowsMessage(_ local: [CGRect], rects: [CGRect], owners: [String], quads: [[CGPoint]?], scale k: CGFloat, live: Bool) -> String? {
     let raw = local.map { boxJSON($0, scale: k) }.joined(separator: ",")
     // Desktop widgets reach the themes under one name, whatever this Mac's language calls Notification Center.
     let named = owners.enumerated().map { i, o in
@@ -255,7 +279,8 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     }
     let names = String(data: try! JSONSerialization.data(withJSONObject: named), encoding: .utf8)!
     let sm = rects.map { Tracker.stageRects.contains("\($0)") ? "1" : "0" }.joined(separator: ",")
-    let wins = "{\"t\":\"windows\",\"live\":\(live),\"r\":[\(raw)],\"n\":\(names),\"sm\":[\(sm)]}"
+    let q = quads.contains { $0 != nil } ? ",\"q\":[" + quads.map { c in c.map { "[" + $0.map { "\(Int($0.x * k)),\(Int($0.y * k))" }.joined(separator: ",") + "]" } ?? "0" }.joined(separator: ",") + "]" : ""
+    let wins = "{\"t\":\"windows\",\"live\":\(live),\"r\":[\(raw)],\"n\":\(names),\"sm\":[\(sm)]\(q)}"
     guard wins != lastSent.windows else { return nil }
     lastSent.windows = wins
     return wins
