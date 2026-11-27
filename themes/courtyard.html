@@ -413,15 +413,9 @@ void main() {
 
 // the shadows: every caster worked out analytically, at a fraction of the screen's resolution
 const NR = 64, NC = 16, NQ = 12;
-const SHADE = prog(`#version 300 es
-precision highp float; out vec4 o;
-uniform vec2 uCss; uniform float uS;
-uniform vec4 uR[${NR}]; uniform vec4 uZ[${NR}]; uniform int uNR;     // rect l,t,r,b | height, grounded (1) or quad (2 + its slot), corner radius, solid (a surface)
+// your windows and Stage Manager's strip, as the shadow pass and the crown both read them
+const PANELS = `uniform vec4 uR[${NR}]; uniform vec4 uZ[${NR}]; uniform int uNR;     // rect l,t,r,b | height, grounded (1) or quad (2 + its slot), corner radius, solid (a surface)
 uniform vec4 uQ[${NQ * 2}];                                              // Stage Manager's cards, turned: four corners each
-uniform vec4 uC[${NC}]; uniform int uNC;                                 // cylinders: x, y, r, h
-uniform vec4 uSun, uMoon; uniform float uSunOn, uMoonOn, uLantOn;     // dx, dy, cot(elevation), sin(elevation)
-uniform vec4 uL[3]; uniform int uNL;                                     // lanterns: x, y, height, power
-uniform vec2 uWall;                                                      // width, height
 float boxSD(vec2 q, vec4 b, float rad) { vec2 c = (b.xy + b.zw) * .5, e = (b.zw - b.xy) * .5 - rad; vec2 d = abs(q - c) - e; return length(max(d, 0.)) + min(max(d.x, d.y), 0.) - rad; }
 // a card turned in perspective: a convex quad (a polygon's signed distance)
 float quadSD(vec2 p, int k) {
@@ -430,7 +424,15 @@ float quadSD(vec2 p, int k) {
   for (int i = 0, j = 3; i < 4; j = i, i++) { vec2 e = v[j] - v[i], w = p - v[i], b = w - e * clamp(dot(w, e) / dot(e, e), 0., 1.);
     d = min(d, dot(b, b)); bvec3 c = bvec3(p.y >= v[i].y, p.y < v[j].y, e.x * w.y > e.y * w.x); if (all(c) || all(not(c))) s = -s; }
   return s * sqrt(d) - 3.; }   // (rounded a little, like the cards)
-float panSD(vec2 q, int i) { vec4 z = uZ[i]; return z.y > 1.5 ? quadSD(q, int(z.y - 1.5)) : boxSD(q, uR[i], z.z); }
+float panSD(vec2 q, int i) { vec4 z = uZ[i]; return z.y > 1.5 ? quadSD(q, int(z.y - 1.5)) : boxSD(q, uR[i], z.z); }`;
+const SHADE = prog(`#version 300 es
+precision highp float; out vec4 o;
+uniform vec2 uCss; uniform float uS;
+${PANELS}
+uniform vec4 uC[${NC}]; uniform int uNC;                                 // cylinders: x, y, r, h
+uniform vec4 uSun, uMoon; uniform float uSunOn, uMoonOn, uLantOn;     // dx, dy, cot(elevation), sin(elevation)
+uniform vec4 uL[3]; uniform int uNL;                                     // lanterns: x, y, height, power
+uniform vec2 uWall;                                                      // width, height
 float cov(float sd, float pen) { return 1. - smoothstep(-pen, pen, sd); }
 float segD(vec2 p, vec2 a, vec2 b, out float u) { vec2 pa = p - a, ba = b - a; u = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-4), 0., 1.); return length(pa - ba * u); }
 // how high the surface at p stands: the floor, or the top of a pot, the well, the planter, the bench. A caster only
@@ -443,7 +445,7 @@ float zAt(vec2 p) { float z = 0.;
 // how much of a directional light (sun or moon) reaches the surface at p (height zr)
 float dirVis(vec2 p, float zr, vec4 Lg, float kA) {
   vec2 d = Lg.xy; float ct = Lg.z, sE = Lg.w, occ = 0.;
-  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 b = uR[i], z = uZ[i]; float top = z.x - zr; if (top <= .5) continue;
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 b = uR[i], z = uZ[i]; float top = z.x - zr; if (z.w < .5) top = max(top, z.x * .3); if (top <= .5) continue;
     if (abs(z.y - 1.) > .5) { vec2 q = p + d * top * ct; occ = max(occ, cov(panSD(q, i), .6 + top / sE * kA)); }
     else for (int k = 1; k <= 3; k++) { float zz = top * float(k) / 3.; vec2 q = p + d * zz * ct; occ = max(occ, cov(boxSD(q, b, z.z), .6 + zz / sE * kA)); } }
   for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u, top = c.w - zr; if (top <= .5) continue;
@@ -462,7 +464,7 @@ void main() {
   float mv = uMoonOn > .5 ? dirVis(p, zr, uMoon, .03) : 1.;
   // the sky's own shade: panels hide a little of the sky from the floor round them; pots and walls darken their feet
   float sky = 1.;
-  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; if (z.x <= zr + .5) continue; float w = abs(z.y - 1.) < .5 ? .5 : .2 * smoothstep(0., 30., z.x - zr);
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; if (z.w > .5 && z.x <= zr + .5) continue; float w = abs(z.y - 1.) < .5 ? .5 : .2 * smoothstep(0., 30., max(z.x - zr, z.x * .3));
     sky *= 1. - w * cov(panSD(p, i), 10. + z.x * 1.4); }
   for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; if (c.w <= zr + .5) continue; float dd = length(p - c.xy); sky *= 1. - .45 * (1. - smoothstep(c.z, c.z + c.w * .9, dd)); }
   float dWall = min(min(p.x, uCss.x - p.x), min(p.y, uCss.y - p.y)) - uWall.x; sky *= 1. - .28 * (1. - smoothstep(0., uWall.y, zr)) * exp(-max(dWall, 0.) / 26.);
@@ -472,7 +474,7 @@ void main() {
     float irr = pow(hL * hL / r2, 1.5) + .008 * exp(-sqrt(r2) / (hL * 3.)); float occ = 0.;
     for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; vec4 b = uR[i];
       int nk = abs(z.y - 1.) < .5 ? 3 : 1;
-      float top = z.x - zr; if (top <= .5) continue;
+      float top = z.x - zr; if (z.w < .5) top = max(top, z.x * .3); if (top <= .5) continue;
       for (int s = 1; s <= 3; s++) { if (s > nk) break; float zz = nk == 3 ? top * float(s) / 3. : top; if (zz >= hL - 1.) continue;
         vec2 q = p + (Lk.xy - p) * (zz / hL); float pen = .8 + 7. * zz / (hL - zz); occ = max(occ, cov(panSD(q, i), pen)); } }
     for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u; if (c.w <= zr + .5) continue;
@@ -496,6 +498,14 @@ uniform vec4 uCanS, uCanM;             // its sun / moon shadow: centre x, y, el
 uniform vec4 uCat0, uCat1, uCat2;      // x, y, heading, curl | walk phase, legs, breath, tail sway | -, -, height, scale
 uniform vec4 uLamp[3]; uniform int uNL;
 uniform vec4 uWell;                    // the well: x, y, the water's radius, how far down it lies
+${PANELS}
+// the crown stands higher in the yard than your windows float, but they're nearer you: their shadows fall on it too,
+// close by (as they do on a pot), so a card's shadow crossing the tree darkens the leaves, not just the floor under them
+float crownVis(vec2 p, vec4 Lg, float kA) {
+  vec2 d = Lg.xy; float ct = Lg.z, sE = Lg.w, occ = 0.;
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; if (z.w > .5 || abs(z.y - 1.) < .5) continue;
+    float top = z.x * .3, pen = 2.5 + top / sE * kA; occ = max(occ, 1. - smoothstep(-pen, pen, panSD(p + d * top * ct, i))); }   // (a ragged edge across the leaves)
+  return 1. - occ; }
 ${NOISE}
 // the surface's height (floor, or a prop where there is one), for normals by central differences
 float hAt(vec2 uv) { float a = texture(uProps, uv).a; return mix(texture(uFloor, uv).a * 8., texture(uPropsH, uv).r * 40., a); }
@@ -715,8 +725,9 @@ void main() {
     if (lf.a > .004) {
       vec3 la = pow(lf.rgb, vec3(2.2)); vec2 rr = crel / uCan.z; float nz = sqrt(max(.1, 1. - dot(rr, rr) * .8));
       vec3 cn = normalize(vec3(rr * .8, nz)); float dens = textureLod(uLeaf, cuv, 4.).a;
-      vec3 cl = uSkyC * (.5 + .5 * nz) * mix(1., .6, dens) + uSunC * max(relief(cn, uSunL), .32) * mix(1., .7, dens) * .95 + uMoonC * max(relief(cn, uMoonL), .32) + uLantC * sh.b * 1.4
-        + uSunC * .12 * (1. - dens);
+      float pS = uSunC.r > .001 ? crownVis(p, uSunG, .022) : 1., pM = uMoonC.b > .0005 ? crownVis(p, uMoonG, .03) : 1.;
+      vec3 cl = uSkyC * (.5 + .5 * nz) * mix(1., .6, dens) + uSunC * pS * max(relief(cn, uSunL), .32) * mix(1., .7, dens) * .95 + uMoonC * pM * max(relief(cn, uMoonL), .32) + uLantC * sh.b * 1.4
+        + uSunC * pS * .12 * (1. - dens);
       col = mix(col, la * cl, lf.a);
     }
   }
@@ -768,6 +779,7 @@ function build() {
 }
 const f32 = (n) => new Float32Array(n * 4);
 const bufR = f32(NR), bufZ = f32(NR), bufC = f32(NC), bufL = f32(3), bufQ = f32(NQ * 2);
+let nPan = 0;   // (how many panels the buffers hold: the crown reads them too)
 function renderShade() {
   const t0 = performance.now();
   let n = 0;
@@ -783,7 +795,7 @@ function renderShade() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, T.shadeF); gl.viewport(0, 0, SW, SHh); gl.disable(gl.SCISSOR_TEST); gl.useProgram(SHADE); gl.bindVertexArray(vao);
   const u = SHADE.u;
   gl.uniform2f(u.uCss, W, H); gl.uniform1f(u.uS, SW / W);
-  gl.uniform4fv(u.uR, bufR); gl.uniform4fv(u.uZ, bufZ); gl.uniform1i(u.uNR, n); gl.uniform4fv(u.uQ, bufQ);
+  gl.uniform4fv(u.uR, bufR); gl.uniform4fv(u.uZ, bufZ); gl.uniform1i(u.uNR, n); gl.uniform4fv(u.uQ, bufQ); nPan = n;
   gl.uniform4fv(u.uC, bufC); gl.uniform1i(u.uNC, c);
   gl.uniform4f(u.uSun, sky.sd[0], sky.sd[1], sky.sCot, sky.sSin); gl.uniform4f(u.uMoon, sky.md[0], sky.md[1], sky.mCot, sky.mSin);
   gl.uniform1f(u.uSunOn, sky.sunOn ? 1 : 0); gl.uniform1f(u.uMoonOn, sky.moonOn ? 1 : 0); gl.uniform1f(u.uLantOn, sky.lant);
@@ -827,6 +839,7 @@ function render(now) {
   gl.uniform4f(u.uCanS, ...cS); gl.uniform4f(u.uCanM, ...cM);
   gl.uniform4f(u.uCat0, cat.x, cat.y, cat.hd, cat.curl); gl.uniform4f(u.uCat1, cat.phase, cat.legs, cat.breath, cat.tail); gl.uniform4f(u.uCat2, 0, 0, 9 * U, L.catS);
   gl.uniform4fv(u.uLamp, bufL); gl.uniform1i(u.uNL, L.lamps.length); gl.uniform4f(u.uWell, L.well.x, L.well.y, L.well.r * .72, 40 * U);
+  gl.uniform4fv(u.uR, bufR); gl.uniform4fv(u.uZ, bufZ); gl.uniform1i(u.uNR, nPan); gl.uniform4fv(u.uQ, bufQ);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.disable(gl.SCISSOR_TEST);
   cat.px = cat.x; cat.py = cat.y; full = false; draws++;
