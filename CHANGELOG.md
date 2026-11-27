@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.2]
+
+### Courtyard
+- At night your pointer is a little light: a warm pool follows it across the yard, and the windows, pots, well and
+  bench throw their shadows away from it. It comes on at dusk with the lanterns; by day it's the arrow's shadow, as
+  before.
+
 ## [1.5.1]
 
 ### The sky over you
