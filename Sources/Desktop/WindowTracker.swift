@@ -1,6 +1,6 @@
 import Cocoa
 
-/// Where every window is, from the window list (which needs no permission): a look 4 times a second while nothing moves,
+/// Where every window is, from the window list (which needs no permission): a look 8 times a second while nothing moves,
 /// at 120 Hz from the moment the mouse moves or an app activates, hides, launches or quits.
 final class Tracker {
   var onUpdate: (_ rects: [CGRect], _ live: Bool) -> Void = { _, _ in }
@@ -18,7 +18,9 @@ final class Tracker {
   static var widgetRects = Set<String>()
   private static var widgetPid: [pid_t: Bool] = [:]
 
-  private static let idleInterval = 0.25
+  /// (8 a second: a window opened or closed from the keyboard, which nothing tells us of, showed on the wall up to a
+  /// quarter second late. A look costs about a millisecond. With windows ignored, 4 is plenty)
+  private static var idleInterval: Double { Cfg.reactWindows ? 0.125 : 0.25 }
 
   private let me = ProcessInfo.processInfo.processIdentifier
   private var timer: Timer?

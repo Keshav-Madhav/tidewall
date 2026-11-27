@@ -146,7 +146,8 @@ function layout() {
 
 /* ======================= your windows (and icons): panels a little above the floor ======================= */
 // Each tracked panel eases to where it is (snaps while you drag it, so its shadow tracks every frame), rises from the
-// floor when it opens (its shadow slides out from under it) and sinks and shrinks to its middle when it closes.
+// floor when it opens (its shadow slides out from under it, in about a tenth of a second) and sinks and shrinks to its
+// middle when it closes (gone in under a tenth: the window itself is already gone by the time we hear of it).
 let panels = [], liveUntil = 0, lastWinChange = 0, lastWinMsg = null, iconRects = [];
 function setPanels(list, live) {
   const used = new Set(), next = [];
@@ -181,7 +182,7 @@ function setPanels(list, live) {
   panels = next; shadeDirty = true; lastWinChange = performance.now();
 }
 function stepPanels(dt) {
-  let moving = false; const k = 1 - Math.exp(-dt * 16), kz = 1 - Math.exp(-dt * 7);
+  let moving = false; const k = 1 - Math.exp(-dt * 16), kz = 1 - Math.exp(-dt * 30), kd = 1 - Math.exp(-dt * 36);
   const now = performance.now(), live = now < liveUntil, LEAD = .032;
   for (const p of panels) {
     if (live && p.mt && (p.vx || p.vy)) {   // in your hand: where it is now, not where it was when last reported
@@ -191,11 +192,11 @@ function stepPanels(dt) {
       const k = fast * (sp > 0 ? now_ / sp : 0), ahead = Math.min(now - p.mt, 60) / 1000 * k + LEAD * k;
       let dx = p.vx * ahead, dy = p.vy * ahead; const d = Math.hypot(dx, dy); if (d > 40) { dx *= 40 / d; dy *= 40 / d; }
       p.x = p.mx + dx; p.y = p.my + dy; moving = true; continue; }
-    if (p.dying) { const cx = p.x + p.w / 2, cy = p.y + p.h / 2; p.w *= 1 - kz; p.h *= 1 - kz; p.x = cx - p.w / 2; p.y = cy - p.h / 2; p.z += (0 - p.z) * kz; moving = true; continue; }
+    if (p.dying) { const cx = p.x + p.w / 2, cy = p.y + p.h / 2; p.w *= 1 - kd * .6; p.h *= 1 - kd * .6; p.x = cx - p.w / 2; p.y = cy - p.h / 2; p.z += (0 - p.z) * kd; moving = true; continue; }
     for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = p[b] - p[a]; if (Math.abs(d) > .05) { p[a] += d * k; moving = true; } else p[a] = p[b]; }
     const dz = p.zt - p.z; if (Math.abs(dz) > .05) { p.z += dz * kz; moving = true; } else p.z = p.zt;
   }
-  const n = panels.length; panels = panels.filter(p => !(p.dying && (p.w < 1.5 || p.h < 1.5 || p.z < .3)));
+  const n = panels.length; panels = panels.filter(p => !(p.dying && (p.w < 1.5 || p.h < 1.5 || p.z < 2.5)));
   return moving || panels.length !== n;
 }
 
@@ -939,7 +940,7 @@ const handle = m => {
     return; }
   if (m.t === 'cursor' || m.t === 'cursorOff') return;
   if (m.t === 'dicons') { iconRects = (m.a || m.i || []).map(([l, t, r, b]) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K })); sendPanels(false); wake(); scheduleCatCheck(2500); return; }
-  if (m.t === 'windows') { lastWinMsg = m; if (m.live) liveUntil = performance.now() + 250; sendPanels(!!m.live); wake(); scheduleCatCheck(m.live ? 3000 : 2000); }
+  if (m.t === 'windows') { lastWinMsg = m; if (m.live) liveUntil = performance.now() + 250; sendPanels(!!m.live); window.__twSettle && window.__twSettle(300); wake(); scheduleCatCheck(m.live ? 3000 : 2000); }
 };
 try { retime(clockNow(), 0); build(); } catch (e) { post('JSERR boot ' + e.message + ' ' + (e.stack || '').split('\n')[0]); }
 wake(); scheduleCatCheck(3000);

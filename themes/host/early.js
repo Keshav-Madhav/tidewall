@@ -160,8 +160,8 @@
   const sleeping = new Map();
   const sleep = (tick, wait) => { const id = setTimeout(() => { sleeping.delete(id); raf(tick); }, wait); sleeping.set(id, tick); };
   function hurry() {
+    due = Math.min(due, performance.now());   // (a loop not running yet must not wait out the calm step either)
     if (!sleeping.size) return;
-    due = Math.min(due, performance.now());
     for (const [id, tick] of sleeping) { clearTimeout(id); raf(tick); }
     sleeping.clear();
   }
