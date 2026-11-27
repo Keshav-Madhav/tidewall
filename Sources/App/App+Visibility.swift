@@ -30,6 +30,8 @@ extension App {
       let shown = lastRects.indices.filter { i in world.contains { lastRects[i].intersects($0) } && reacts(i) && !isFullScreenApp(lastRects[i]) }
       w.realRects = lastRects.filter { $0.intersects(w.cgFrame) }
       w.usable = benchMode ? nil : usableFrame(w)
+      let here = lastRects.indices.filter { lastRects[$0].intersects(w.cgFrame) }
+      w.setPointerShapes(here.map { lastRects[$0] }, owners: here.map(owner))
       // never pause while windows move: a sliver of the scene may still show and must keep up
       let onlyBehindBars = !live && isCovered(benchMode ? w.cgFrame : usableFrame(w), w.realRects)
       let pause = resting || power.paused || onlyBehindBars

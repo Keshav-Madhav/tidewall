@@ -19,6 +19,22 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   /// What the page was opened with (Wind Tunnel's automatic choice can change under it).
   private(set) var loadedVariant: String?
   var realRects: [CGRect] = []
+  /// What the pointer can be over: windows' boxes, but Stage Manager's badges and cards as they're drawn (an icon, a
+  /// turned card), so the empty corners of their windows still count as the wallpaper.
+  private var pointerShapes: [(CGRect, [CGPoint]?)] = []
+  func setPointerShapes(_ rects: [CGRect], owners: [String]) {
+    let o = cgFrame.origin
+    let (local, quads) = stageShapes(rects.map { $0.offsetBy(dx: -o.x, dy: -o.y) }, rects: rects, owners: owners)
+    pointerShapes = local.indices.map { i in (local[i].offsetBy(dx: o.x, dy: o.y), quads[i]?.map { CGPoint(x: $0.x + o.x, y: $0.y + o.y) }) }
+  }
+  private func overShape(_ p: CGPoint) -> Bool {
+    pointerShapes.contains { r, q in
+      guard let q else { return r.contains(p) }
+      // inside a convex quad: on the same side of all four edges
+      let s = (0..<4).map { i -> CGFloat in let a = q[i], b = q[(i + 1) % 4]; return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) }
+      return s.allSatisfy { $0 >= 0 } || s.allSatisfy { $0 <= 0 }
+    }
+  }
   /// When it first ran on show: a picture of it a few seconds on shows the scene.
   var seenSince: Double?
   /// Its display below the menu bar and beside the Dock (nil: all of it).
@@ -250,7 +266,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   /// twice its size, and a card is drawn turned in perspective, the edge by the screen's side at full height and the far
   /// edge at 0.91 of it, drawn toward the middle of the screen (measured off the real strip: every card's box matches).
   /// Badges become their icon's box; cards also get their four corners (near top, far top, far bottom, near bottom).
-  private func stageShapes(_ local: [CGRect], rects: [CGRect], owners: [String]) -> ([CGRect], [[CGPoint]?]) {
+  func stageShapes(_ local: [CGRect], rects: [CGRect], owners: [String]) -> ([CGRect], [[CGPoint]?]) {
     var out = local, quads = [[CGPoint]?](repeating: nil, count: local.count)
     guard !Tracker.stageRects.isEmpty else { return (out, quads) }
     let u = (usable ?? cgFrame).offsetBy(dx: -cgFrame.minX, dy: -cgFrame.minY), vy = u.midY, s: CGFloat = 0.91
@@ -302,7 +318,7 @@ final class Wallpaper: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     guard wantsCursor, Cfg.reactCursor else { return }
     let k = scale
     // over a window, the menu bar or the Dock you're working, not watching: 10 messages a second, not 60, and no speed-up
-    let over = realRects.contains { $0.contains(p) } || (usable.map { !$0.contains(p) } ?? false)
+    let over = overShape(p) || (usable.map { !$0.contains(p) } ?? false)
     let now = ProcessInfo.processInfo.systemUptime
     if over && wasOverWindow && now - lastOverSend < 0.1 { return }
     wasOverWindow = over
