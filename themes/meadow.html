@@ -303,6 +303,22 @@ function buildNoise() {
   }
 }
 let fieldMs = 0;
+// Stage Manager's cards are drawn turned in perspective, so a card's top and bottom edges slope: its bank follows them,
+// not its box (whose corners stood out past those slopes). A card: its x range and its two edges as lines, from the
+// corners the windows message gives (near top, far top, far bottom, near bottom), and the margin its box was grown by.
+function cardOf(q, m) {
+  const [xn, ytn, xf, ytf, , ybf, , ybn] = q, x0 = Math.min(xn, xf), x1 = Math.max(xn, xf), w = Math.max(x1 - x0, 1), L = xn <= xf;
+  const t = L ? ytn : ytf, b = L ? ybn : ybf;
+  return { x0, x1, m, t, ts: ((L ? ytf : ytn) - t) / w, b, bs: ((L ? ybf : ybn) - b) / w };
+}
+// its top and bottom at x, grown by the margin as its box was (the card swept by a square that size: level for a margin
+// past its taller end, then the slope) and trimmed as iconRects trims a box
+const CS = [0, 0];
+function cardSpan(c, x) {
+  const a = Math.min(Math.max(x - c.m, c.x0), c.x1) - c.x0, b = Math.min(Math.max(x + c.m, c.x0), c.x1) - c.x0;
+  CS[0] = c.t + Math.min(c.ts * a, c.ts * b) - c.m + 2; CS[1] = c.b + Math.max(c.bs * a, c.bs * b) + c.m - 2;
+  return CS;
+}
 const coreDepth = () => P.sigma * Math.sqrt(-Math.log(0.35));   // the field at a window's core, before the slope below
 function computeField(rects) {
   const t0 = performance.now();
@@ -315,11 +331,13 @@ function computeField(rects) {
     const gy0 = Math.max(0, Math.floor((r.cy + MG - R) / STEP)), gy1 = Math.min(Gh - 1, Math.ceil((r.cy + MG + R) / STEP));
     // Tidewall: windows are big — put the cloud / sand edge just *outside* the window (+ margin), not inside it.
     // The edge (f = 0.35) sits σ·1.025 beyond the core, so a core of (half-size − 0.8σ) lands it a little past the rect.
-    const chw = Math.max(r.hw - 0.8 * sig, r.hw * 0.25), chh = Math.max(r.hh - 0.8 * sig, r.hh * 0.25);
+    const chw = Math.max(r.hw - 0.8 * sig, r.hw * 0.25), chh = Math.max(r.hh - 0.8 * sig, r.hh * 0.25), c = r.sh;
     for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
       const i = gy * Gw + gx;
       const qx = gx * STEP - MG + NZ.wx[i] * wa, qy = gy * STEP - MG + NZ.wy[i] * wa;
-      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      let dx = Math.abs(qx - r.cx) - chw, dy;
+      if (c) { const s = cardSpan(c, qx), hh = (s[1] - s[0]) / 2; dy = Math.abs(qy - (s[0] + s[1]) / 2) - Math.max(hh - 0.8 * sig, hh * 0.25); }   // a turned card: its height where this point is
+      else dy = Math.abs(qy - r.cy) - chh;
       if (dx < 0 && dy < 0) { const dd = Math.min(-dx, -dy); if (dd > dep[i]) dep[i] = dd; }   // how deep inside the core
       if (dx < 0) dx = 0; if (dy < 0) dy = 0;
       f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
@@ -353,7 +371,7 @@ function ringPuffs(rects) {
     const y0 = Math.floor((r.cy - r.hh - 40 + OY) / RING_G), y1 = Math.floor((r.cy + r.hh + 40 + OY) / RING_G);
     for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) {
       const x = (cx + 0.1 + 0.8 * rnd1(cx, cy, 31)) * RING_G - OX, y = (cy + 0.1 + 0.8 * rnd1(cx, cy, 32)) * RING_G - OY;
-      const dx = Math.abs(x - r.cx) - r.hw, dy = Math.abs(y - r.cy) - r.hh;
+      const s = r.sh && cardSpan(r.sh, x), dx = Math.abs(x - r.cx) - r.hw, dy = s ? Math.abs(y - (s[0] + s[1]) / 2) - (s[1] - s[0]) / 2 : Math.abs(y - r.cy) - r.hh;
       const sd = Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0);   // to the window's edge (<0 inside)
       const w = sstep(-34, -8, sd) * (1 - sstep(16, 34, sd));
       if (w <= 0) continue;
@@ -635,7 +653,7 @@ function uploadField(i, Fd) {
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Gw, Gh, gl.RED, gl.HALF_FLOAT, d);
 }
 
-const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2 }));
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2, sh: ic.card || null }));
 // Tidewall: window updates are laid once a frame (the host's drag shortcut used to snap the field on each one, and the
 // cloud puffs, rebuilt only every half second when nothing morphs, then jumped to catch up); a new shape mid-morph
 // carries on from where the clouds are, at speed, so the bank follows a dragged window
@@ -643,7 +661,7 @@ let liveDrag = false;                              // a window under your hand: 
 let chase = false, pendingCommit = false, fieldV = 0, growing = false, laidKey = '';
 function mixAt(t) { const e = Math.min(Math.max((t - morphT0) / morphDur, 0), 1); return chase ? 1 - (1 - e) * (1 - e) : e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2; }
 function commit(fromEmpty = false) {
-  const rs = P.adaptive ? iconRects() : [], key = rs.map(r => [r.cx, r.cy, r.hw, r.hh].map(Math.round).join()).join('|');
+  const rs = P.adaptive ? iconRects() : [], key = rs.map(r => [r.cx, r.cy, r.hw, r.hh].concat(r.sh ? [r.sh.t, r.sh.ts * 100, r.sh.b, r.sh.bs * 100] : []).map(Math.round).join()).join('|');
   if (!fromEmpty && FB && key === laidKey) return;                      // nothing moved
   laidKey = key;
   const nf = computeField(rs);
@@ -1241,9 +1259,21 @@ function startHostedMode() {
   }
   icons = [];
   commit(true);                                   // 先是一片草地（还不知道图标在哪）
-  let first = true, deskKey = '', lastIconsMsg = null;
+  let first = true, deskKey = '', lastIconsMsg = null, stage = null, stageKey = '';
+  // the icons message has only boxes; the windows message, sent just before it with the same windows in the same order,
+  // has Stage Manager's cards' corners. A box is a card's when it's that card's box grown evenly (by the margin).
+  const cardFor = (i, l, t, r, b, k) => {
+    const s = stage && stage[i]; if (!s) return null;
+    const [[L, T, R, B], q] = s, g = L - l;
+    if (g < 0 || Math.abs(T - t - g) > 2 || Math.abs(r - R - g) > 2 || Math.abs(b - B - g) > 2) return null;
+    return cardOf(q.map(v => v / k), g / k);
+  };
   const handle = m => {
     if (m.t === 'pause') { paused = PREVIEW ? false : m.v; Span.paused(!!paused); if (!paused && !looping) { looping = true; requestAnimationFrame(frame); } return; }
+    if (m.t === 'windows') { const key = m.q ? JSON.stringify(m.q) : '';
+      stage = m.q ? (m.r || []).map((r, i) => m.q[i] ? [r, m.q[i]] : null) : null;
+      if (key !== stageKey) { stageKey = key; if (lastIconsMsg) handle(lastIconsMsg); }   // (a card can turn with its box unchanged: then no icons message follows)
+      return; }
     if (m.t === 'settings') { applySettings(m.v || {}); return; }
     if (m.t === 'dicons') { const k = window.devicePixelRatio || 1, P = 22;   // your desktop icons: a small cloud under each cluster
       deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k - P, y: t / k - P, w: (r - l) / k + 2 * P, h: (b - t) / k + 2 * P }));
@@ -1254,7 +1284,7 @@ function startHostedMode() {
     if (m.t !== 'icons') return;
     lastIconsMsg = m; liveDrag = !!m.live;
     const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
-    icons = (m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k })) : []).concat(deskIc);   // (your desktop icons: a small cloud each)
+    icons = (m.vis ? m.r.map(([l, t, r, b], i) => ({ x: l / k, y: t / k, w: (r - l) / k, h: (b - t) / k, card: cardFor(i, l, t, r, b, k) })) : []).concat(deskIc);   // (your desktop icons: a small cloud each)
     if (PREVIEW) drawGhosts();
     iconsSeen = true;
     if (!first) { pendingCommit = true; return; }                     // laid at the next frame

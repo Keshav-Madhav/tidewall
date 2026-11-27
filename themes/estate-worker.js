@@ -321,6 +321,24 @@ function sampleBase(x, y, t) {
   const a = (A[i] * (1 - tx) + A[i + 1] * tx) * (1 - ty) + (A[i + gw] * (1 - tx) + A[i + gw + 1] * tx) * ty;
   return a + (b - a) * t;
 }
+// a convex four-sided shape's edges: start, direction, 1/length², outward normal (7 numbers each), for sdQuad
+function quadEdges(q) {
+  const E = new Float64Array(28), mx = (q[0] + q[2] + q[4] + q[6]) / 4, my = (q[1] + q[3] + q[5] + q[7]) / 4;
+  for (let k = 0; k < 4; k++) { const ax = q[2 * k], ay = q[2 * k + 1], ex = q[(2 * k + 2) % 8] - ax, ey = q[(2 * k + 3) % 8] - ay, l2 = ex * ex + ey * ey || 1e-6, l = Math.sqrt(l2);
+    let nx = ey / l, ny = -ex / l; if (nx * (mx - ax) + ny * (my - ay) > 0) { nx = -nx; ny = -ny; }
+    E.set([ax, ay, ex, ey, 1 / l2, nx, ny], k * 7); }
+  return E;
+}
+// signed distance from (px, py) to that shape (negative inside), as the box cut's is
+function sdQuad(E, px, py) {
+  let dIn = -1e9;
+  for (let o = 0; o < 28; o += 7) { const dl = (px - E[o]) * E[o + 5] + (py - E[o + 1]) * E[o + 6]; if (dl > dIn) dIn = dl; }
+  if (dIn <= 0) return dIn;
+  let d2 = 1e18;
+  for (let o = 0; o < 28; o += 7) { const wx = px - E[o], wy = py - E[o + 1]; let t = (wx * E[o + 2] + wy * E[o + 3]) * E[o + 4]; t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const qx = wx - E[o + 2] * t, qy = wy - E[o + 3] * t, dd = qx * qx + qy * qy; if (dd < d2) d2 = dd; }
+  return Math.sqrt(d2);
+}
 let e_sent = 0;
 function frame({ wins, t, sent, gen, keep = [] }) {
   e_sent = sent; KEEP = keep;
@@ -332,7 +350,7 @@ function frame({ wins, t, sent, gen, keep = [] }) {
   if (t >= 1) F.set(B); else for (let i = 0; i < N; i++) F[i] = A[i] + (B[i] - A[i]) * t;
   // windows: a wavy court cut around each. The cut-out field is cached and rebuilt only when a window
   // actually moved or faded; each window touches only its own neighbourhood (not the union of all).
-  const key = wins.map(w => `${w.x.toFixed(1)},${w.y.toFixed(1)},${w.w.toFixed(1)},${w.h.toFixed(1)},${w.life.toFixed(3)}`).join(';');
+  const key = wins.map(w => `${w.x.toFixed(1)},${w.y.toFixed(1)},${w.w.toFixed(1)},${w.h.toFixed(1)},${w.life.toFixed(3)}${w.q ? ':' + w.q.map(v => v.toFixed(1)) : ''}`).join(';');
   if (key !== G.cutKey || !G.CUT || G.CUT.length !== N) {
     if (!G.CUT || G.CUT.length !== N) { G.CUT = new Float32Array(N).fill(1e9); G.cutBox = null; }
     const CUT = G.CUT;
@@ -342,10 +360,17 @@ function frame({ wins, t, sent, gen, keep = [] }) {
       if (w.life <= .002) continue;
       const hw = w.w / 2, hh = w.h / 2, L = w.life, m = (w.w * w.h < 60000 ? 8 : 18), cx = w.x + hw, cy = w.y + hh;
       const reach = Math.max(hw, hh) + m + 30, shrink = (1 - L) * Math.min(hw, hh) * 1.3 - m * L;
-      const x0 = Math.max(0, Math.floor((cx - hw - m - 30 - X0) / C)), x1 = Math.min(gw - 1, Math.ceil((cx + hw + m + 30 - X0) / C));
-      const y0 = Math.max(0, Math.floor((cy - hh - m - 30 - Y0) / C)), y1 = Math.min(gh - 1, Math.ceil((cy + hh + m + 30 - Y0) / C));
+      // a Stage Manager card is cut round its turned shape (four corners); everything else round its box
+      const Q = w.q ? quadEdges(w.q) : null;
+      let l = cx - hw, r = cx + hw, tp = cy - hh, bt = cy + hh;
+      if (Q) for (let k = 0; k < 8; k += 2) { l = Math.min(l, w.q[k]); r = Math.max(r, w.q[k]); tp = Math.min(tp, w.q[k + 1]); bt = Math.max(bt, w.q[k + 1]); }
+      const x0 = Math.max(0, Math.floor((l - m - 30 - X0) / C)), x1 = Math.min(gw - 1, Math.ceil((r + m + 30 - X0) / C));
+      const y0 = Math.max(0, Math.floor((tp - m - 30 - Y0) / C)), y1 = Math.min(gh - 1, Math.ceil((bt + m + 30 - Y0) / C));
       if (x0 > x1 || y0 > y1) continue;
       bx0 = Math.min(bx0, x0); bx1 = Math.max(bx1, x1); by0 = Math.min(by0, y0); by1 = Math.max(by1, y1);
+      if (Q) { for (let gy = y0; gy <= y1; gy++) { const py = Y0 + gy * C, row = gy * gw;
+        for (let gx = x0; gx <= x1; gx++) { const v = sdQuad(Q, X0 + gx * C, py) + G.WOB[row + gx] * L + shrink, i = row + gx; if (v < CUT[i]) CUT[i] = v; } }
+        continue; }
       for (let gy = y0; gy <= y1; gy++) { const ay = Math.abs(Y0 + gy * C - cy) - hh, row = gy * gw;
         for (let gx = x0; gx <= x1; gx++) {
           const ax = Math.abs(X0 + gx * C - cx) - hw, ox = ax > 0 ? ax : 0, oy = ay > 0 ? ay : 0;

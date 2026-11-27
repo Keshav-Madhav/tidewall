@@ -45,6 +45,18 @@ function vnoise(x, y) { const ix = Math.floor(x), iy = Math.floor(y), fx = x - i
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 function sdBox(px, py, x0, y0, x1, y1) { const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, dx = Math.abs(px - cx) - (x1 - x0) / 2, dy = Math.abs(py - cy) - (y1 - y0) / 2;
   return Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0); }
+// a convex quad's signed distance (v: its four corners, x y …): a Stage Manager card, drawn turned in perspective
+function sdQuad(px, py, v) {
+  let d = 1e18, s = 1;
+  for (let i = 0, j = 3; i < 4; j = i, i++) { const xi = v[i * 2], yi = v[i * 2 + 1], ex = v[j * 2] - xi, ey = v[j * 2 + 1] - yi, wx = px - xi, wy = py - yi;
+    const t = clamp((wx * ex + wy * ey) / (ex * ex + ey * ey || 1), 0, 1), bx = wx - ex * t, by = wy - ey * t; d = Math.min(d, bx * bx + by * by);
+    const a = py >= yi, b = py < v[j * 2 + 1], c = ex * wy > ey * wx; if ((a && b && c) || (!a && !b && !c)) s = -s; }
+  return s * Math.sqrt(d); }
+// how far a point is outside what you see of a window (pad: grown by that much): its box, a badge's rounded square, a
+// Stage Manager card's turned quad
+function shapeSD(px, py, c, pad = 0) {
+  if (c.qa) return sdQuad(px, py, c.qa) - pad;
+  const r = c.rad || 0; return sdBox(px, py, c.x - pad + r, c.y - pad + r, c.x + c.w + pad - r, c.y + c.h + pad - r) - r; }
 
 /* ======================= GL plumbing ======================= */
 const gl = cv.getContext('webgl2', { antialias: false, premultipliedAlpha: true, alpha: false });
@@ -566,20 +578,39 @@ vec3 rock(vec2 l, float s) {
 }
 void main() { vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO; o = vec4(rock(p, 3.7), fbm3(p * .034 + 9.)); }`, 'rock');
 // where reef grows: R = the reef itself, G = the shallows around it. Each eases towards where the windows are now,
-// so a moved window's reef spreads in around it and dies back where it was
+// so a moved window's reef spreads in around it and dies back where it was. Stage Manager's cards grow theirs round
+// the card as it's drawn, turned (uQ: up to NQ of them, four corners each), its badges round their rounded icon
+const NQ = 12, SPUR_SM = .35, SM_GAP = 13;
 const GROW = prog(VS_FULL, `#version 300 es
 precision highp float; uniform vec2 uWO, uWS; in vec2 vUV; out vec4 o;
+#define SPUR_SM ${SPUR_SM.toFixed(3)}
+#define SM_GAP ${SM_GAP.toFixed(1)}
 uniform sampler2D uPrev; uniform vec4 uR[32]; uniform vec4 uB[32]; uniform int uN; uniform vec4 uBm[16]; uniform int uNB; uniform vec2 uRes; uniform float uDt;
+uniform vec4 uQ[${NQ * 2}];
 ${NOISE}${SPUR_GLSL}
 float sdBox(vec2 p, vec2 c, vec2 hs) { vec2 d = abs(p - c) - hs; return length(max(d, 0.)) + min(max(d.x, d.y), 0.); }
+float sdQuad(vec2 p, int k) {
+  vec2 v[4]; v[0] = uQ[2 * k].xy; v[1] = uQ[2 * k].zw; v[2] = uQ[2 * k + 1].xy; v[3] = uQ[2 * k + 1].zw;
+  float d = dot(p - v[0], p - v[0]), s = 1.;
+  for (int i = 0, j = 3; i < 4; j = i, i++) { vec2 e = v[j] - v[i], w = p - v[i], b = w - e * clamp(dot(w, e) / dot(e, e), 0., 1.);
+    d = min(d, dot(b, b)); bvec3 c = bvec3(p.y >= v[i].y, p.y < v[j].y, e.x * w.y > e.y * w.x); if (all(c) || all(not(c))) s = -s; }
+  return s * sqrt(d); }
 float smin(float a, float b, float k) { float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
 void main() {
   vec2 p = vec2(vUV.x, 1. - vUV.y) * uRes + uWO;
   float bw = (.35 + .9 * clamp(.5 + .3 * sin(p.x * .0123 + 1.7) * cos(p.y * .0101 + .4) + .2 * sin((p.x + p.y) * .0071 + 2.9), 0., 1.));          // wide in places, a thin rim in others
-  float sd = 1e5, inner = 1e5;
-  for (int i = 0; i < 32; i++) { if (i >= uN) break; vec4 r = uR[i]; float b = sdBox(p, (r.xy + r.zw) * .5, (r.zw - r.xy) * .5); inner = min(inner, b); sd = smin(sd, b - uB[i].x * bw, 40.); }
+  float sd = 1e5, sdS = 1e5, c1 = 1e5, c2 = 1e5, inner = 1e5;      // (c1, c2: the strip's nearest card and the next)
+  for (int i = 0; i < 32; i++) { if (i >= uN) break; vec4 r = uR[i]; float f = uB[i].w, rr = min(f, 0.);
+    float b = f > .5 ? sdQuad(p, int(f + .5) - 1) : sdBox(p, (r.xy + r.zw) * .5, (r.zw - r.xy) * .5 + rr) + rr;   // (rr: minus a badge's corner radius)
+    inner = min(inner, b); float v = b - uB[i].x * bw;
+    if (uB[i].y < .5) sd = smin(sd, v, 40.);
+    else { sdS = min(sdS, v); if (f > -.5) { if (v < c1) { c2 = c1; c1 = v; } else c2 = min(c2, v); } } }
   for (int i = 0; i < 16; i++) { if (i >= uNB) break; vec4 bm = uBm[i]; sd = smin(sd, length(p - bm.xy) - bm.z, 40.); }
-  sd += (fbm3(p * .018) - .5) * 44. - spur(p);       // spurs and grooves: no straight run of reef along a window's edge
+  float nz = fbm3(p * .018) - .5, sp = spur(p);
+  sd += nz * 44. - sp;                                // spurs and grooves: no straight run of reef along a window's edge
+  // Stage Manager's cards are small and close together: each keeps its own little reef, true to its turned shape,
+  // with sand between them (the full spurs and smoothing ran the whole strip into one slab of rock)
+  sd = smin(sd, max(sdS + nz * 16. - sp * SPUR_SM, (SM_GAP + nz * 12. - (c2 - c1)) * .9), 16.);   // (a channel where two cards' reefs meet)
   vec2 tgt = vec2(1. - smoothstep(-6., 6., sd), 1. - smoothstep(-30., 260., sd));
   // the reef is a fringe round the window, not a slab under it: deep inside the window there's sand (a window that
   // closes, or lets go of the whole screen, uncovers its own seabed, not a screenful of dying rock)
@@ -795,6 +826,8 @@ function buildTargets() {
 
 /* ======================= the reefs ======================= */
 const BAND = 62, SP = 24;
+// how wide a window's reef is: Stage Manager's little cards get a narrower one, an app's badge narrower still
+const bandOf = w => BAND * (w.sm ? w.rad ? .18 : .38 : 1);
 const SIZE = [[40, 76], [58, 100], [32, 58], [46, 80], [34, 52], [20, 30], [15, 26], [18, 28], [28, 46], [34, 60], [24, 42], [40, 66], [16, 34], [26, 40], [12, 18]];
 const LAYER = [2, 7, 4, 5, 6, 8, 10, 9, 3, 1, 0, -1, 0, 9, 9];          // draw order by type: low first
 const cellsOf = t => CELLS.map((c, i) => c[0] === t ? i : -1).filter(i => i >= 0);
@@ -871,26 +904,28 @@ function stepSites(dt) {
   // lagoon as it was instead of a screen of rock dying back)
   reefWins = wins.filter(w => w.alive && w.w * w.h < .9 * SW * SH); if (reefWins.length > 32) reefWins = reefWins.sort((a, b) => b.w * b.h - a.w * a.h).slice(0, 32);
   // re-target only when a window has actually moved
-  let key = ''; for (const w of reefWins) key += (w.x | 0) + ',' + (w.y | 0) + ',' + (w.w | 0) + ',' + (w.h | 0) + (w.sm ? 's;' : ';');
+  let key = ''; for (const w of reefWins) key += (w.x | 0) + ',' + (w.y | 0) + ',' + (w.w | 0) + ',' + (w.h | 0) + (w.sm ? 's' : '') + (w.qa ? (w.qa[1] | 0) + ',' + (w.qa[3] | 0) + ',' + (w.qa[5] | 0) + ',' + (w.qa[7] | 0) : '') + ';';   // (a card's corners: its turn)
   if (key !== siteKey) {
     siteKey = key; for (const c of touched) c.tgt = 0; touched = [];
+    const cards = reefWins.filter(w => w.sm && !w.rad);                // Stage Manager's cards (not badges): sand between them
     for (const w of reefWins) {
-      const B = BAND * (w.sm ? .55 : 1), pad = B * 1.3 + 40, sc = (w.sm ? .6 : 1) * clamp(Math.min(w.w, w.h) / 120, .5, 1);   // (a tiny window gets small coral: a table coral twice its size dwarfed it)
+      const B = bandOf(w), pad = B * 1.3 + 40, sc = (w.sm ? .6 : 1) * clamp(Math.min(w.w, w.h) / 120, .5, 1);   // (a tiny window gets small coral: a table coral twice its size dwarfed it)
       const gx0 = Math.max(0, Math.floor((w.x - pad) / SITE)), gx1 = Math.min(gcols - 1, Math.floor((w.x + w.w + pad) / SITE));
       const gy0 = Math.max(0, Math.floor((w.y - pad) / SITE)), gy1 = Math.min(grows - 1, Math.floor((w.y + w.h + pad) / SITE));
       const ix0 = Math.floor((w.x + 16) / SITE) + 1, ix1 = Math.floor((w.x + w.w - 16) / SITE) - 1, iy0 = Math.floor((w.y + 16) / SITE) + 1, iy1 = Math.floor((w.y + w.h - 16) / SITE) - 1;
       for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
-        if (gy >= iy0 && gy <= iy1 && gx === ix0 && ix1 > ix0) gx = Math.min(ix1, gx1);   // deep inside the window: nothing can grow there
+        if (gy >= iy0 && gy <= iy1 && gx === ix0 && ix1 > ix0 && !w.qa) gx = Math.min(ix1, gx1);   // deep inside the window: nothing can grow there (a turned card's box isn't all card)
         const cell = siteGrid[gy * gcols + gx]; if (!cell) continue;      // (a window past the world's edge while the displays change)
         for (const c of cell) {
         if (!c.ok || c.tgt) continue;
-        const o0 = sdBox(c.x, c.y, w.x, w.y, w.x + w.w, w.y + w.h), o = o0 - spur(c.x, c.y), Z = ZONES[c.z], bb = B * c.bw;   // (measured to the rock's spurred edge)
+        const o0 = shapeSD(c.x, c.y, w), o = o0 - spur(c.x, c.y) * (w.sm ? SPUR_SM : 1), Z = ZONES[c.z], bb = B * c.bw;   // (measured to the rock's spurred edge)
         if (o0 < -14 || o < Z.lo * bb || o > Z.hi * bb) continue;
+        if (cards.length > 1 && cards.includes(w) && cards.some(v => v !== w && shapeSD(c.x, c.y, v) < o0 + SM_GAP)) continue;   // (in the sand between two cards)
         c.tgt = 1; c.sc = sc; touched.push(c);
       } }
     }
     // the swaying seagrass round the meadows gives way where a reef has grown over it, and comes back when it goes
-    for (const c of tufts) { let near = false; for (const w of reefWins) if (sdBox(c.x, c.y, w.x, w.y, w.x + w.w, w.y + w.h) - spur(c.x, c.y) < BAND * (w.sm ? .55 : 1) * bandW(c.x, c.y) + 30) { near = true; break; } c.tgt = near ? 0 : 1; }
+    for (const c of tufts) { let near = false; for (const w of reefWins) if (shapeSD(c.x, c.y, w) - spur(c.x, c.y) * (w.sm ? SPUR_SM : 1) < bandOf(w) * bandW(c.x, c.y) + 30) { near = true; break; } c.tgt = near ? 0 : 1; }
   }
   for (const c of tufts) if (c.vis !== c.tgt) { if (instant) c.vis = c.tgt; else { c.vis += (c.tgt - c.vis) * Math.min(1, dt * (c.tgt ? 1.2 : 1.6)); if (Math.abs(c.tgt - c.vis) < .003) c.vis = c.tgt; } }
   const regrow = performance.now() < regrowUntil ? 2.5 : 1;
@@ -917,19 +952,25 @@ function setTargets(list) {
   for (const t of list) {
     let best = null, bd = 1e9;
     for (const c of wins) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
-    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, sm: t.sm }); }
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, sm: t.sm, rad: t.rad, tqn: t.qn }); }
     else {
       const n = wins.filter(c => c.owner === t.owner).length;
       const gi = gone.findIndex(g => g.owner === t.owner && Math.abs(g.x - t.x) < 6 && Math.abs(g.y - t.y) < 6 && Math.abs(g.w - t.w) < 6 && Math.abs(g.h - t.h) < 6);
       if (gi >= 0) { gone.splice(gi, 1); regrowUntil = now + 3000; }
-      const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, sm: t.sm, alive: true, life: settled && gi < 0 ? 0 : 1,
+      const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, sm: t.sm, rad: t.rad, tqn: t.qn, qn: t.qn && t.qn.slice(), alive: true, life: settled && gi < 0 ? 0 : 1,
         vx: 0, vy: 0, sh: hashStr(t.owner + n) % 997 / 37 };
-      wins.push(c); used.add(c);
+      wins.push(c); used.add(c); quadOf(c);
     }
   }
   if (!settled) { instant = true; growReset = true; }
   settled = true;
   for (const c of wins) if (!used.has(c) && c.alive) { c.alive = false; gone.push({ x: c.tx, y: c.ty, w: c.tw, h: c.th, owner: c.owner, t: now }); }   // closed: its reef recedes, then it is dropped
+}
+// a card's corners (fractions of its box: left top, right top, right bottom, left bottom) placed on its box now
+const SQUARE = [0, 0, 1, 0, 1, 1, 0, 1];
+function quadOf(c) {
+  if (!c.qn) { c.qa = null; return; }
+  const q = c.qa || (c.qa = new Float32Array(8)); for (let i = 0; i < 8; i += 2) { q[i] = c.x + c.qn[i] * c.w; q[i + 1] = c.y + c.qn[i + 1] * c.h; }
 }
 function stepWins(dt) {
   const live = performance.now() < liveUntil, k = live ? 1 : 1 - Math.exp(-dt * 8);   // a window in your hand: exactly where it is
@@ -937,9 +978,15 @@ function stepWins(dt) {
     const ox = c.x, oy = c.y;
     const ease = (v, t) => Math.abs(t - v) > .1 ? v + (t - v) * k : t;
     c.x = ease(c.x, c.tx); c.y = ease(c.y, c.ty); c.w = ease(c.w, c.tw); c.h = ease(c.h, c.th);
+    // a card's turn eases too (one sliding past the screen's middle turns the other way; a window taken into the strip
+    // turns as it goes), its corners kept as fractions of its box so the shape rides the box's glide
+    if (c.tqn || c.qn) { const to = c.tqn || SQUARE; if (!c.qn) c.qn = SQUARE.slice(); let off = 0;
+      for (let i = 0; i < 8; i++) { const d = to[i] - c.qn[i]; c.qn[i] = Math.abs(d) > 1e-4 ? c.qn[i] + d * k : to[i]; off += Math.abs(to[i] - c.qn[i]); }
+      if (!c.tqn && off < .004) c.qn = null; }
+    quadOf(c);
     c.vx = c.vx * .7 + (c.x - ox) / dt * .3; c.vy = c.vy * .7 + (c.y - oy) / dt * .3;
     c.life += ((c.alive ? 1 : 0) - c.life) * Math.min(1, dt * (c.alive ? 1.1 : 1.6));
-    const band = BAND * (c.sm ? .55 : 1);
+    const band = bandOf(c);
     // a window pushed through the water leaves a wake off its leading edge
     const sp = Math.hypot(c.vx, c.vy);
     if (sp > 90 && c.life > .5 && !c.sm) {
@@ -1014,7 +1061,7 @@ function follow(sp, n, len) {
     sp[i * 2] = sp[i * 2 - 2] + dx / d * seg; sp[i * 2 + 1] = sp[i * 2 - 1] + dy / d * seg; }
 }
 function boxGrad(x, y, c, pad) {
-  const e = 1.5, f = (px, py) => sdBox(px, py, c.x - pad, c.y - pad, c.x + c.w + pad, c.y + c.h + pad);
+  const e = 1.5, f = (px, py) => shapeSD(px, py, c, pad);
   const gx = f(x + e, y) - f(x - e, y), gy = f(x, y + e) - f(x, y - e), l = Math.hypot(gx, gy) || 1; return [gx / l, gy / l, f(x, y)];
 }
 let food = null;
@@ -1198,7 +1245,7 @@ gl.bindVertexArray(fVao); gl.bindBuffer(gl.ARRAY_BUFFER, fBuf);
 for (const [nm, n, off] of [['aP', 2, 0], ['aUV', 2, 8], ['aN', 2, 16], ['aI', 4, 24]]) { const l = gl.getAttribLocation(FISH, nm); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, n, gl.FLOAT, false, 40, off); }
 gl.bindVertexArray(null);
 let cArr = new Float32Array(8 * 1024), fArr = new Float32Array(10 * 8192), nC = 0, nF = 0, nFr = 0;
-const uR = new Float32Array(32 * 4), uB = new Float32Array(32 * 4), DROPS = new Float32Array(64);
+const uR = new Float32Array(32 * 4), uB = new Float32Array(32 * 4), uQ = new Float32Array(NQ * 8), DROPS = new Float32Array(64);
 let nR = 0, allCorals = null;
 function gatherCorals() {
   if (!allCorals) { allCorals = floor.concat(sites).sort((a, b) => a.key - b.key); for (const c of floor) c.sc = 1; }
@@ -1207,7 +1254,10 @@ function gatherCorals() {
   let o = 0, n = 0; for (const c of allCorals) { if (c.vis <= .003 || c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue; n++; cArr[o++] = c.x; cArr[o++] = c.y; cArr[o++] = c.size * c.sc; cArr[o++] = c.rot; cArr[o++] = c.cell; cArr[o++] = c.vis; cArr[o++] = c.ph; cArr[o++] = c.tint; }
   nC = n;
   nR = 0;
-  for (const w of reefWins) { const b = BAND * (w.sm ? .55 : 1); uR.set([w.x, w.y, w.x + w.w, w.y + w.h], nR * 4); uB.set([b, w.sh, w.life, 0], nR * 4); nR++; }
+  // (y: 1 for Stage Manager's strip; w: the shape: 0 a box, below 0 a rounded square of that radius, 1 + k the k-th turned card in uQ)
+  let nq = 0; uQ.fill(0);
+  for (const w of reefWins) { let shape = -(w.rad || 0); if (w.qa && nq < NQ) { uQ.set(w.qa, nq * 8); shape = 1 + nq++; }
+    uR.set([w.x, w.y, w.x + w.w, w.y + w.h], nR * 4); uB.set([bandOf(w), w.sm ? 1 : 0, w.life, shape], nR * 4); nR++; }
 }
 // one strip of a fish: positions from its spine with the swimming wave travelling down it
 const tmp = new Float32Array(2 * 32);
@@ -1271,15 +1321,16 @@ function common(p) {
 const full = () => { gl.bindVertexArray(emptyVao); gl.drawArrays(gl.TRIANGLES, 0, 3); };
 // The reefs grow towards a target that only changes when windows (or the world) do; once they've grown in there's
 // nothing left to step, so the grow pass rests until the target changes again.
-const growWas = { R: new Float32Array(32 * 4), B: new Float32Array(32 * 4), Bm: new Float32Array(16 * 4), key: '' };
+const growWas = { R: new Float32Array(32 * 4), B: new Float32Array(32 * 4), Bm: new Float32Array(16 * 4), Q: new Float32Array(NQ * 8), key: '' };
 let growSince = 0;
 function growTargetChanged() {
   const key = `${nR}|${bommies.length}|${SW}x${SH}|${W}x${H}|${OX},${OY}|${gw}x${gh}`;
   let same = key === growWas.key;
   for (let i = 0; same && i < nR * 4; i++) same = uR[i] === growWas.R[i] && uB[i] === growWas.B[i];
   for (let i = 0; same && i < 64; i++) same = uBm[i] === growWas.Bm[i];
+  for (let i = 0; same && i < NQ * 8; i++) same = uQ[i] === growWas.Q[i];
   if (same) return false;
-  growWas.key = key; growWas.R.set(uR); growWas.B.set(uB); growWas.Bm.set(uBm); growSince = performance.now(); return true;
+  growWas.key = key; growWas.R.set(uR); growWas.B.set(uB); growWas.Bm.set(uBm); growWas.Q.set(uQ); growSince = performance.now(); return true;
 }
 function render() {
   const dw = cv.width, dh = cv.height;
@@ -1288,7 +1339,7 @@ function render() {
   if (growTargetChanged() || growReset || performance.now() - growSince < 12000) {   // grown in: after 12 s still the rest is under a half-float step
   gl.bindFramebuffer(gl.FRAMEBUFFER, growF[1 - gi]); gl.viewport(0, 0, gw, gh); gl.useProgram(GROW);
   bindTex(GROW, [['uPrev', grow[gi]]]); gl.uniform2f(GROW.u.uRes, SW, SH); worldU(GROW); gl.uniform1f(GROW.u.uDt, growReset ? 100 : performance.now() < regrowUntil ? DT * 2.5 : DT); growReset = false;
-  gl.uniform4fv(GROW.u.uR, uR); gl.uniform4fv(GROW.u.uB, uB); gl.uniform1i(GROW.u.uN, nR);
+  gl.uniform4fv(GROW.u.uR, uR); gl.uniform4fv(GROW.u.uB, uB); gl.uniform1i(GROW.u.uN, nR); gl.uniform4fv(GROW.u.uQ, uQ);
   gl.uniform4fv(GROW.u.uBm, uBm); gl.uniform1i(GROW.u.uNB, bommies.length); full(); gi = 1 - gi; }
   // ripples: 60 steps a second whatever the frame rate (the wave travels and dies away at the same pace at 30 fps)
   ripAcc = Math.min(ripAcc + DT, 4 / 60);
@@ -1452,6 +1503,14 @@ function setPads(cells, art) {
   pads.forEach((p, j) => { if (!taken.has(j)) { p.el.style.opacity = 0; p.el.style.scale = '.7'; setTimeout(() => p.el.remove(), 950); } });
   pads = next;
 }
+// Stage Manager's strip as you see it: an app's badge is its rounded icon; a card is drawn turned, its corners (q: near
+// top, far top, far bottom, near bottom) kept as fractions of its box, left top first. Without corners, its box
+function stripShape(w, q, l, t, r, b) {
+  if (w.owner === 'WindowManager') { w.rad = Math.min(w.w, w.h) * .23; return; }
+  if (!q || r - l < 2 || b - t < 2) return;
+  const o = q[0] <= q[2] ? [0, 1, 2, 3] : [1, 0, 3, 2];               // (a strip on the right: its near edge is the right one)
+  w.qn = []; for (const k of o) w.qn.push((q[k * 2] - l) / (r - l), (q[k * 2 + 1] - t) / (b - t));
+}
 const handle = m => {
   if (m.t === 'pause') { paused = !!m.v; Span.paused(paused); if (!paused) wake(); return; }
   if (m.t === 'desk') { const k = JSON.stringify([m.x, m.y, m.uw, m.uh, m.fr]); if (k === deskKey) return; deskKey = k; Span.desk(m); rebuildWorld(); return; }
@@ -1459,7 +1518,8 @@ const handle = m => {
   if (m.t === 'cursorOff') { if (curFrom === -1) { cur.on = false; Span.post('curoff', {}); } return; }
   if (m.t === 'dicons') { setPads(m.r || [], m.a || m.i); return; }
   if (m.t === 'windows') { lastWinMsg = m; if (m.live) liveUntil = performance.now() + 250;
-    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
+    setTargets(m.r.map(([l, t, r, b], i) => { const w = { x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) };
+      if (w.sm) stripShape(w, m.q && m.q[i], l, t, r, b); return w; })); }
 };
 try { build(); paintAtlas(); makeFloor(); paintSand(); makeSites(); makeFish(); } catch (e) { post('JSERR boot ' + e.message); }
 wake();

@@ -244,6 +244,17 @@ function drawGlyphs(inst, n) {
 
 /* ---------- windows: eased toward where they really are; new ones push in, closed ones let go ---------- */
 let cur = [];
+// each window also has four corners, eased with it: a box's own, or for a Stage Manager card the turned shape it's
+// drawn in (near edge full height, far edge shorter), so the court is cut round the card's slanted edges, not its box
+const boxQ = t => [t.x, t.y, t.x + t.w, t.y, t.x + t.w, t.y + t.h, t.x, t.y + t.h];
+// the same corners in the order (and turn) nearest the ones it's easing from, so box ↔ card morphs without a twist
+function alignQ(from, to) {
+  let best = to, bd = Infinity;
+  for (const dir of [1, -1]) for (let s = 0; s < 4; s++) {
+    const o = []; for (let k = 0; k < 4; k++) { const j = ((s + dir * k) % 4 + 4) % 4; o.push(to[2 * j], to[2 * j + 1]); }
+    let d = 0; for (let k = 0; k < 8; k++) d += (o[k] - from[k]) ** 2; if (d < bd) { bd = d; best = o; } }
+  return best;
+}
 function setTargets(list) {
   const used = new Set();
   for (const t of list) {
@@ -260,9 +271,9 @@ function setTargets(list) {
       if (Math.hypot(t.x - best.tx, t.y - best.ty) > 60 || Math.abs(t.w - best.tw) > 40 || Math.abs(t.h - best.th) > 40) { best.glideUntil = now + 700; best.vx = best.vy = 0; best.tT = now; }
       const vx = (t.x - best.tx) / dtv, vy = (t.y - best.ty) / dtv;
       if (!(best.glideUntil > now)) { best.vx = (best.vx || 0) * .4 + vx * .6; best.vy = (best.vy || 0) * .4 + vy * .6; } best.tT = now;
-      Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, alive: true });
+      Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, tq: alignQ(best.q, t.q || boxQ(t)), owner: t.owner, alive: true });
     }
-    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, life: 0, alive: true }; cur.push(c); used.add(c); }
+    else { const q = t.q || boxQ(t), c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, q: q.slice(), tq: q, owner: t.owner, life: 0, alive: true }; cur.push(c); used.add(c); }
   }
   for (const c of cur) if (!used.has(c)) c.alive = false;
   needFrame = true; wake();
@@ -285,6 +296,10 @@ function stepWins(dt) {
     const gx = c.tx + (c.vx || 0) * lead, gy = c.ty + (c.vy || 0) * lead;
     if (!fresh) { c.vx = 0; c.vy = 0; } else moving = true;
     for (const [a, g] of [['x', gx], ['y', gy], ['w', c.tw], ['h', c.th]]) { const d = g - c[a]; if (Math.abs(d) > .2) { c[a] += d * k; moving = true; } else c[a] = g; }
+    for (let j = 0; j < 8; j++) { const g = c.tq[j] + (j & 1 ? gy - c.ty : gx - c.tx), d = g - c.q[j]; if (Math.abs(d) > .2) { c.q[j] += d * k; moving = true; } else c.q[j] = g; }   // (the look-ahead carries the corners too)
+    // turned (or still turning back): the worker cuts round its corners; a plain box keeps the box cut (the same shape)
+    const r = c.x + c.w, b = c.y + c.h; c.turned = false;
+    for (let j = 0; j < 8; j += 2) if (Math.min(Math.abs(c.q[j] - c.x), Math.abs(c.q[j] - r)) > .3 || Math.min(Math.abs(c.q[j + 1] - c.y), Math.abs(c.q[j + 1] - b)) > .3) c.turned = true;
     const lt = c.alive ? 1 : 0, dl = lt - c.life; if (Math.abs(dl) > .003) { c.life += dl * kl; moving = true; } else c.life = lt;
   }
   cur = cur.filter(c => c.alive || c.life > .003);
@@ -386,7 +401,7 @@ function requestFrame() {
   if (inflight) { needFrame = true; return; }
   inflight = true; inflightT0 = performance.now();
   const tm = Math.min(1, (performance.now() - morphStart) / MORPH_MS);
-  worker.postMessage({ frame: true, sent: performance.now(), t: building ? tFrozen : easeMorph(tm), gen: townGen, wins: cur.map(c => ({ x: c.x, y: c.y, w: c.w, h: c.h, life: c.life })), keep: keepBoxes(performance.now()) });
+  worker.postMessage({ frame: true, sent: performance.now(), t: building ? tFrozen : easeMorph(tm), gen: townGen, wins: cur.map(c => ({ x: c.x, y: c.y, w: c.w, h: c.h, life: c.life, q: c.turned ? c.q : null })), keep: keepBoxes(performance.now()) });
 }
 
 /* ---------- shoeprints, walkers ---------- */
@@ -602,7 +617,9 @@ const handle0 = m => {
     const ik = deskIc.map(d => [d.x, d.y, d.w, d.h].map(Math.round).join(',')).join(';');
     if (ik !== iconsKey) { iconsKey = ik; if (booted) grow(townSeed); }            // the same town, its names and towers redrawn clear of them
     if (lastWinMsg) handle0(lastWinMsg); return; }
-  if (m.t === 'windows') { lastWinMsg = m; setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })).concat(deskIc)); }
+  // (a Stage Manager card comes with the four corners it's drawn turned in; a badge is its icon's own box)
+  if (m.t === 'windows') { lastWinMsg = m; setTargets(m.r.map(([l, t, r, b], i) => { const q = m.q && m.q[i];
+    return { x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, q: q && q.length === 8 ? q.map((v, j) => v / K + (j & 1 ? OY : OX)) : null, owner: (m.n || [])[i] }; }).concat(deskIc)); }
 };
 const handle = m => { const t0 = performance.now(); handle0(m); ST.busy = (ST.busy || 0) + performance.now() - t0; };
 const host = window.chrome && window.chrome.webview;

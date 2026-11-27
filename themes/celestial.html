@@ -5,7 +5,7 @@
   light from behind wrapped into view), with a dark horizon, a thin photon ring and a lopsided accretion glow.
   Your cursor is a tiny black hole too, exactly where the pointer is. Ordinary app windows bend the starlight only a
   little, a few px right at their edges (the full lens round every window was distracting); Stage Manager thumbnails
-  and Notification Centre keep the full one.
+  (round the turned shape each is drawn in, and each app badge round its icon) and Notification Centre keep the full one.
   Perf: the sky is painted once into a texture; the lensing pass runs only while a window or the cursor moves.
   The names are small text elements over it, placed round your windows without repainting the sky; at rest they cost nothing.
 -->
@@ -415,13 +415,24 @@ function cartoucheSpot(list = cur.filter(c => c.alive)) {
 let cartAt = null, cartT = null, deskIc = [], deskDust = [], iconKey = '', allWins = [], AREA_T = 0, AREA_B = 1e9;
 /* ---------- windows → black holes (eased like everything else) ---------- */
 let cur = [], liveUntil = 0;
+// every hole also has four corners, eased with it: a box's own, or for a Stage Manager card the turned shape it's drawn
+// in (near edge full height, far edge shorter), so its lens follows the card's slanted top and bottom, not its box
+const boxQ = t => [t.x, t.y, t.x + t.w, t.y, t.x + t.w, t.y + t.h, t.x, t.y + t.h];
+// the same corners in the order (and turn) nearest the ones it's easing from, so box ↔ card morphs without a twist
+function alignQ(from, to) {
+  let best = to, bd = Infinity;
+  for (const dir of [1, -1]) for (let s = 0; s < 4; s++) {
+    const o = []; for (let k = 0; k < 4; k++) { const j = ((s + dir * k) % 4 + 4) % 4; o.push(to[2 * j], to[2 * j + 1]); }
+    let d = 0; for (let k = 0; k < 8; k++) d += (o[k] - from[k]) ** 2; if (d < bd) { bd = d; best = o; } }
+  return best;
+}
 function setTargets(list) {
   const used = new Set();
   for (const t of list) {
     let best = null, bd = 1e9;
     for (const c of cur) { if (used.has(c) || c.owner !== t.owner) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
-    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, alive: true, gentle: t.gentle }); }
-    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, life: 0, alive: true, gentle: t.gentle }; cur.push(c); used.add(c); }
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, tq: alignQ(best.q, t.q || boxQ(t)), alive: true, gentle: t.gentle }); }
+    else { const q = t.q || boxQ(t), c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, q: q.slice(), tq: q, owner: t.owner, life: 0, alive: true, gentle: t.gentle, g: t.gentle ? 1 : 0 }; cur.push(c); used.add(c); }
   }
   for (const c of cur) if (!used.has(c)) c.alive = false;
   // the cartouche moves only once the layout has settled (Show Desktop, Mission Control and the like shuffle windows for a moment)
@@ -436,6 +447,13 @@ function stepWins(dt) {
   let moving = false;
   for (const c of cur) {
     for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = c[b] - c[a]; if (Math.abs(d) > .2) { c[a] += d * k; moving = true; } else c[a] = c[b]; }
+    for (let j = 0; j < 8; j++) { const d = c.tq[j] - c.q[j]; if (Math.abs(d) > .2) { c.q[j] += d * k; moving = true; } else c.q[j] = c.tq[j]; }
+    // turned (or still turning back): its lens is drawn from its corners; a plain box keeps the box lens (the same shape, cheaper)
+    const r = c.x + c.w, b = c.y + c.h; c.turned = false;
+    for (let j = 0; j < 8; j += 2) if (Math.min(Math.abs(c.q[j] - c.x), Math.abs(c.q[j] - r)) > .3 || Math.min(Math.abs(c.q[j + 1] - c.y), Math.abs(c.q[j + 1] - b)) > .3) c.turned = true;
+    // a window going into Stage Manager's strip (or out of it onto the stage) turns into a full black hole (or back to
+    // a gentle one) as it glides there; the switch used to be instant: a big lens round the window, all at once
+    const gt = c.gentle ? 1 : 0, dg = gt - c.g; if (Math.abs(dg) > .003) { c.g += dg * k; moving = true; } else c.g = gt;
     const lt = c.alive ? 1 : 0, dl = lt - c.life; if (Math.abs(dl) > .003) { c.life += dl * kl; moving = true; } else c.life = lt;
   }
   cur = cur.filter(c => c.alive || c.life > .003);
@@ -452,8 +470,21 @@ const LENS = program(`#version 300 es
 void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }`, `#version 300 es
 precision highp float;
 uniform sampler2D uSky, uSkyB; uniform float uSkyMix; uniform vec4 uWin[16]; uniform float uLife[16], uGentle[16]; uniform int uN; uniform vec2 uRes; uniform float uK;
+uniform vec4 uQA[16], uQB[16]; uniform float uTurn[16];   // a turned card's corners, already pulled in by its rounding (uTurn 1)
 uniform vec3 uCur;                                   // x, y, strength (0..1)
 out vec4 o;
+// signed distance to a convex four-sided shape, and the outward direction there (inside: the nearest edge's normal)
+float sdQuad(vec2 p, vec2 a, vec2 b, vec2 c, vec2 e, out vec2 ne) {
+  vec2 v[4] = vec2[4](a, b, c, e), m = (a + b + c + e) * .25, cl = p, nIn = vec2(0.);
+  float dIn = -1e9, dOut = 1e9;
+  for (int k = 0; k < 4; k++) {
+    vec2 s = v[k], ed = v[(k + 1) & 3] - s, n = vec2(ed.y, -ed.x) / max(length(ed), 1e-4); if (dot(n, m - s) > 0.) n = -n;
+    float dl = dot(n, p - s); if (dl > dIn) { dIn = dl; nIn = n; }
+    vec2 f = s + ed * clamp(dot(p - s, ed) / max(dot(ed, ed), 1e-6), 0., 1.); float df = distance(p, f); if (df < dOut) { dOut = df; cl = f; }
+  }
+  if (dIn <= 0.) { ne = nIn; return dIn; }
+  ne = (p - cl) / max(dOut, 1e-4); return dOut;
+}
 float h12(vec2 p) { vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float vn(vec2 p) { vec2 i = floor(p), f = fract(p), u = f * f * (3. - 2. * f); return mix(mix(h12(i), h12(i + vec2(1, 0)), u.x), mix(h12(i + vec2(0, 1)), h12(i + vec2(1, 1)), u.x), u.y); }
 // one lens: d = distance from the hole's edge, n = outward direction, E = Einstein radius
@@ -478,14 +509,16 @@ void main() {
     if (i >= uN) break;
     float L = uLife[i]; if (L <= 0.) continue;
     vec4 w = uWin[i]; vec2 hs = w.zw * .5 + 2., dp = p - (w.xy + hs - 2.);
-    float rr = .45 * min(hs.x, hs.y);                                   // a rounded lens, like the widget it's under: no spikes off square corners
-    vec2 q = abs(dp) - (hs - rr), qo = max(q, 0.); float outer = length(qo), d = outer + min(max(q.x, q.y), 0.) - rr;
-    vec2 ne = outer > 0. ? sign(dp) * qo / outer : (q.x > q.y ? vec2(sign(dp.x), 0.) : vec2(0., sign(dp.y)));
+    float rr = .45 * min(hs.x, hs.y), d; vec2 ne;                         // a rounded lens, like the widget it's under: no spikes off square corners
+    if (uTurn[i] > .5) d = sdQuad(p, uQA[i].xy, uQA[i].zw, uQB[i].xy, uQB[i].zw, ne) - rr;   // a Stage Manager card: its turned shape, rounded the same
+    else { vec2 q = abs(dp) - (hs - rr), qo = max(q, 0.); float outer = length(qo); d = outer + min(max(q.x, q.y), 0.) - rr;
+      ne = outer > 0. ? sign(dp) * qo / outer : (q.x > q.y ? vec2(sign(dp.x), 0.) : vec2(0., sign(dp.y))); }
     // bend toward the centre as well as away from the edge: light converges, stars smear into curved arcs
     vec2 n = normalize(mix(ne, dp / max(length(dp), 1.), .55));
     // an ordinary window: barely a lens, at most ~3 px of bent starlight at its edge, ~1 px six px out, gone by ~20 px
-    float E = uGentle[i] > .5 ? 3. : min(.14 * min(hs.x, hs.y) + 28., 110.);
-    lens(p, d, n, E * L, L, uGentle[i] > .5 ? 10. : 16., 1., false, src, shade, glow);
+    // (uGentle eases 0 ↔ 1 as a window goes into or out of Stage Manager's strip)
+    float g = uGentle[i], E = mix(min(.14 * min(hs.x, hs.y) + 28., 110.), 3., g);
+    lens(p, d, n, E * L, L, mix(16., 10., g), 1., false, src, shade, glow);
   }
   if (uCur.z > 0.) {                                 // the cursor: a round mini black hole
     vec2 dp = p - uCur.xy; float dist = length(dp);
@@ -497,7 +530,7 @@ void main() {
   o = vec4(sky * shade + glow, 1.);
 }`);
 gl.useProgram(LENS);
-const U = {}; for (const k of ['uSky', 'uSkyB', 'uSkyMix', 'uWin', 'uLife', 'uGentle', 'uN', 'uRes', 'uK', 'uCur']) U[k] = gl.getUniformLocation(LENS, k);
+const U = {}; for (const k of ['uSky', 'uSkyB', 'uSkyMix', 'uWin', 'uLife', 'uGentle', 'uN', 'uRes', 'uK', 'uCur', 'uQA', 'uQB', 'uTurn']) U[k] = gl.getUniformLocation(LENS, k);
 gl.bindVertexArray(gl.createVertexArray());
 let skyTex = gl.createTexture(), skyTexB = gl.createTexture(), skyMix = 0, skyFadeT0 = -1e9;
 let SKY_FADE_MS = 2500, skyPending = 0;
@@ -515,12 +548,26 @@ function uploadSky(canvas, fade) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   if (fade) { skyFadeT0 = performance.now(); skyMix = 0; wake(); } else { gl.bindTexture(gl.TEXTURE_2D, skyTexB); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4)); skyMix = 0; skyFadeT0 = -1e9; }
 }
-const wf = new Float32Array(64), lf = new Float32Array(16), gf = new Float32Array(16);
+// a convex quad's corners with every edge moved in by m (each corner where its two moved edges meet)
+function insetQ(q, m) {
+  const cx = (q[0] + q[2] + q[4] + q[6]) / 4, cy = (q[1] + q[3] + q[5] + q[7]) / 4, L = [], out = [];
+  for (let k = 0; k < 4; k++) { const ax = q[2 * k], ay = q[2 * k + 1], dx = q[(2 * k + 2) % 8] - ax, dy = q[(2 * k + 3) % 8] - ay, l = Math.hypot(dx, dy) || 1;
+    let nx = -dy / l, ny = dx / l; if (nx * (cx - ax) + ny * (cy - ay) < 0) { nx = -nx; ny = -ny; }
+    L.push([ax + nx * m, ay + ny * m, dx, dy]); }
+  for (let k = 0; k < 4; k++) { const [px, py, ux, uy] = L[(k + 3) % 4], [qx, qy, vx, vy] = L[k], den = ux * vy - uy * vx;
+    if (Math.abs(den) < 1e-6) { out.push(qx, qy); continue; }
+    const t = ((qx - px) * vy - (qy - py) * vx) / den; out.push(px + ux * t, py + uy * t); }
+  return out;
+}
+const wf = new Float32Array(64), lf = new Float32Array(16), gf = new Float32Array(16), qa = new Float32Array(64), qb = new Float32Array(64), turnf = new Float32Array(16);
 function render() {
   gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
   const ord = cur.length > 16 ? cur.filter(c => c.alive).concat(cur.filter(c => !c.alive)) : cur;
-  const n = Math.min(ord.length, 16); wf.fill(0); lf.fill(0); gf.fill(0);
-  for (let i = 0; i < n; i++) { const c = ord[i]; wf.set([c.x, c.y, c.w, c.h], i * 4); lf[i] = c.life; gf[i] = c.gentle ? 1 : 0; }
+  const n = Math.min(ord.length, 16); wf.fill(0); lf.fill(0); gf.fill(0); turnf.fill(0);
+  for (let i = 0; i < n; i++) { const c = ord[i]; wf.set([c.x, c.y, c.w, c.h], i * 4); lf[i] = c.life; gf[i] = c.g;
+    // (the shader rounds it as it does a box: grown by 2, corners of radius rr, so its core comes in by rr − 2)
+    if (c.turned) { const q = insetQ(c.q, .45 * Math.min(c.w / 2 + 2, c.h / 2 + 2) - 2); qa.set(q.slice(0, 4), i * 4); qb.set(q.slice(4), i * 4); turnf[i] = 1; } }
+  gl.uniform4fv(U.uQA, qa); gl.uniform4fv(U.uQB, qb); gl.uniform1fv(U.uTurn, turnf);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, skyTex); gl.uniform1i(U.uSky, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, skyTexB); gl.uniform1i(U.uSkyB, 1); gl.uniform1f(U.uSkyMix, skyMix);
   gl.uniform4fv(U.uWin, wf); gl.uniform1fv(U.uLife, lf); gl.uniform1fv(U.uGentle, gf); gl.uniform1i(U.uN, n); gl.uniform2f(U.uRes, W, H); gl.uniform1f(U.uK, K);
@@ -604,7 +651,9 @@ const handle = m => {
     allWins = m.r.map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]);
     if (m.live) layoutNames('cut');                                   // names a dragged window cuts go now; the rest settle once it's let go
     clearTimeout(nameT); nameT = setTimeout(() => layoutNames('full'), m.live ? 350 : 120);
-    setTargets(m.r.map(([l, t, r, b], i) => { const sm = !!(m.sm && m.sm[i]), owner = (m.n || [])[i]; return { x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner, sm, gentle: !(sm || owner === 'Notification Centre') }; })); }
+    // a Stage Manager card comes with the four corners it's drawn turned in (q); a badge is its icon's own box
+    setTargets(m.r.map(([l, t, r, b], i) => { const sm = !!(m.sm && m.sm[i]), owner = (m.n || [])[i], q = m.q && m.q[i];
+      return { x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, q: q && q.length === 8 ? q.map(v => v / K) : null, owner, sm, gentle: !(sm || owner === 'Notification Centre') }; })); }
 };
 build(); setTimeout(shootingStar, 8000);
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 200); });

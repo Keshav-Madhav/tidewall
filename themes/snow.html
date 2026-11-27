@@ -203,9 +203,11 @@ const COL = 4;                                 // a depth sample every 4 px alon
 // windows have rounded corners: the snow's floor follows the curve down at each end rather than overhanging it
 const RAD = /Windows/.test(navigator.userAgent) ? 8 : 14;
 function floor(c, i) {                         // how far below the top edge column i's floor is
-  if (c.owner === '__icon') return 0;
-  const R = c.rad || RAD, dx = Math.min(i * COL, c.w - i * COL); if (dx >= R) return 0;
-  const t = R - Math.max(0, dx); return R - Math.sqrt(Math.max(0, R * R - t * t));
+  // (a Stage Manager card is drawn turned: its top edge slopes, c.sl px down per px to the right, from c.y at its left end)
+  const s = c.sl ? c.sl * Math.min(i * COL, c.w) : 0;
+  if (c.owner === '__icon') return s;
+  const R = c.rad || RAD, dx = Math.min(i * COL, c.w - i * COL); if (dx >= R) return s;
+  const t = R - Math.max(0, dx); return s + R - Math.sqrt(Math.max(0, R * R - t * t));
 }
 let cur = [], liveUntil = 0, orphans = [], settled = false;
 // a window that goes (Show Desktop, minimised, another Space) and comes back gets its snow back, not a bare top
@@ -218,8 +220,8 @@ function setTargets(list) {
   for (const t of list) {
     let best = null, bd = 1e9;
     for (const c of cur) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
-    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
-    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, cap: t.cap, rad: t.rad, alive: true, cols: makeCols(t.w), vx: 0, vy: 0, px: t.x, py: t.y };
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, tsl: t.sl || 0 }); }
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, sl: t.sl || 0, tsl: t.sl || 0, sm: t.sm, owner: t.owner, cap: t.cap, rad: t.rad, alive: true, cols: makeCols(t.w), vx: 0, vy: 0, px: t.x, py: t.y };
       const back = away.findIndex(a => a.owner === t.owner && Math.abs(a.w - t.w) < 12 && now - a.at < 120000);
       if (back >= 0) { c.cols = makeCols(t.w, away[back].cols); away.splice(back, 1); }
       else if (!settled || performance.now() < 8000) for (let i = 0; i < c.cols.length; i++) c.cols[i] = 11 + 10 * vnoise(i * .06 + t.x, 2) + 5 * vnoise(i * .25 + t.y, 5);   // it's been snowing a while (icons arrive a moment after the first windows)
@@ -230,7 +232,7 @@ function setTargets(list) {
     // tumbling clumps, not a ledge in mid-air (an icon too: deleted or moved, its cap used to melt where it stood and
     // looked as if nothing had noticed)
     c.alive = false; { const keep = Float32Array.from(c.cols); shed(c, 1, 0, 40); c.cols = keep; }
-    if (c.owner !== '__icon') { away.push({ owner: c.owner, w: c.w, cols: Float32Array.from(c.cols), at: now }); if (away.length > 24) away.shift(); }
+    if (c.owner !== '__icon' && c.owner !== '__badge') { away.push({ owner: c.owner, w: c.w, cols: Float32Array.from(c.cols), at: now }); if (away.length > 24) away.shift(); }
   }
   cur = cur.filter(c => c.alive);
 }
@@ -243,10 +245,11 @@ function stepWins(dt) {
   // a window in your hand: its snow sits right on it, every frame (eased, it trailed the window by a hand's width)
   const live = performance.now() < liveUntil, k = live ? 1 : 1 - Math.exp(-dt * 8);
   for (const c of cur) {
-    const ox = c.x, oy = c.y, ow = c.w;
+    const ox = c.x, oy = c.y, ow = c.w, osl = c.sl;
     for (const [a, b] of [['x', 'tx'], ['y', 'ty'], ['w', 'tw'], ['h', 'th']]) { const d = c[b] - c[a]; if (Math.abs(d) > .2) c[a] += d * k; else c[a] = c[b]; }
+    { const d = c.tsl - c.sl; c.sl = Math.abs(d) > .002 ? c.sl + d * k : c.tsl; }   // a card sliding past the screen's middle turns the other way: its slope eases with it
     const vx = (c.x - ox) / dt, vy = (c.y - oy) / dt; c.vx = c.vx * .6 + vx * .4; c.vy = c.vy * .6 + vy * .4;
-    if (c.x !== ox || c.y !== oy || c.w !== ow) driftsDirty = true;
+    if (c.x !== ox || c.y !== oy || c.w !== ow || c.sl !== osl) driftsDirty = true;
     if (Math.abs(c.w - ow) > .5) { shed(c, .55, 0, 0); c.cols = makeCols(c.w, c.cols); }   // a resize shrugs most of it off
     else if (c.cols.length !== Math.max(2, Math.ceil(c.w / COL) + 1)) c.cols = makeCols(c.w, c.cols);
     const sp = Math.hypot(c.vx, c.vy);
@@ -281,7 +284,7 @@ function shed(c, frac, vx, vy) {
   for (const [i, lump] of lumps) {
     const want = Math.ceil(lump / 6), n = Math.max(1, Math.round(want * f)), grow = want / n;   // (each carries more: what lands is the same)
     if (clumps.length > 900) break;                        // (a last guard, never reached by one window)
-    for (let k = 0; k < n; k++) clumps.push({ x: c.x + i * COL + (Math.random() - .5) * 3 * grow, y: c.y - c.cols[i] - Math.random() * lump, vx: vx * .55 + (Math.random() - .5) * 60, vy: vy * .3 - 30 - Math.random() * 60, s: Math.min(14, (2.2 + Math.random() * 3.2) * grow), life: 1 });
+    for (let k = 0; k < n; k++) clumps.push({ x: c.x + i * COL + (Math.random() - .5) * 3 * grow, y: c.y + floor(c, i) - c.cols[i] - Math.random() * lump, vx: vx * .55 + (Math.random() - .5) * 60, vy: vy * .3 - 30 - Math.random() * 60, s: Math.min(14, (2.2 + Math.random() * 3.2) * grow), life: 1 });
   }
 }
 // the snow slumps to its angle of repose; ends round off; a depth cap
@@ -290,6 +293,16 @@ function relax(cols, cap) {
   for (let pass = 0; pass < 2; pass++) for (let i = 0; i < n - 1; i++) { const d = cols[i] - cols[i + 1], m = 1.1;
     if (d > m) { const t = (d - m) * .3; cols[i] -= t; cols[i + 1] += t; } else if (-d > m) { const t = (-d - m) * .3; cols[i + 1] -= t; cols[i] += t; } }
   for (let i = 0; i < n; i++) { const edge = Math.min(i, n - 1 - i) * COL; cols[i] = Math.min(cols[i], cap, 3 + edge * 1.1); }
+}
+// on a turned card's sloping top the snow creeps downhill, a little deeper toward the low end, and now and then a lump
+// slides off that corner and drops
+function creep(c, ud) {
+  if (Math.abs(c.sl) < .03) return;
+  const cols = c.cols, n = cols.length, k = Math.min(.1, Math.abs(c.sl) * .15) * ud;
+  if (c.sl > 0) for (let i = n - 1; i >= 0; i--) { const t = cols[i] * k; cols[i] -= t; if (i + 1 < n) cols[i + 1] += t; else c.slid = (c.slid || 0) + t; }
+  else for (let i = 0; i < n; i++) { const t = cols[i] * k; cols[i] -= t; if (i > 0) cols[i - 1] += t; else c.slid = (c.slid || 0) + t; }
+  if (c.slid > 4 && clumps.length < 900) { const dir = Math.sign(c.sl), i = dir > 0 ? n - 1 : 0; c.slid = 0;
+    clumps.push({ x: c.x + i * COL + dir * 2, y: c.y + floor(c, i) - 3, vx: dir * (25 + Math.random() * 30), vy: dir * c.sl * 40 - 10, s: 2.6 + Math.random() * 1.6, life: 1 }); }
 }
 let cursor = null, cursorT = 0, cvx = 0, cvy = 0, plowDue = false, cursorOnWin = false;
 function stepSnow(dt, now) {
@@ -317,7 +330,7 @@ function stepSnow(dt, now) {
   // clumps from shaken drifts: tumble, and land on drifts below
   for (const c of clumps) {
     c.vy += 520 * dt; c.vx *= .99; const ny = c.y + c.vy * dt, nx = c.x + c.vx * dt;
-    for (const w of cur) { if (nx < w.x || nx > w.x + w.w || c.y > w.y + RAD) continue; const i = Math.round((nx - w.x) / COL), top = w.y + floor(w, i) - w.cols[i];
+    for (const w of cur) { if (nx < w.x || nx > w.x + w.w) continue; const i = Math.round((nx - w.x) / COL), fl = w.y + floor(w, i); if (c.y > fl + RAD) continue; const top = fl - w.cols[i];
       if (c.y <= top && ny >= top && c.vy > 0) { deposit(w.cols, i, c.s * 1.2); c.life = 0; break; } }
     const gi = Math.round(nx / COL); if (c.life > 0 && gi >= 0 && gi < ground.length && ny >= GB() - ground[gi]) { deposit(ground, gi, c.s * .6); c.life = 0; }
     c.x = nx; c.y = ny; if (c.y > H + 20) c.life = 0;
@@ -340,7 +353,7 @@ function stepSnow(dt, now) {
     for (let i = 0; i < c.cols.length; i++) if (c.cols[i] < c.want[i]) c.cols[i] = Math.min(c.want[i], c.cols[i] + g * c.gr[i]);
   }
   // (the cursor melts only snow it's in: on a window's title bar, dragging it, it's below the snow, not in it)
-  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; relax(c.cols, c.cap || 42); }   // c.cap: a desktop icon wears only a little cap
+  for (const c of cur) { for (let i = 0; i < c.cols.length; i++) c.cols[i] *= settle; if (c.sl) creep(c, ud); relax(c.cols, c.cap || 42); }   // c.cap: a desktop icon wears only a little cap
   const gs = Math.exp(-ud / 1500); for (let i = 0; i < ground.length; i++) ground[i] *= gs;
   // the bank along the bottom builds up like the window tops do: a soft, uneven bank within a minute or so
   if (!gWant || gWant.length !== ground.length) { gWant = new Float32Array(ground.length); for (let i = 0; i < ground.length; i++) gWant[i] = 26 * (.55 + .9 * vnoise(i * .025, 11)); }
@@ -430,7 +443,7 @@ function drawLights(now) {
   let nb = 0, nw = 0; const wires = [], t = now / 1000, GAP = 26;
   const grow = (a, need) => { if (need <= a.length) return a; const g = new Float32Array(Math.max(need, a.length * 2)); g.set(a); return g; };
   for (const c of cur) {
-    if (c.owner === '__icon' || c.rad || c.w < 160) continue;               // windows only: not icons, widgets or slivers
+    if (c.owner === '__icon' || c.rad || c.sm || c.w < 160) continue;       // windows only: not icons, widgets, Stage Manager or slivers
     // only on snow that has settled on its window: a ledge still sliding into place (a window just uncovered, moved,
     // resized) or a bare top had its lights hanging in the air; they fade in and out, never pop
     let depth = 0; for (const v of c.cols) depth += v; depth /= c.cols.length;
@@ -536,6 +549,16 @@ let lastWins = null, deskIc = [];
 // its rounder corners, not on the margin in mid-air
 const WIDGETS = ['Notification Centre', 'Notification Center', 'WidgetKit Simulator'];
 const card = t => !WIDGETS.includes(t.owner) || t.w < 40 ? t : Object.assign(t, { x: t.x + 9, y: t.y + 9, w: t.w - 18, h: t.h - 18, rad: 22 });
+// Stage Manager's strip as you see it: each card is drawn turned, so snow lies along its sloping top edge (from its
+// corners, q: near top, far top, …), a smaller drift than a window's; an app's badge wears an icon's little cap on its
+// rounded top (its card hides most of it: you see the end beside the card). A card sent without corners is its box
+const strip = (t, q) => {
+  if (t.owner === 'WindowManager') return Object.assign(t, { owner: '__badge', cap: 9, rad: Math.min(t.w, t.h) * .23 });
+  Object.assign(t, { owner: 'sm:' + t.owner, sm: true, cap: 13, rad: 4, sl: 0 });
+  if (q) { const [ax, ay, bx, by] = q[0] < q[2] ? [q[0], q[1], q[2], q[3]] : [q[2], q[3], q[0], q[1]];
+    if (bx - ax > 8) Object.assign(t, { x: ax / K, y: ay / K, w: (bx - ax) / K, sl: (by - ay) / (bx - ax) }); }
+  return t;
+};
 const handle = m => {
   if (m.t === 'desk') { showPanel(m.i, m.n); return; }
   if (m.t === 'area') { const was = GY; GY = m.r[3] / K; driftsDirty = true; if (was !== GY && PAINT.complete) drawBackdrop(); return; }   // (the snowman moves up onto it)
@@ -544,11 +567,12 @@ const handle = m => {
     if (cursor && t - cursorT < 150 && t > cursorT) { const dt = (t - cursorT) / 1000; cvx = cvx * .4 + (x - cursor.x) / dt * .6; cvy = cvy * .4 + (y - cursor.y) / dt * .6; } else { cvx = cvy = 0; }
     cursor = { x, y }; cursorT = t; cursorOnWin = !!m.w; plowDue = true; return; }
   if (m.t === 'cursorOff') { cursor = null; return; }
-  // Stage Manager draws its thumbnails tilted in 3D but reports flat rectangles: snow can't sit on them believably, so it falls behind
   if (m.t === 'dicons') {                                               // your desktop icons: snow settles in a little cap on each
     deskIc = (m.a || m.i || []).map(([l, t, r, b]) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: '__icon', cap: 9 }));   // (a: the icon's visible artwork, not its square)
     if (lastWins) handle(lastWins); else setTargets(deskIc); return; }
-  if (m.t === 'windows') { lastWins = m; if (m.live) liveUntil = performance.now() + 250; setTargets(m.r.map(([l, t, r, b], i) => card({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] })).filter((_, i) => !(m.sm && m.sm[i])).concat(deskIc)); }
+  if (m.t === 'windows') { lastWins = m; if (m.live) liveUntil = performance.now() + 250;
+    setTargets(m.r.map(([l, t, r, b], i) => { const w = { x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] };
+      return m.sm && m.sm[i] ? strip(w, m.q && m.q[i]) : card(w); }).concat(deskIc)); }
 };
 build(); wake();
 let rz = null; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(build, 200); });

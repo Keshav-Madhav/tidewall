@@ -308,6 +308,22 @@ function buildNoise() {
   }
 }
 let fieldMs = 0;
+// Stage Manager's cards are drawn turned in perspective, so a card's top and bottom edges slope: its sand follows them,
+// not its box (whose corners stood out past those slopes). A card: its x range and its two edges as lines, from the
+// corners the windows message gives (near top, far top, far bottom, near bottom), and the margin its box was grown by.
+function cardOf(q, m) {
+  const [xn, ytn, xf, ytf, , ybf, , ybn] = q, x0 = Math.min(xn, xf), x1 = Math.max(xn, xf), w = Math.max(x1 - x0, 1), L = xn <= xf;
+  const t = L ? ytn : ytf, b = L ? ybn : ybf;
+  return { x0, x1, m, t, ts: ((L ? ytf : ytn) - t) / w, b, bs: ((L ? ybf : ybn) - b) / w };
+}
+// its top and bottom at x, grown by the margin as its box was (the card swept by a square that size: level for a margin
+// past its taller end, then the slope) and trimmed as iconRects trims a box
+const CS = [0, 0];
+function cardSpan(c, x) {
+  const a = Math.min(Math.max(x - c.m, c.x0), c.x1) - c.x0, b = Math.min(Math.max(x + c.m, c.x0), c.x1) - c.x0;
+  CS[0] = c.t + Math.min(c.ts * a, c.ts * b) - c.m + 2; CS[1] = c.b + Math.max(c.bs * a, c.bs * b) + c.m - 2;
+  return CS;
+}
 // reg: [gx0, gy0, gx1, gy1] grid cells to compute (inclusive), the rest copied from base: across several displays the
 // field is the whole world's, and recomputing all of it on every window update left no time to draw during a drag
 function computeField(rects, reg = null, base = null) {
@@ -322,11 +338,13 @@ function computeField(rects, reg = null, base = null) {
     const gy0 = Math.max(ry0, Math.floor((r.cy - R) / STEP)), gy1 = Math.min(ry1, Math.ceil((r.cy + R) / STEP));
     // Tidewall: windows are big — put the cloud / sand edge just *outside* the window (+ margin), not inside it.
     // The edge (f = 0.35) sits σ·1.025 beyond the core, so a core of (half-size − 0.8σ) lands it a little past the rect.
-    const chw = Math.max(r.hw - 0.8 * sig, r.hw * 0.25), chh = Math.max(r.hh - 0.8 * sig, r.hh * 0.25);
+    const chw = Math.max(r.hw - 0.8 * sig, r.hw * 0.25), chh = Math.max(r.hh - 0.8 * sig, r.hh * 0.25), c = r.sh;
     for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
       const i = gy * Gw + gx;
       const qx = gx * STEP + NZ.wx[i] * wa * wk, qy = gy * STEP + NZ.wy[i] * wa * wk;
-      let dx = Math.abs(qx - r.cx) - chw, dy = Math.abs(qy - r.cy) - chh;
+      let dx = Math.abs(qx - r.cx) - chw, dy;
+      if (c) { const s = cardSpan(c, qx), hh = (s[1] - s[0]) / 2; dy = Math.abs(qy - (s[0] + s[1]) / 2) - Math.max(hh - 0.8 * sig, hh * 0.25); }   // a turned card: its height where this point is
+      else dy = Math.abs(qy - r.cy) - chh;
       if (dx < 0) dx = 0; if (dy < 0) dy = 0;
       f1[i] += Math.exp(-(dx * dx + dy * dy) * is1);
     }
@@ -805,13 +823,13 @@ function uploadField(i, Fd) {
 
 // Tidewall: a window covering (nearly) the whole display is a maximised one: it makes no land, so letting go of it
 // doesn't uncover a screenful of desert framed by surf. Desktop-icon islands warp more (a long straight sand bar otherwise)
-const iconRects = () => icons.filter(ic => ic.w * ic.h < 0.9 * innerWidth * innerHeight).map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2, wk: ic.desk ? 1.8 : 1 }));
+const iconRects = () => icons.filter(ic => ic.w * ic.h < 0.9 * innerWidth * innerHeight).map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2 - 4, hh: ic.h / 2 - 2, wk: ic.desk ? 1.8 : 1, sh: ic.card || null }));
 // Tidewall: a window update recomputes only the part of this display it reaches (the rest of the world, which the
 // kayaks read, follows once things settle); and a new shape mid-morph carries on from where the coast is, at speed,
 // so the sand follows a dragged window instead of snapping to the last shape on every update
 let iconsLive = null;
 let laid = null, staleWorld = false, worldT = null, chase = false, pendingCommit = false, growing = false;
-const rectKey = r => `${Math.round(r.cx)},${Math.round(r.cy)},${Math.round(r.hw)},${Math.round(r.hh)},${r.wk || 1}`;
+const rectKey = r => `${Math.round(r.cx)},${Math.round(r.cy)},${Math.round(r.hw)},${Math.round(r.hh)},${r.wk || 1}` + (r.sh ? `,${[r.sh.t, r.sh.ts * 100, r.sh.b, r.sh.bs * 100].map(Math.round)}` : '');
 const reachOf = r => 5.5 * P.sigma + Math.max(r.hw, r.hh) + P.warp * 1.1 * (r.wk || 1) + STEP;   // as computeField's loops
 function mixAt(t) { const e = Math.min(Math.max((t - morphT0) / morphDur, 0), 1); return chase ? 1 - (1 - e) * (1 - e) : e < 0.5 ? 2 * e * e : 1 - Math.pow(-2 * e + 2, 2) / 2; }
 function diffRects(a, b) {                                            // in one list and not the other, counting duplicates
@@ -1365,8 +1383,16 @@ function startHostedMode() {
   icons = [];
   commit(true);                                   // 先是一片海
   syncBirds(false);
-  let first = true, deskKey = '', lastIconsMsg = null;
+  let first = true, deskKey = '', lastIconsMsg = null, stage = null, stageKey = '';
   deskIc = [];
+  // the icons message has only boxes; the windows message, sent just before it with the same windows in the same order,
+  // has Stage Manager's cards' corners. A box is a card's when it's that card's box grown evenly (by the margin).
+  const cardFor = (i, l, t, r, b, k) => {
+    const s = stage && stage[i]; if (!s) return null;
+    const [[L, T, R, B], q] = s, g = L - l;
+    if (g < 0 || Math.abs(T - t - g) > 2 || Math.abs(r - R - g) > 2 || Math.abs(b - B - g) > 2) return null;
+    return cardOf(q.map((v, j) => v / k + (j % 2 ? OY : OX)), g / k);
+  };
   const settlePaused = () => {
     if (!paused || !iconsSeen) return;
     if (pendingCommit) { pendingCommit = false; commit(); }           // (paused: no frame will lay it, so now)
@@ -1376,6 +1402,10 @@ function startHostedMode() {
   const handle = m => {
     if (m.t === 'pause') { paused = PREVIEW ? false : m.v; Span.paused(!!paused); settlePaused(); if (!paused && !looping) { looping = true; requestAnimationFrame(frame); } return; }
     if (m.t === 'settings') { applySettings(m.v || {}); return; }
+    if (m.t === 'windows') { const key = m.q ? JSON.stringify(m.q) : '';
+      stage = m.q ? (m.r || []).map((r, i) => m.q[i] ? [r, m.q[i]] : null) : null;
+      if (key !== stageKey) { stageKey = key; if (lastIconsMsg) handle(lastIconsMsg); }   // (a card can turn with its box unchanged: then no icons message follows)
+      return; }
     if (m.t === 'dicons') { const k = window.devicePixelRatio || 1, P = 26;   // your desktop icons: one island for each cluster
       deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX - P, y: t / k + OY - P, w: (r - l) / k + 2 * P, h: (b - t) / k + 2 * P, desk: true }));
       if (lastIconsMsg) handle(lastIconsMsg); return; }
@@ -1389,7 +1419,7 @@ function startHostedMode() {
     if (m.t !== 'icons') return;
     lastIconsMsg = m; iconsLive = typeof m.live === 'boolean' ? m.live : null;   // (a window in someone's hand; null: an older host that doesn't say)
     const k = window.devicePixelRatio || 1;       // 物理像素 → CSS 像素
-    icons = (m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k })) : []).concat(deskIc);   // (your desktop icons: a sandy island each)
+    icons = (m.vis ? m.r.map(([l, t, r, b], i) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k, card: cardFor(i, l, t, r, b, k) })) : []).concat(deskIc);   // (your desktop icons: a sandy island each)
     if (PREVIEW) drawGhosts();
     iconsSeen = true;
     if (!first) { pendingCommit = true; settlePaused(); return; }      // laid at the next frame (several updates in one frame: one layout)

@@ -71,9 +71,32 @@ function sdRB(px, py, cx, cy, bx_, by_, r) { const qx = Math.abs(px - cx) - bx_ 
 const smax = (a, b, k) => { const h = clamp(.5 - .5 * (b - a) / k, 0, 1); return a * h + b * (1 - h) + k * h * (1 - h); };
 // distance to the nearest window (eased: a window that's arriving or leaving grows/shrinks its block)
 function eWin(x, y) { let e = 1e5; for (const s of slots) e = Math.min(e, sdRB(x, y, s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 10) + (1 - s.life) * (T + 30)); return e; }
+// Stage Manager's cards as you see them (each a quad, turned in perspective) and its badges (each its icon's box). The
+// track and roads go round the strip as one block (they can't thread the 10 to 30 pt between cards), but the ground
+// shows between the cards, so the scenery stands on it right up to each card's own edge, and never half under one
+let CARDS = [], CARDB = null;
+function setCards(sm) {
+  CARDS = sm.map(t => { const q = t.q || [t.x, t.y, t.x + t.w, t.y, t.x + t.w, t.y + t.h, t.x, t.y + t.h], xs = [q[0], q[2], q[4], q[6]], ys = [q[1], q[3], q[5], q[7]];
+    return { q, b: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] }; });
+  CARDB = CARDS.length ? CARDS.reduce((m, c) => [Math.min(m[0], c.b[0]), Math.min(m[1], c.b[1]), Math.max(m[2], c.b[2]), Math.max(m[3], c.b[3])], [1e9, 1e9, -1e9, -1e9]) : null;
+}
+// does a box, grown by m, touch a card or a badge? (a box and a convex quad overlap unless one of the box's two axes or the
+// quad's four edge normals separates them)
+function onCard(x0, y0, x1, y1, m) {
+  if (!CARDB || x1 + m < CARDB[0] || x0 - m > CARDB[2] || y1 + m < CARDB[1] || y0 - m > CARDB[3]) return false;
+  x0 -= m; y0 -= m; x1 += m; y1 += m;
+  next: for (const { q, b } of CARDS) {
+    if (x1 < b[0] || x0 > b[2] || y1 < b[1] || y0 > b[3]) continue;
+    for (let i = 0; i < 8; i += 2) { const nx = q[(i + 3) % 8] - q[i + 1], ny = q[i] - q[(i + 2) % 8];
+      let lo = 1e9, hi = -1e9; for (let k = 0; k < 8; k += 2) { const v = q[k] * nx + q[k + 1] * ny; lo = Math.min(lo, v); hi = Math.max(hi, v); }
+      const c = (x0 + x1) / 2 * nx + (y0 + y1) / 2 * ny, e = (Math.abs(nx) * (x1 - x0) + Math.abs(ny) * (y1 - y0)) / 2;
+      if (c + e < lo || c - e > hi) continue next; }
+    return true; }
+  return false;
+}
 
 function setTargets(list) {
-  const key = list.map(t => `${t.x | 0},${t.y | 0},${t.w | 0},${t.h | 0},${t.owner},${t.sm}`).join(';');
+  const key = list.map(t => `${t.x | 0},${t.y | 0},${t.w | 0},${t.h | 0},${t.owner},${t.sm}${t.q ? t.q.map(v => v | 0).join(':') : ''}`).join(';');
   if (key === lastKey) return; lastKey = key;                        // nothing changed on this screen: nothing to redo
   const obs = list.filter(t => t.owner === '__gap' || t.owner === '__icons');   // the world's gaps and your desktop icons: kept clear, never a town
   const sm = list.filter(t => t.sm), rest = list.filter(t => !t.sm && t.owner !== '__gap' && t.owner !== '__icons' && t.w >= 50 && t.h >= 40 && Math.min(t.x + t.w, W) - Math.max(t.x, 0) >= 50 && Math.min(t.y + t.h, H) - Math.max(t.y, 0) >= 40);   // (a window half off the left edge counts, as one half off any other edge always did)
@@ -83,6 +106,7 @@ function setTargets(list) {
   // that window flattened everything, so un-maximising faded the whole board up from a bare green ghost.
   const da = SW * SH, covers = t => (Math.max(0, Math.min(t.x + t.w, OX + SW) - Math.max(t.x, OX)) * Math.max(0, Math.min(t.y + t.h, OY + SH) - Math.max(t.y, OY))) >= .95 * da;
   if (slots.length && rest.some(covers)) return;
+  setCards(sm);
   const used = new Set();
   for (const t of rest.slice(0, 16).concat(obs)) {
     let best = null, bd = 1e9;
@@ -250,7 +274,7 @@ function buildWorld() {
 let roadKey = null, roadJob = null, oldRoads = [], roadFade = 1, lastMoveT = 0;
 const OM = VERGE + ROAD / 2;                                          // the ring road's centre line, out from its window
 const SQ_R = 15;                                                      // where a village's roads meet its square
-const isVis = v => kAt(v.x, v.y) > HOUSE_GAP + 34 && nsAt(v.x, v.y) > 30;
+const isVis = v => kAt(v.x, v.y) > HOUSE_GAP + 34 && nsAt(v.x, v.y) > 30 && !onCard(v.x - 24, v.y - 24, v.x + 24, v.y + 24, 0);   // (a village square half under a card: not there)
 // where a road from (ox, oy) meets a town's ring road: on the facing side, clear of the corners
 function ringEnd(s, ox, oy) {
   const dx = ox < s.x ? s.x - ox : ox > s.x + s.w ? ox - s.x - s.w : 0, dy = oy < s.y ? s.y - oy : oy > s.y + s.h ? oy - s.y - s.h : 0;
@@ -650,6 +674,7 @@ function layScenery() {
   if (ring) for (let j = 0; j < ony; j++) for (let i = 0; i < onx; i++) OUT[j * onx + i] = inRing(ring, i * OC, j * OC) ? 0 : 1;
   const outside = (x, y) => !!ring && OUT[clamp(Math.round(y / OC), 0, ony - 1) * onx + clamp(Math.round(x / OC), 0, onx - 1)] === 1;
   const clearOf = (x0, y0, x1, y1, track, ground, road = 6) => {
+    if (onCard(x0, y0, x1, y1, 3)) return false;                       // (nothing cut off by a Stage Manager card's edge)
     for (let a = 0; a <= 2; a++) for (let b = 0; b <= 2; b++) { const x = x0 + (x1 - x0) * a / 2, y = y0 + (y1 - y0) * b / 2;
       if (x < FRAME + 3 || y < TOP || x > W - FRAME - 3 || y > H - FRAME - 3) return false;
       if (tAt(x, y) < track || nsAt(x, y) < 6 || twAt(x, y) < HOUSE_GAP - 1 || wAt(x, y) < 4 || hAt(x, y) > ground || rdAt(x, y) < road) return false; }
@@ -725,6 +750,7 @@ function layScenery() {
   for (const f of staticFields) {
     const c = Math.cos(f.a), sn = Math.sin(f.a), pts = [[0, 0], [-1, -1], [1, -1], [1, 1], [-1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]].map(([u, v]) => [f.x + (u * f.w * c - v * f.h * sn) / 2, f.y + (u * f.w * sn + v * f.h * c) / 2]);
     const ok = pts.every(([x, y]) => x > FRAME + 5 && y > FRAME + 5 && x < W - FRAME - 5 && y < H - FRAME - 5 && tAt(x, y) > 14 && kAt(x, y) > T + 6 && wAt(x, y) > 7 && hAt(x, y) < LV[0] && rdAt(x, y) > 9) && !villages.some(v => Math.hypot(f.x - v.x, f.y - v.y) < 110)
+      && !onCard(Math.min(...pts.map(p => p[0])), Math.min(...pts.map(p => p[1])), Math.max(...pts.map(p => p[0])), Math.max(...pts.map(p => p[1])), 4)
       && !fields.some(g => g.ok && Math.hypot(g.x - f.x, g.y - f.y) < (Math.max(g.w, g.h) + Math.max(f.w, f.h)) * .5);
     fields.push(Object.assign(f, { ok }));
   }
@@ -1613,7 +1639,8 @@ const handle = m => {
     dirty = true; wake();                                               // (the green's shape can change while the clusters don't)
     if (lastWinMsg) handle(lastWinMsg); return; }
   if (m.t === 'windows') { lastWinMsg = m; const K = devicePixelRatio;
-    const list = m.r.map(([l, t, r, b], i) => ({ x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }));
+    const list = m.r.map(([l, t, r, b], i) => { const q = m.q && m.q[i];   // (q: a Stage Manager card's turned corners)
+      return { x: l / K + OX, y: t / K + OY, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]), q: q && q.length === 8 ? q.map((v, j) => v / K + (j % 2 ? OY : OX)) : null }; });
     if (Span.world) {                                                  // what no display shows, and each lower display's menu bar
       for (const g of Span.gaps()) list.push({ x: g.x, y: g.y, w: g.w, h: g.h, owner: '__gap' });
       for (const F of Span.frames()) if (F[1] > 1) list.push({ x: F[0], y: F[1], w: F[2], h: MENU, owner: '__gap' });

@@ -68,6 +68,37 @@ function buildNoise() {
 // reg: [gx0, gy0, gx1, gy1] grid cells to compute (inclusive); everything else is copied from base. Across several
 // displays the field covers the whole world, and recomputing all of it on every window update (3840 × 2062 points:
 // ~45 ms, on each display, in one shared web process) left no time to draw while a window was dragged.
+// Stage Manager's cards are drawn turned (near edge full height, far edge shorter): their islands follow that shape.
+// a convex quad's corners with every edge moved in by m (out, for m < 0), each corner where its two moved edges meet
+function insetQ(q, m) {
+  const cx = (q[0] + q[2] + q[4] + q[6]) / 4, cy = (q[1] + q[3] + q[5] + q[7]) / 4, L = [], out = [];
+  for (let k = 0; k < 4; k++) { const ax = q[2 * k], ay = q[2 * k + 1], dx = q[(2 * k + 2) % 8] - ax, dy = q[(2 * k + 3) % 8] - ay, l = Math.hypot(dx, dy) || 1;
+    let nx = -dy / l, ny = dx / l; if (nx * (cx - ax) + ny * (cy - ay) < 0) { nx = -nx; ny = -ny; }
+    L.push([ax + nx * m, ay + ny * m, dx, dy]); }
+  for (let k = 0; k < 4; k++) { const [px, py, ux, uy] = L[(k + 3) % 4], [qx, qy, vx, vy] = L[k], den = ux * vy - uy * vx;
+    if (Math.abs(den) < 1e-6) { out.push(qx, qy); continue; }
+    const t = ((qx - px) * vy - (qy - py) * vx) / den; out.push(px + ux * t, py + uy * t); }
+  return out;
+}
+// its edges (start, direction, 1/length², outward normal), and how far a point is outside it (0 inside)
+function quadEdges(q) {
+  const E = new Float64Array(28), mx = (q[0] + q[2] + q[4] + q[6]) / 4, my = (q[1] + q[3] + q[5] + q[7]) / 4;
+  for (let k = 0; k < 4; k++) { const ax = q[2 * k], ay = q[2 * k + 1], ex = q[(2 * k + 2) % 8] - ax, ey = q[(2 * k + 3) % 8] - ay, l2 = ex * ex + ey * ey || 1e-6, l = Math.sqrt(l2);
+    let nx = ey / l, ny = -ex / l; if (nx * (mx - ax) + ny * (my - ay) > 0) { nx = -nx; ny = -ny; }
+    E.set([ax, ay, ex, ey, 1 / l2, nx, ny], k * 7); }
+  return E;
+}
+function outQuad(E, px, py) {
+  let inside = true; for (let o = 0; o < 28; o += 7) if ((px - E[o]) * E[o + 5] + (py - E[o + 1]) * E[o + 6] > 0) { inside = false; break; }
+  if (inside) return 0;
+  let d2 = 1e18;
+  for (let o = 0; o < 28; o += 7) { const wx = px - E[o], wy = py - E[o + 1]; let t = (wx * E[o + 2] + wy * E[o + 3]) * E[o + 4]; t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const qx = wx - E[o + 2] * t, qy = wy - E[o + 3] * t, dd = qx * qx + qy * qy; if (dd < d2) d2 = dd; }
+  return Math.sqrt(d2);
+}
+// a card's core, as a box's: the card grown by your margin, then pulled in by σ·√(−ln 0.35) so the coast lands on it.
+// (never pulled in past most of its own size: a box's core stops at a line, never turns inside out)
+const cardCore = ic => insetQ(ic.cq, Math.min(1.025 * P.sigma - ic.m, .45 * Math.min(ic.cw, ic.ch)));
 // one island's pull added into f1, within the grid cells [rx0, ry0]–[rx1, ry1]
 function addRect(f1, r, rx0, ry0, rx1, ry1) {
   const sig = P.sigma, is1 = 1 / (sig * sig), wa = P.warp * 2.2, wmax = wa * 0.5;
@@ -78,6 +109,14 @@ function addRect(f1, r, rx0, ry0, rx1, ry1) {
   const gy0 = Math.max(ry0, Math.floor((r.cy - Ry) / STEP)), gy1 = Math.min(ry1, Math.ceil((r.cy + Ry) / STEP));
   // coast (f = 0.35) lands on the rect edge: core = rect shrunk by σ·√(−ln 0.35)
   const chw = Math.max(r.hw - 1.025 * sig, 0), chh = Math.max(r.hh - 1.025 * sig, 0), wgt = r.w || 1;
+  if (r.q) {                                                         // a Stage Manager card: its core is its turned shape's (see cardCore)
+    const E = quadEdges(r.q);
+    for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
+      const i = gy * Gw + gx, d = outQuad(E, gx * STEP + NZ.wx[i] * wa, gy * STEP + NZ.wy[i] * wa);
+      f1[i] += wgt * Math.exp(-d * d * is1);
+    }
+    return;
+  }
   for (let gy = gy0; gy <= gy1; gy++) for (let gx = gx0; gx <= gx1; gx++) {
     const i = gy * Gw + gx;
     const qx = gx * STEP + NZ.wx[i] * wa, qy = gy * STEP + NZ.wy[i] * wa;
@@ -140,7 +179,15 @@ uniform sampler2D uA, uB; uniform float uMix, uScale, uH, uStep; uniform vec2 uG
 uniform vec4 uTowns[16]; uniform int uNT;          // x, y, fade, seed
 uniform vec4 uLab[16]; uniform float uLabA[16]; uniform int uNL;  // the names and whales on the label sheet (box, fade)
 uniform vec4 uWin[12]; uniform int uNW;                           // your windows (and icon clusters): no land mark is cut by their edges
+uniform vec4 uWinQ[24]; uniform float uWinT[12];                  // a Stage Manager card's turned corners (uWinT 1): marks keep off that shape
 out vec4 o;
+// how far a mark of half-size e at q is clear of a convex quad (≤ 0: it touches it): each edge pushed out by the mark's reach
+float quadOut(vec2 q, vec2 e, vec4 ab, vec4 cd) {
+  vec2 v[4] = vec2[4](ab.xy, ab.zw, cd.xy, cd.zw), m = (ab.xy + ab.zw + cd.xy + cd.zw) * 0.25; float d = -1e9;
+  for (int k = 0; k < 4; k++) { vec2 s = v[k], ed = v[(k + 1) & 3] - s, n = vec2(ed.y, -ed.x) / max(length(ed), 1e-4); if (dot(n, m - s) > 0.0) n = -n;
+    d = max(d, dot(n, q - s) - dot(abs(n), e)); }
+  return d;
+}
 // how much a label covers q (0-1): the sea's own marks stand back there, so a wave never runs through "Sea of~Unsent"
 float labK(vec2 q) { float k = 0.0; for (int i = 0; i < 16; i++) { if (i >= uNL) break; vec4 b = uLab[i];
   vec2 d = max(max(b.xy - q, q - b.zw), 0.0); k = max(k, uLabA[i] * (1.0 - smoothstep(0.0, 6.0, length(d)))); } return k; }
@@ -152,7 +199,9 @@ float giveWay(vec2 q, vec2 e) {
   for (int i = 0; i < 16; i++) { if (i >= uNL) break; vec4 b = uLab[i];
     vec2 d = max(max(b.xy - e - q, q - b.zw - e), 0.0); k = max(k, uLabA[i] * (1.0 - smoothstep(0.0, 3.0, length(d)))); }
   for (int i = 0; i < 12; i++) { if (i >= uNW) break; vec4 b = uWin[i];
-    vec2 d = max(max(b.xy - e - q, q - b.zw - e), 0.0); k = max(k, 1.0 - smoothstep(0.0, 1.5, length(d))); }   // (a wide band left half-faded marks along the edge)
+    vec2 d = max(max(b.xy - e - q, q - b.zw - e), 0.0); float dl = length(d);
+    if (uWinT[i] > 0.5 && dl < 1.5) dl = max(dl, quadOut(q, e, uWinQ[2 * i], uWinQ[2 * i + 1]));   // (a card lies inside its box: asked only near it)
+    k = max(k, 1.0 - smoothstep(0.0, 1.5, dl)); }   // (a wide band left half-faded marks along the edge)
   return k;
 }
 // farmland: how much of a town is near q (its fields come and go with it), and how much a town's own ground (its
@@ -361,8 +410,8 @@ function program(vs, fs) {
   return p;
 }
 const PR = program(VS, FS); gl.useProgram(PR);
-const U = {}; for (const k of ['uA', 'uB', 'uMix', 'uScale', 'uH', 'uStep', 'uGrid', 'uCompass', 'uOff', 'uTowns', 'uNT', 'uLab', 'uLabA', 'uNL', 'uWin', 'uNW']) U[k] = gl.getUniformLocation(PR, k);
-const townBuf = new Float32Array(16 * 4), labBuf = new Float32Array(16 * 4), labABuf = new Float32Array(16), winBuf = new Float32Array(12 * 4);
+const U = {}; for (const k of ['uA', 'uB', 'uMix', 'uScale', 'uH', 'uStep', 'uGrid', 'uCompass', 'uOff', 'uTowns', 'uNT', 'uLab', 'uLabA', 'uNL', 'uWin', 'uNW', 'uWinQ', 'uWinT']) U[k] = gl.getUniformLocation(PR, k);
+const townBuf = new Float32Array(16 * 4), labBuf = new Float32Array(16 * 4), labABuf = new Float32Array(16), winBuf = new Float32Array(12 * 4), winQBuf = new Float32Array(24 * 4), winTBuf = new Float32Array(12);
 gl.bindVertexArray(gl.createVertexArray());
 const tex = [gl.createTexture(), gl.createTexture()];
 function allocField() {
@@ -389,10 +438,10 @@ function seedIslets() {
     ISLETS.push({ cx: rnd() * W, cy: rnd() * H, hw: big ? 30 + rnd() * 50 : 0, hh: big ? 20 + rnd() * 35 : 0, w: big ? 0.8 + rnd() * 0.3 : 0.37 + rnd() * 0.2, islet: true });
   }
 }
-const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2, hh: ic.h / 2 })).concat(ISLETS);
+const iconRects = () => icons.map(ic => ({ cx: ic.x + ic.w / 2, cy: ic.y + ic.h / 2, hw: ic.w / 2, hh: ic.h / 2, q: ic.cq ? cardCore(ic) : null })).concat(ISLETS);
 // the island rects last laid, and whether the field off this display is out of date (filled in once things settle)
 let laid = null, staleWorld = false, worldT = null;
-const rectKey = r => `${Math.round(r.cx)},${Math.round(r.cy)},${Math.round(r.hw)},${Math.round(r.hh)},${r.w || 1}`;
+const rectKey = r => `${Math.round(r.cx)},${Math.round(r.cy)},${Math.round(r.hw)},${Math.round(r.hh)},${r.w || 1}${r.q ? ':' + r.q.map(Math.round) : ''}`;
 const reachOf = r => [r.hw + 5.5 * P.sigma + P.warp * 1.1 + STEP, r.hh + 5.5 * P.sigma + P.warp * 1.1 + STEP];   // as computeField's loops
 // the rects in one list and not the other, counting duplicates (two identical maximized windows: closing one is a change)
 function diffRects(a, b) {
@@ -1091,9 +1140,9 @@ function renderMap() {
   const lb = labs.length > 16 ? labs.slice().sort((a, b) => b.a - a.a) : labs, nl = Math.min(lb.length, 16); labBuf.fill(0); labABuf.fill(0);
   for (let i = 0; i < nl; i++) { labBuf.set(lb[i].b, i * 4); labABuf[i] = lb[i].a; }
   gl.uniform4fv(U.uLab, labBuf); gl.uniform1fv(U.uLabA, labABuf); gl.uniform1i(U.uNL, nl);
-  const wr = wins.concat(deskIc), nw = Math.min(wr.length, 12); winBuf.fill(0);
-  for (let i = 0; i < nw; i++) winBuf.set([wr[i].x, wr[i].y, wr[i].x + wr[i].w, wr[i].y + wr[i].h], i * 4);
-  gl.uniform4fv(U.uWin, winBuf); gl.uniform1i(U.uNW, nw);
+  const wr = wins.concat(deskIc), nw = Math.min(wr.length, 12); winBuf.fill(0); winTBuf.fill(0);
+  for (let i = 0; i < nw; i++) { winBuf.set([wr[i].x, wr[i].y, wr[i].x + wr[i].w, wr[i].y + wr[i].h], i * 4); if (wr[i].q) { winQBuf.set(wr[i].q, i * 8); winTBuf[i] = 1; } }
+  gl.uniform4fv(U.uWin, winBuf); gl.uniform1i(U.uNW, nw); gl.uniform4fv(U.uWinQ, winQBuf); gl.uniform1fv(U.uWinT, winTBuf);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 let layoutT = null;
@@ -1110,7 +1159,7 @@ resize(); drawCompass();
 addEventListener('resize', () => { resize(); commit(true); });
 
 /* ---------- host protocol (Deskland-compatible + 'cursor') ---------- */
-let winKey = '', liveAt = -1e9, deskKey = '', lastIcons = null, lastWinsMsg = null, curFrom = -1, deskIc = [];
+let winKey = '', quadKey = '0', liveAt = -1e9, deskKey = '', lastIcons = null, lastWinsMsg = null, curFrom = -1, deskIc = [];
 Span.on('cur', m => { cursor = { x: m.x, y: m.y }; curFrom = m.from; });
 Span.on('curoff', m => { if (curFrom === m.from) cursor = null; });
 const handle = m => {
@@ -1125,12 +1174,23 @@ const handle = m => {
   if (m.t === 'dicons') { const k = devicePixelRatio, P = 18;          // your desktop icons: a small island under each cluster
     deskIc = (m.c || []).map(([l, t, r, b]) => ({ x: l / k + OX - P, y: t / k + OY - P, w: (r - l) / k + 2 * P, h: (b - t) / k + 2 * P }));
     layoutDirty = true; if (lastIcons) handle(lastIcons); return; }
-  if (m.t === 'windows') { lastWinsMsg = m; if (m.live) liveAt = performance.now(); const k = devicePixelRatio; wins = m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k }));
-    const wk = wins.map(w => `${w.x | 0},${w.y | 0},${w.w | 0},${w.h | 0}`).join(';'); if (wk !== winKey) { winKey = wk; wake(); } return; }   // (the land's marks keep off their edges: drawn again)
+  if (m.t === 'windows') { lastWinsMsg = m; if (m.live) liveAt = performance.now(); const k = devicePixelRatio;
+    // (a Stage Manager card comes with the four corners it's drawn turned in: the marks keep off that, not its box)
+    wins = m.r.map(([l, t, r, b], i) => { const q = m.q && m.q[i]; return { x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k, q: q && q.length === 8 ? q.map((v, j) => v / k + (j & 1 ? OY : OX)) : null }; });
+    const wk = wins.map(w => `${w.x | 0},${w.y | 0},${w.w | 0},${w.h | 0}${w.q ? ':' + w.q.map(v => v | 0) : ''}`).join(';'); if (wk !== winKey) { winKey = wk; wake(); }   // (the land's marks keep off their edges: drawn again)
+    // the cards' islands follow their turned shape too; the corners can change without their boxes (the Dock coming
+    // or going moves the middle they're turned toward), and then no new icons message comes: lay the islands again
+    const qk = JSON.stringify(m.q || 0); if (qk !== quadKey) { quadKey = qk; if (lastIcons) handle(lastIcons); }
+    return; }
   if (m.t !== 'icons') return;
   lastIcons = m;
   const k = devicePixelRatio;
-  icons = (m.vis ? m.r.map(([l, t, r, b]) => ({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k })) : []).concat(deskIc);   // (your desktop icons: an island each)
+  // a Stage Manager card: the same window in the windows message (its box here is that one grown by your margin, about
+  // the same middle) gives the corners it's drawn turned in, and so the margin its island is grown by
+  const wm = lastWinsMsg, cardOf = (i, l, t, r, b) => { const q = wm && wm.q && wm.q[i], w = wm && wm.r[i];
+    if (!q || q.length !== 8 || !w || Math.abs(l + r - w[0] - w[2]) > 3 || Math.abs(t + b - w[1] - w[3]) > 3) return null;
+    return { cq: q.map((v, j) => v / k + (j & 1 ? OY : OX)), m: (w[0] - l) / k, cw: (w[2] - w[0]) / k, ch: (w[3] - w[1]) / k }; };
+  icons = (m.vis ? m.r.map(([l, t, r, b], i) => Object.assign({ x: l / k + OX, y: t / k + OY, w: (r - l) / k, h: (b - t) / k }, cardOf(i, l, t, r, b))) : []).concat(deskIc);   // (your desktop icons: an island each)
   const first = !FB;
   if (!first) { pendingCommit = true; wake(); return; }               // laid at the next frame (several updates in one frame: one layout)
   commit(true);

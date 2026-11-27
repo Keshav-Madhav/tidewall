@@ -506,18 +506,47 @@ function localTime(ms, tz) { if (!tz) return new Date(ms).toLocaleTimeString([],
   const d = new Date(ms + tz.off * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }
 // desktop icons sit on the chart the way names do on a printed map: in a halo of bare paper (the wind and the
 // fine lines knocked out round them), with no lettering of the map's own beneath; painted once per change, at ¼ size
-let deskIc = [], iconKey = '', haloT = null;
+let deskIc = [], iconKey = '', haloT = null, haloBase = null, haloWork = null;
 function paintHalo() {
-  const q = 4, c = document.createElement('canvas'); c.width = Math.max(1, Math.ceil(W / q)); c.height = Math.max(1, Math.ceil(H / q));
+  const q = 4, c = haloBase || (haloBase = document.createElement('canvas')); c.width = Math.max(1, Math.ceil(W / q)); c.height = Math.max(1, Math.ceil(H / q));
   const x = c.getContext('2d'); x.fillStyle = '#000'; x.fillRect(0, 0, c.width, c.height); x.scale(1 / q, 1 / q); x.globalCompositeOperation = 'lighter'; x.fillStyle = 'rgba(255,0,0,.2)';
   for (const [l, t, r, b] of deskIc) for (let i = 0; i < 6; i++) { const p = 2 + i * 4; x.beginPath(); x.roundRect(l - p, t - p, r - l + 2 * p, b - t + 2 * p, 10 + p); x.fill(); }   // soft: five steps out from a solid core
   // the map's own names drowned under fast streaks ("Kabul" over a rust band): a narrower halo holds the wind back round them
   x.fillStyle = 'rgba(0,255,0,.34)';
   for (const [cx, cy, w, h, a] of NAME_HALO) { x.save(); x.translate(cx, cy); x.rotate(a); for (let i = 0; i < 3; i++) { const p = 1 + i * 3; x.beginPath(); x.roundRect(-w / 2 - p, -h / 2 - p, w + 2 * p, h + 2 * p, 4 + p); x.fill(); } x.restore(); }
+  uploadHalo();
+}
+// Stage Manager's strip sits on the chart like your icons: each card and badge in its halo of bare paper, true to the
+// card's turned shape and the badge's icon. Painted over the icons' and names' halo (kept, at ¼ size) only when the
+// strip moves: the halo glides with each card, opens out round a new one and closes in on one that goes
+let stripLeft = [], stripKey = 0;
+function uploadHalo() {
+  if (!haloBase) return;
+  const c = haloWork || (haloWork = document.createElement('canvas'));
+  if (c.width !== haloBase.width || c.height !== haloBase.height) { c.width = haloBase.width; c.height = haloBase.height; }
+  const x = c.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'copy'; x.drawImage(haloBase, 0, 0);
+  x.globalCompositeOperation = 'lighter'; x.lineJoin = 'round';
+  for (const it of wins.concat(stripLeft)) {
+    if (!(it.hl > .01)) continue;
+    const s = .6 + .4 * it.hl, cx = it.x + it.w / 2, cy = it.y + it.h / 2;   // (grown out of its middle, and back into it)
+    x.setTransform(s / 4, 0, 0, s / 4, (cx - cx * s) / 4, (cy - cy * s) / 4); x.fillStyle = x.strokeStyle = `rgba(255,0,0,${.2 * it.hl})`;
+    for (let i = 0; i < 5; i++) { const p = 1 + i * 1.8; x.beginPath();        // (narrower than an icon's: the cards stand close, each keeps its own)
+      if (it.qa) { const v = it.qa; x.moveTo(v[0], v[1]); x.lineTo(v[2], v[3]); x.lineTo(v[4], v[5]); x.lineTo(v[6], v[7]); x.closePath(); x.lineWidth = 2 * p; x.fill(); x.stroke(); }
+      else { x.roundRect(it.x - p, it.y - p, it.w + 2 * p, it.h + 2 * p, (it.rad || 3) + p); x.fill(); } }
+  }
   if (!haloT) haloT = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, haloT); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c); c.width = c.height = 1;
+  gl.bindTexture(gl.TEXTURE_2D, haloT); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+function stepStrip(dt) {
+  const k = 1 - Math.exp(-dt * 7); let key = 0, n = 1;                 // (key: a sum over where the strip is; repainted only when it changes)
+  for (const w of wins) { const to = w.sm ? 1 : 0, h = w.hl ?? 0; if (!to && !h) continue;
+    w.hl = Math.abs(to - h) < .004 ? to : h + (to - h) * k;
+    key += n++ * (w.x + w.y * 3.1 + w.w * 5.3 + w.h * 7.7 + w.hl * 1e3 + (w.qa ? w.qa[1] * 2.3 + w.qa[3] * 4.1 + w.qa[5] * 6.7 + w.qa[7] * 8.9 : 0)); }
+  for (const it of stripLeft) { it.hl -= it.hl * k; key += n++ * it.hl * 1e3; }
+  if (stripLeft.length) stripLeft = stripLeft.filter(it => it.hl > .01);
+  if (key !== stripKey) { stripKey = key; uploadHalo(); }
 }
 const onIcon = (l, t, r, b) => deskIc.some(o => l < o[2] && r > o[0] && t < o[3] && b > o[1]);
 // the caption sits bottom left, or bottom right if your icons are there
@@ -548,11 +577,19 @@ function setTargets(list) {
   for (const t of list) {
     let best = null, bd = 1e9;
     for (const c of wins) { if (used.has(c) || c.owner !== t.owner || !c.alive) continue; const d = Math.hypot(c.tx + c.tw / 2 - t.x - t.w / 2, c.ty + c.th / 2 - t.y - t.h / 2); if (d < bd) { bd = d; best = c; } }
-    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h }); }
-    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, sm: t.sm, alive: true }; wins.push(c); used.add(c); }
+    if (best) { used.add(best); Object.assign(best, { tx: t.x, ty: t.y, tw: t.w, th: t.h, sm: t.sm, rad: t.rad, tqn: t.qn }); }
+    else { const c = { x: t.x, y: t.y, w: t.w, h: t.h, tx: t.x, ty: t.y, tw: t.w, th: t.h, owner: t.owner, sm: t.sm, rad: t.rad, tqn: t.qn, qn: t.qn && t.qn.slice(), alive: true }; quadOf(c); wins.push(c); used.add(c); }
   }
-  for (const c of wins) if (!used.has(c)) c.alive = false;
+  for (const c of wins) if (!used.has(c)) { c.alive = false; if (c.hl > .01) stripLeft.push({ x: c.x, y: c.y, w: c.w, h: c.h, rad: c.rad, qa: c.qa, hl: c.hl }); }   // (its halo closes in as it goes)
   wins = wins.filter(c => c.alive);
+}
+// a Stage Manager card is drawn turned: its corners, as fractions of its box (left top, right top, right bottom, left
+// bottom), placed on the box as it glides (qa) and where it's going (tq)
+const SQUARE = [0, 0, 1, 0, 1, 1, 0, 1];
+function quadOf(c) {
+  if (!c.qn) { c.qa = c.tq = null; return; }
+  const a = c.qa || (c.qa = new Float32Array(8)), b = c.tq || (c.tq = new Float32Array(8)), to = c.tqn || SQUARE;
+  for (let i = 0; i < 8; i += 2) { a[i] = c.x + c.qn[i] * c.w; a[i + 1] = c.y + c.qn[i + 1] * c.h; b[i] = c.tx + to[i] * c.tw; b[i + 1] = c.ty + to[i + 1] * c.th; }
 }
 function stepWins(dt) {
   // while you drag, everything attached to a window sits exactly on it (eased at 40/s, a card trailed a fast drag by
@@ -561,7 +598,32 @@ function stepWins(dt) {
   for (const c of wins) {
     const ease = (v, t) => Math.abs(t - v) > .1 ? v + (t - v) * k : t;
     c.x = ease(c.x, c.tx); c.y = ease(c.y, c.ty); c.w = ease(c.w, c.tw); c.h = ease(c.h, c.th);
+    // (a card's turn eases with it: one sliding past the screen's middle turns the other way)
+    if (c.tqn || c.qn) { const to = c.tqn || SQUARE; if (!c.qn) c.qn = SQUARE.slice(); let off = 0;
+      for (let i = 0; i < 8; i++) { const d = to[i] - c.qn[i]; c.qn[i] = Math.abs(d) > 1e-4 ? c.qn[i] + d * k : to[i]; off += Math.abs(to[i] - c.qn[i]); }
+      if (!c.tqn && off < .004) c.qn = null; }
+    quadOf(c);
   }
+}
+// is (x, y) on what you see of a window (where it's going): its box, a badge's rounded icon, a card's turned quad
+function onShape(w, x, y) {
+  if (w.tq) { const q = w.tq; let pos = 0, neg = 0;
+    for (let i = 0; i < 4; i++) { const j = (i + 1) % 4, c = (q[j * 2] - q[i * 2]) * (y - q[i * 2 + 1]) - (q[j * 2 + 1] - q[i * 2 + 1]) * (x - q[i * 2]); if (c > 0) pos++; else if (c < 0) neg++; }
+    return !(pos && neg); }
+  if (x <= w.tx || x >= w.tx + w.tw || y <= w.ty || y >= w.ty + w.th) return false;
+  const r = w.rad || 0; if (!r) return true;
+  const dx = Math.max(w.tx + r - x, x - w.tx - w.tw + r, 0), dy = Math.max(w.ty + r - y, y - w.ty - w.th + r, 0); return dx * dx + dy * dy <= r * r;
+}
+// does a box (l, t, r, b, grown by m) touch what you see of a window: a card's quad by separating axes, else its box
+function boxOnShape(b, w, m = 0) {
+  if (!(b[0] < w.tx + w.tw + m && b[2] > w.tx - m && b[1] < w.ty + w.th + m && b[3] > w.ty - m)) return false;   // (hitR, without a new box each call: it runs every frame)
+  if (!w.tq) return true;
+  const q = w.tq, l = b[0] - m, t = b[1] - m, r = b[2] + m, bt = b[3] + m;
+  for (let i = 0; i < 4; i++) { const j = (i + 1) % 4, nx = q[j * 2 + 1] - q[i * 2 + 1], ny = q[i * 2] - q[j * 2];   // each edge's normal
+    let qmin = 1e9, qmax = -1e9; for (let k = 0; k < 4; k++) { const v = q[k * 2] * nx + q[k * 2 + 1] * ny; qmin = Math.min(qmin, v); qmax = Math.max(qmax, v); }
+    let bmin = 1e9, bmax = -1e9; for (const [px, py] of [[l, t], [r, t], [r, bt], [l, bt]]) { const v = px * nx + py * ny; bmin = Math.min(bmin, v); bmax = Math.max(bmax, v); }
+    if (bmax < qmin || bmin > qmax) return false; }
+  return true;
 }
 
 /* ======================= stations: every window reads the wind where it sits ======================= */
@@ -731,7 +793,7 @@ function stepCards(now) {
   const dt = cardsT ? Math.min(.1, (now - cardsT) / 1000) : 0; cardsT = now; const ke = 1 - Math.exp(-dt * 9);
   nKnock = 0;
   if (CAP_BOX) { const ox = capLeft ? 0 : W - 420, oy = H - 96; knock(ox + CAP_BOX[0], oy + CAP_BOX[1], ox + CAP_BOX[2], oy + CAP_BOX[3], 1); }
-  const seen = new Set(), R = wins.map(w => [w.tx, w.ty, w.tx + w.tw, w.ty + w.th]);
+  const seen = new Set();
   const placed = DESK.n > 1 && DESK.i !== 0 ? [] : [capLeft ? [0, H - 72, 420, H] : [W - 420, H - 72, W, H]];   // (clear of the caption's words too)
   // the biggest windows choose first; each report keeps its spot while that stays clear, else takes the first clear one,
   // and when none is clear (no room above or below, another window or report in the way) it fades rather than sitting
@@ -755,7 +817,7 @@ function stepCards(now) {
     const stale = far && !live;
     const at = (k, x0, y0, ww, hh) => { const [r, b] = CARD_SPOTS[k], x = clamp(r ? x0 + ww - CW - 4 : x0 + 4, 8, W - CW - 8), y = b ? y0 + hh + 12 : y0 - CH - 6; return [x, y]; };
     const fits = k => { const [x, y] = at(k, w.tx, w.ty, w.tw, w.th), box = [x, y, x + CW, y + CH];
-      return y >= AREA_T + 8 && y + CH <= H - 8 && !R.some(o => hitR(box, o, 4)) && !placed.some(o => hitR(box, o, 6)) && !onIcon(x, y, x + CW, y + CH); };   // (never up under the menu bar)
+      return y >= AREA_T + 8 && y + CH <= H - 8 && !wins.some(o => boxOnShape(box, o, 4)) && !placed.some(o => hitR(box, o, 6)) && !onIcon(x, y, x + CW, y + CH); };   // (never up under the menu bar)
     // and of the clear spots, the one off the map's big lettering (a report sat across HIMALAYAS, BAY OF BENGAL), chosen
     // only while the report is off the chart (new, or wiped off to be rewritten): one in sight never hops for a name
     const clash = k => { const [x, y] = at(k, w.tx, w.ty, w.tw, w.th), r = x + (c._tw || 200), b = y + (c._th || 40); let s = 0;
@@ -790,7 +852,7 @@ const cur = { x: -1e4, y: -1e4, vx: 0, vy: 0, on: false, t: 0 };
 let curRead = null;
 function stepCursor(now) {
   if (!curRead) curRead = makeReadout();
-  const over = cur.on && !wins.some(w => cur.x > w.tx && cur.x < w.tx + w.tw && cur.y > w.ty && cur.y < w.ty + w.th) && !onIcon(cur.x - 4, cur.y - 4, cur.x + 4, cur.y + 4);
+  const over = cur.on && !wins.some(w => onShape(w, cur.x, cur.y)) && !onIcon(cur.x - 4, cur.y - 4, cur.x + 4, cur.y + 4);   // (the map is read between Stage Manager's turned cards too)
   if (over) {
     const flip = cur.x > W - 240;                                       // near the right edge the words go to the left
     // the station circle sits just past the pointer's arrow, not under its tip (the arrow hid the circle and the shaft's root)
@@ -848,13 +910,21 @@ function loop0(now) {
   if (now - lastTarget > 5000) { lastTarget = now; buildTarget(false); }          // the hour moves on: the wind with it
   const minute = Math.floor(Date.now() / 60000);
   if (minute !== lastMinute) { lastMinute = minute; palette(); drawCaption(); maybeFetch(); }
-  stepWins(dt); render(dt); stepCards(now); stepCursor(now);
+  stepWins(dt); stepStrip(dt); render(dt); stepCards(now); stepCursor(now);
   fieldMs = fieldMs * .9 + (performance.now() - t0) * .1;
   requestAnimationFrame(loop);
 }
 
 /* ======================= boot + host protocol ======================= */
 function build() { W = innerWidth; H = innerHeight; K = devicePixelRatio; project(); const c = loadCache(); if (c) DATA = c; buildTargets(); palette(); paintMap(); BIG = bigNames(); paintHalo(); drawCaption(); placeCaption(); }   // (the halo reads the names the map just placed)
+// Stage Manager's strip as you see it: an app's badge is its rounded icon; a card is drawn turned, its corners (q: near
+// top, far top, far bottom, near bottom) kept as fractions of its box, left top first. Without corners, its box
+function stripShape(w, q, l, t, r, b) {
+  if (w.owner === 'WindowManager') { w.rad = Math.min(w.w, w.h) * .23; return; }
+  if (!q || r - l < 2 || b - t < 2) return;
+  const o = q[0] <= q[2] ? [0, 1, 2, 3] : [1, 0, 3, 2];               // (a strip on the right: its near edge is the right one)
+  w.qn = []; for (const k of o) w.qn.push((q[k * 2] - l) / (r - l), (q[k * 2 + 1] - t) / (b - t));
+}
 const handle = m => {
   if (m.t === 'desk') { DESK = m; deskSeen(); if (booted) build(); return; }
   if (m.t === 'pause') { paused = !!m.v; if (!paused) wake(); return; }
@@ -867,7 +937,8 @@ const handle = m => {
   if (m.t === 'dicons') { const k = [m.r].join('|'); if (k === iconKey) return; iconKey = k;   // your desktop icons: haloed, and the map lettered round them
     deskIc = (m.r || []).map(([l, t, r, b]) => [l / K, t / K, r / K, b / K]); if (booted) { paintMap(); BIG = bigNames(); paintHalo(); placeCaption(); } return; }
   if (m.t === 'windows') { if (m.live) liveUntil = performance.now() + 250;
-    setTargets(m.r.map(([l, t, r, b], i) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) }))); }
+    setTargets(m.r.map(([l, t, r, b], i) => { const w = { x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K, owner: (m.n || [])[i] || '?', sm: !!(m.sm && m.sm[i]) };
+      if (w.sm) stripShape(w, m.q && m.q[i], l, t, r, b); return w; })); }
 };
 let booted = false, bootAt = Date.now();
 Promise.all([fetch('wind/world.json').then(r => r.json()), fetch('wind/elev.bin').then(r => r.arrayBuffer()).then(b => new Int16Array(b)).catch(() => null)])
