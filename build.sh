@@ -7,7 +7,7 @@ mkdir -p build
 VERSION=$(tr -d " \n" < VERSION)          # the one place the version lives (tools/release.sh bumps it)
 APP=build/Tidewall.app
 # one universal binary: Apple silicon and Intel
-FW="-framework Cocoa -framework WebKit -framework IOKit"
+FW="-framework Cocoa -framework WebKit -framework IOKit -framework CoreLocation"
 # RELEASE=1 (the release workflow) makes a release build; anything else is a development build, which never updates
 # itself and is the only kind that honours the TIDEWALL_UPDATE_* test variables
 DEV="-D TIDEWALL_DEV"; [ "${RELEASE:-}" = 1 ] && DEV=""
@@ -37,6 +37,8 @@ cat > "$APP/Contents/Info.plist" <<PL
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.lifestyle</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSLocationUsageDescription</key><string>Tidewall draws the real sky over you: the sun and shadows in Courtyard, the stars in Celestial Atlas, rising and setting when they really do where you are. Your location is rounded to about 10 km and stays on this Mac.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>Tidewall draws the real sky over you: the sun and shadows in Courtyard, the stars in Celestial Atlas, rising and setting when they really do where you are. Your location is rounded to about 10 km and stays on this Mac.</string>
   <key>NSAppleEventsUsageDescription</key><string>Tidewall asks Finder where your desktop icons are, so the wallpaper can make room for them. It reads their positions only, nothing else.</string>
   <key>NSHumanReadableCopyright</key><string>GPL-3.0. Began as a fork of Deskland.</string>
 </dict></plist>

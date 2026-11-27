@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.1]
+
+### The sky over you
+- Courtyard's sun and Celestial Atlas's stars now follow where you really are. Until now they used the city of your
+  time zone, so all of India saw Kolkata's sun (setting up to an hour before it did for you) and all of China saw
+  Shanghai's. macOS asks once whether Tidewall may use your location; it's rounded to about 10 km and stays on your
+  Mac. Say no and it keeps to your time zone's city, as before.
+
+### Courtyard
+- Your windows cast lantern shadows again at night (1.5.0 had softened them almost away), and the lanterns light a
+  little later in the evening.
+
 ## [1.5.0]
 
 ### A new wall: Courtyard

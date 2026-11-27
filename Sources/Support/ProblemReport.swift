@@ -58,6 +58,7 @@ enum ProblemReport {
       "frame rate \(Cfg.fps == 0 ? "Auto" : "\(Int(Cfg.fps))")",
       "on battery \(["same", "calmer", "paused"][Cfg.battery])",
       "rest when idle \(Cfg.idleMinutes > 0 ? "\(Int(Cfg.idleMinutes)) min" : "never")",
+      "location \(Locator.shared.status)",   // (whether it's on, never where you are)
       "desktop icons \(Cfg.deskIcons ? "on" : "off")",
       "reacts to \(reactsTo)",
       "updates \(Cfg.autoUpdate ? "automatic" : "manual")",
@@ -144,7 +145,8 @@ enum ProblemReport {
 
   private static func scrubPlace(_ s: String) -> String {
     guard let site = Cfg.site else { return s }
-    var t = s
+    // where you are (from Location Services) never goes into a report: coordinates out wherever they appear
+    var t = replace(s, "(lat|lon)=-?[0-9.]+", "$1=<place>")
     let forms = [
       site.tz,
       site.name,

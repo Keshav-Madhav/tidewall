@@ -134,8 +134,16 @@ enum Cfg {
 
   // MARK: where you are
 
-  /// Where the user is, roughly: the city of their time zone, from the system's time-zone table (no location permission).
-  static let site: (name: String, lat: Double, lon: Double, tz: String, cc: String)? = {
+  /// Where the sky is drawn from: where Location Services says you are (Locator: rounded, kept on this Mac), else the
+  /// city of your time zone. The country (for Wind Map's region) always comes from the time zone.
+  static var site: (name: String, lat: Double, lon: Double, tz: String, cc: String)? {
+    guard let h = Locator.here else { return zoneSite }
+    let z = zoneSite
+    return (h.name ?? z?.name ?? "Here", h.lat, h.lon, z?.tz ?? TimeZone.current.identifier, z?.cc ?? "")
+  }
+
+  /// The city of your time zone, from the system's time-zone table (no location permission).
+  private static let zoneSite: (name: String, lat: Double, lon: Double, tz: String, cc: String)? = {
     let tz = TimeZone.current.identifier
     guard let table = try? String(contentsOfFile: "/usr/share/zoneinfo/zone.tab", encoding: .utf8) else { return nil }
     for line in table.split(separator: "\n") where !line.hasPrefix("#") {
@@ -171,7 +179,7 @@ enum Cfg {
 
   /// Wind Map's default region: the user's own country, if the map has it.
   static let homeRegion: String? = {
-    guard let cc = site?.cc, let country = Locale(identifier: "en_US").localizedString(forRegionCode: cc),
+    guard let cc = zoneSite?.cc, !cc.isEmpty, let country = Locale(identifier: "en_US").localizedString(forRegionCode: cc),
           let data = try? Data(contentsOf: themesRoot.appendingPathComponent("variants.json")),
           let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let wind = manifest["wind"] as? [String: Any] else { return nil }

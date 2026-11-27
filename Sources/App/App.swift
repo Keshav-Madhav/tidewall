@@ -177,6 +177,9 @@ final class App: NSObject, NSApplicationDelegate {
     }
     updater.isAway = { [weak self] in self?.asleep ?? false }
     updater.start()
+    // where you are, for the walls that draw the real sky (macOS asks once); a move redraws them
+    Locator.shared.onMove = { [weak self] in self?.reloadAll() }
+    Locator.shared.start()
     if Cfg.notesSeen == nil && !updater.justUpdated { Cfg.notesSeen = Cfg.version }   // a fresh install: nothing to announce
     DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.updater.cameUp() }
     if let from = argValue("--updated-from") { log("[update] updated from \(from) to \(Cfg.version)") }
