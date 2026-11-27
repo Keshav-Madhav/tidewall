@@ -542,6 +542,8 @@ uniform vec4 uLamp[3]; uniform int uNL;
 uniform vec4 uWell;                    // the well: x, y, the water's radius, how far down it lies
 ${PANELS}
 uniform vec4 uCur;                     // the pointer: tip x, y, how much it shows, how high it floats
+uniform vec4 uCurL;                    // at night, the pointer as a light: strength, height, reach
+uniform vec4 uC[${NC}]; uniform int uNC;   // the pots, the well, the trunk: cylinders x, y, r, h (for its shadows)
 uniform sampler2D uArrow;              // the system's arrow pointer: its silhouette (28 x 40 pt, hot spot at 5, 5)
 float curShade(vec2 p, vec4 Lg, float kA) {
   if (uCur.z < .01) return 1.;
@@ -698,6 +700,28 @@ float catShadow(vec2 p, vec4 Lg, float soft) {
   float d = 1e3;
   for (int k = 1; k <= 3; k++) { float f = float(k) / 3.; d = min(d, catEval(p + o * f, h).w + f * 4. * uCat2.w); }
   return smoothstep(-soft - length(o) * .02, 1.5, d); }
+// at night the pointer is a little light hovering over the yard: a lantern's falloff over a short reach (only its box
+// is redrawn as it moves), and what stands between it and the floor (your windows, the pots, the well, the bench)
+// throws its shadow away from it. Returns its light at p (surface height zr) and the direction to it.
+float curCov(float sd, float pen) { return 1. - smoothstep(-pen, pen, sd); }
+// how high the surface at p stands (as the shadow pass works it out): a pot never shadows its own top
+float curZ(vec2 p) { float z = 0.;
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 zz = uZ[i]; if (zz.w > .5 && boxSD(p, uR[i], zz.z) < -3.) z = max(z, zz.x); }
+  for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; if (length(p - c.xy) < c.z - 3.) z = max(z, c.w); }
+  return z; }
+float curLight(vec2 p, float zr, out vec3 Ld) {
+  vec2 L = uCur.xy; float hL = max(uCurL.y - zr, 1.), d = length(p - L);
+  Ld = normalize(vec3(L - p, hL));
+  if (uCurL.x * uCur.z < .005 || d > uCurL.z) return 0.;
+  float irr = pow(hL * hL / (d * d + hL * hL), 1.5) * smoothstep(uCurL.z, uCurL.z * .55, d), occ = 0.;
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; float top = z.x - zr; if (z.w < .5) top = max(top, z.x * .3);
+    if (top <= .5 || top >= hL - 1. || boxSD(L, uR[i], 0.) > uCurL.z) continue; bool gr = abs(z.y - 1.) < .5;   // (one beyond its reach can't shade inside it)
+    for (int k = 1; k <= 3; k++) { if (!gr && k > 1) break; float zz = gr ? top * float(k) / 3. : top;
+      vec2 q = p + (L - p) * (zz / hL); occ = max(occ, curCov(panSD(q, i), .8 + 6. * zz / (hL - zz))); } }
+  for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; if (c.w <= zr + .5 || length(c.xy - L) > uCurL.z + c.z) continue; float u;
+    float dist = segD(c.xy, p, p + (L - p) * min(1., (c.w - zr) / hL), u); float pen = .8 + .05 * length(p - c.xy);
+    occ = max(occ, 1. - smoothstep(c.z - pen, c.z + pen, dist)); }
+  return uCurL.x * uCur.z * irr * (1. - occ); }
 void main() {
   vec2 fc = gl_FragCoord.xy; vec2 p = vec2(fc.x, uDev.y - fc.y) / uK, uv = p / uCss;
   vec4 fl = texture(uFloor, uv), pr = texture(uProps, uv), ph = texture(uPropsH, uv);
@@ -729,10 +753,13 @@ void main() {
   if (uMoonC.b > .0005) catM = catShadow(p, uMoonG, 1.5);
   float sunV = sh.r * cs * catS * selfS, moonV = sh.g * cm * catM * selfM;
   float curS = uSunC.r > .001 ? curShade(p, uSunG, .03) : 1., curM = uMoonC.b > .0005 ? curShade(p, uMoonG, .04) : 1.;
-  sunV *= curS; moonV *= curM;
+  sunV *= curS; moonV *= mix(curM, 1., clamp(uCurL.x * 4., 0., 1.));
   vec3 sky = uSkyC * sh.a * (1. - .22 * seam), lant = uLantC * sh.b * 2.6 * (1. - .25 * seam);
   float rc = mix(1.35, 2.3, onFloor);                                                     // (a low sun's raking boost is for the floor's relief: on a petal it only bleaches)
   vec3 lit = sky * (.74 + .26 * n.z) + uSunC * sunV * min(relief(n, uSunL), rc) + uMoonC * moonV * min(relief(n, uMoonL), rc) + lant;
+  vec3 curLd; float curE = uCurL.x * uCur.z > .005 && length(p - uCur.xy) < uCurL.z ? curLight(p, onFloor > .5 ? 0. : curZ(p), curLd) : 0.;
+  const vec3 CUR_C = vec3(1., .80, .58);                                                    // a warm little light
+  if (curE > 0.) lit += CUR_C * curE * clamp(dot(n, curLd) / max(curLd.z, .2), 0., 1.6);
   if (abs(mat - .353) < .1) lit += (uSunC * sunV + uMoonC * moonV) * .18;                 // leaves let a little light through
   lit += (uSkyC * .45 * sh.a + uMoonC * .3 + vec3(.010, .012, .020) * uNight) * (1. - onFloor);   // pots and plants: dark but present at night (no glow in the shade)
   vec3 col = alb * lit;
@@ -769,6 +796,7 @@ void main() {
       float sv = shadeAt((p - uSunG.xy * ch * uSunG.z) / uCss).r * cs, mv = shadeAt((p - uMoonG.xy * ch * uMoonG.z) / uCss).g * cm;
       vec3 cl = uSkyC * sh0.a * (.6 + .4 * cn.z) + uSunC * sv * min(relief(cn, uSunL), 1.4) + uMoonC * mv * relief(cn, uMoonL) + uLantC * sh0.b * 2.6;   // (the floor's joints under it don't shade a cat)
       cl += uSunC * sv * .12 * smoothstep(-4., 0., c.w);                                    // light caught in the fur at the rim
+      { vec3 cLd; float cE = curLight(p, ch, cLd); if (cE > 0.) cl += CUR_C * cE * clamp(dot(cn, cLd) / max(cLd.z, .2), 0., 1.6); }
       col = mix(col, ca * cl, 1. - smoothstep(-1., 1.5, edge));
     }
   }
@@ -839,7 +867,7 @@ function build() {
 }
 const f32 = (n) => new Float32Array(n * 4);
 const bufR = f32(NR), bufZ = f32(NR), bufC = f32(NC), bufL = f32(3), bufQ = f32(NQ * 2);
-let nPan = 0;   // (how many panels the buffers hold: the crown reads them too)
+let nPan = 0, nCyl = 0;   // (how many panels and cylinders the buffers hold: the crown and the pointer's light read them too)
 function renderShade() {
   const t0 = performance.now();
   let n = 0;
@@ -850,7 +878,7 @@ function renderShade() {
     bufZ.set([z, kind, Math.min(rad, w / 2, h / 2), solid], n * 4); n++; };
   for (const p of panels) addR(p.x, p.y, p.w, p.h, p.z, false, p.badge ? p.w * .23 : p.icon ? 9 : 10, p.sm || p.badge ? .25 : 0, p.qn);   // (.25: Stage Manager's, shading more lightly)
   for (const b of L.boxes) addR(b.x, b.y, b.w, b.h, b.z, b.grounded, b.rad, 1);   // (solid: their tops are surfaces)
-  let c = 0; for (const q of L.cyl) { if (c >= NC) break; bufC.set([q.x, q.y, q.r, q.h], c * 4); c++; }
+  let c = 0; for (const q of L.cyl) { if (c >= NC) break; bufC.set([q.x, q.y, q.r, q.h], c * 4); c++; } nCyl = c;
   L.lamps.forEach((l, i) => bufL.set([l.x, l.y, l.h, l.p], i * 4));
   gl.bindFramebuffer(gl.FRAMEBUFFER, T.shadeF); gl.viewport(0, 0, SW, SHh); gl.disable(gl.SCISSOR_TEST); gl.useProgram(SHADE); gl.bindVertexArray(vao);
   const u = SHADE.u;
@@ -886,10 +914,18 @@ function arrowTex() {
 let lastSceneT = 0;
 function stepCursor(dt) { const d = cur.ta - cur.a; if (Math.abs(d) < .01) { cur.a = cur.ta; return false; } cur.a += d * (1 - Math.exp(-dt * 14)); return true; }
 // where its shadow is (for the sun, and the moon), and where it was last drawn: the boxes to redraw
+// at night the pointer lights the yard; it comes on through dusk, as the lanterns do (its reach: CUR_R pt)
+const CUR_R = 210;
+const curGlow = s => .95 * smooth(-1, -7, s.se);
 function curBoxes(s) {
   if (cur.a < .01 && cur.da < .01) return [];
   if (cur.x === cur.dx && cur.y === cur.dy && cur.a === cur.da) return [];
   const out = [], h = 30 * U;
+  // lit: its whole reach, where it is and where it was (one box when they overlap, as they do while it moves)
+  if (curGlow(s) > .005) { const R = CUR_R * U + 4, a = [cur.x - R, cur.y - R, cur.x + R, cur.y + R], b = [cur.dx - R, cur.dy - R, cur.dx + R, cur.dy + R];
+    if (cur.dx < -900) out.push(a);
+    else if (a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]) out.push([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]);
+    else out.push(a, b); }
   const at = (x, y, d, ct) => { const o = Math.min(h * ct, 70); const tx = x - d[0] * o, ty = y - d[1] * o; out.push([tx - 14, ty - 14, tx + 32, ty + 44]); };
   for (const [x, y] of [[cur.x, cur.y], [cur.dx, cur.dy]]) { if (x < -900) continue;
     if (s.sunC[0] > .001) at(x, y, s.sd, s.sCot); if (s.moonOn) at(x, y, s.md, s.mCot); }
@@ -930,7 +966,8 @@ function render(now) {
   gl.uniform4f(u.uCat0, cat.x, cat.y, cat.hd, cat.curl); gl.uniform4f(u.uCat1, cat.phase, cat.legs, cat.breath, cat.tail); gl.uniform4f(u.uCat2, 0, 0, 9 * U, L.catS);
   gl.uniform4fv(u.uLamp, bufL); gl.uniform1i(u.uNL, L.lamps.length); gl.uniform4f(u.uWell, L.well.x, L.well.y, L.well.r * .72, 40 * U);
   gl.uniform4fv(u.uR, bufR); gl.uniform4fv(u.uZ, bufZ); gl.uniform1i(u.uNR, nPan); gl.uniform4fv(u.uQ, bufQ);
-  gl.uniform4f(u.uCur, cur.x, cur.y, cur.a, 30 * U);
+  gl.uniform4f(u.uCur, cur.x, cur.y, cur.a, 30 * U); gl.uniform4f(u.uCurL, curGlow(s), 80 * U, CUR_R * U, 0);
+  gl.uniform4fv(u.uC, bufC); gl.uniform1i(u.uNC, nCyl);
   if (!boxes) { gl.disable(gl.SCISSOR_TEST); gl.drawArrays(gl.TRIANGLES, 0, 3); cat.px = cat.x; cat.py = cat.y; }
   else { gl.enable(gl.SCISSOR_TEST);
     for (const box of boxes) { const x0 = Math.floor(clamp(box[0], 0, W) * K), x1 = Math.ceil(clamp(box[2], 0, W) * K), y0 = Math.floor(clamp(H - box[3], 0, H) * K), y1 = Math.ceil(clamp(H - box[1], 0, H) * K);
