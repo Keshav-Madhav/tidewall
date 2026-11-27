@@ -499,6 +499,19 @@ uniform vec4 uCat0, uCat1, uCat2;      // x, y, heading, curl | walk phase, legs
 uniform vec4 uLamp[3]; uniform int uNL;
 uniform vec4 uWell;                    // the well: x, y, the water's radius, how far down it lies
 ${PANELS}
+uniform vec4 uCur;                     // the pointer: tip x, y, how much it shows, how high it floats
+// the pointer's shadow: the macOS arrow (tip at 0, 0; with its white rim), cast like a window's, but never far from it
+float arrowSD(vec2 p) {
+  const vec2 v[7] = vec2[7](vec2(-.8, -1.2), vec2(-.8, 18.2), vec2(4.1, 14.2), vec2(7., 20.6), vec2(10.7, 19.), vec2(7.9, 12.9), vec2(13.4, 12.9));
+  float d = dot(p - v[0], p - v[0]), s = 1.;
+  for (int i = 0, j = 6; i < 7; j = i, i++) { vec2 e = v[j] - v[i], w = p - v[i], b = w - e * clamp(dot(w, e) / dot(e, e), 0., 1.);
+    d = min(d, dot(b, b)); bvec3 c = bvec3(p.y >= v[i].y, p.y < v[j].y, e.x * w.y > e.y * w.x); if (all(c) || all(not(c))) s = -s; }
+  return s * sqrt(d); }
+float curShade(vec2 p, vec4 Lg, float kA) {
+  if (uCur.z < .01) return 1.;
+  float off = min(uCur.w * Lg.z, 70.); vec2 q = p + Lg.xy * off - uCur.xy;
+  if (q.x < -12. || q.y < -12. || q.x > 26. || q.y > 34.) return 1.;
+  float pen = .7 + off * kA; return 1. - .78 * uCur.z * (1. - smoothstep(-pen, pen, arrowSD(q))); }
 // the crown stands higher in the yard than your windows float, but they're nearer you: their shadows fall on it too,
 // close by (as they do on a pot), so a card's shadow crossing the tree darkens the leaves, not just the floor under them
 float crownVis(vec2 p, vec4 Lg, float kA) {
@@ -671,6 +684,8 @@ void main() {
   { vec2 q = p + uSunG.xy * uCat2.z * uSunG.z; if (length(q - uCat0.xy) < 80. * uCat2.w && uSunC.r > .001) catS = smoothstep(-1.2 - uCat2.z / uSunG.w * .03, 1.5, catEval(q, ch).w);
     vec2 qm = p + uMoonG.xy * uCat2.z * uMoonG.z; if (length(qm - uCat0.xy) < 80. * uCat2.w && uMoonC.b > .0005) catM = smoothstep(-1.5, 2., catEval(qm, ch).w); }
   float sunV = sh.r * cs * catS * selfS, moonV = sh.g * cm * catM * selfM;
+  float curS = uSunC.r > .001 ? curShade(p, uSunG, .03) : 1., curM = uMoonC.b > .0005 ? curShade(p, uMoonG, .04) : 1.;
+  sunV *= curS; moonV *= curM;
   vec3 sky = uSkyC * sh.a * (1. - .22 * seam), lant = uLantC * sh.b * 2.6 * (1. - .25 * seam);
   float rc = mix(1.35, 2.3, onFloor);                                                     // (a low sun's raking boost is for the floor's relief: on a petal it only bleaches)
   vec3 lit = sky * (.74 + .26 * n.z) + uSunC * sunV * min(relief(n, uSunL), rc) + uMoonC * moonV * min(relief(n, uMoonL), rc) + lant;
@@ -725,7 +740,7 @@ void main() {
     if (lf.a > .004) {
       vec3 la = pow(lf.rgb, vec3(2.2)); vec2 rr = crel / uCan.z; float nz = sqrt(max(.1, 1. - dot(rr, rr) * .8));
       vec3 cn = normalize(vec3(rr * .8, nz)); float dens = textureLod(uLeaf, cuv, 4.).a;
-      float pS = uSunC.r > .001 ? crownVis(p, uSunG, .022) : 1., pM = uMoonC.b > .0005 ? crownVis(p, uMoonG, .03) : 1.;
+      float pS = uSunC.r > .001 ? crownVis(p, uSunG, .022) * curS : 1., pM = uMoonC.b > .0005 ? crownVis(p, uMoonG, .03) * curM : 1.;
       vec3 cl = uSkyC * (.5 + .5 * nz) * mix(1., .6, dens) + uSunC * pS * max(relief(cn, uSunL), .32) * mix(1., .7, dens) * .95 + uMoonC * pM * max(relief(cn, uMoonL), .32) + uLantC * sh.b * 1.4
         + uSunC * pS * .12 * (1. - dens);
       col = mix(col, la * cl, lf.a);
@@ -809,24 +824,41 @@ function crownShadow(d, ct, sE) {
   return [t.x - d[0] * t.zc * ct, t.y - d[1] * t.zc * ct, Math.min(e, 3.2), Math.log2(Math.max(1, pen / texel))];
 }
 let swayT = 0, lastDirty = null;
+// the pointer: its shadow falls on the yard while it's over the wallpaper (not over a window, where it'd fall on that)
+const cur = { x: -999, y: -999, a: 0, ta: 0, dx: -999, dy: -999, da: 0 };
+let lastSceneT = 0;
+function stepCursor(dt) { const d = cur.ta - cur.a; if (Math.abs(d) < .01) { cur.a = cur.ta; return false; } cur.a += d * (1 - Math.exp(-dt * 14)); return true; }
+// where its shadow is (for the sun, and the moon), and where it was last drawn: the boxes to redraw
+function curBoxes(s) {
+  if (cur.a < .01 && cur.da < .01) return [];
+  if (cur.x === cur.dx && cur.y === cur.dy && cur.a === cur.da) return [];
+  const out = [], h = 30 * U;
+  const at = (x, y, d, ct) => { const o = Math.min(h * ct, 70); const tx = x - d[0] * o, ty = y - d[1] * o; out.push([tx - 16, ty - 16, tx + 30, ty + 38]); };
+  for (const [x, y] of [[cur.x, cur.y], [cur.dx, cur.dy]]) { if (x < -900) continue;
+    if (s.sunC[0] > .001) at(x, y, s.sd, s.sCot); if (s.moonOn) at(x, y, s.md, s.mCot); }
+  return out;
+}
 function render(now) {
   const u = COMP.u, s = sky, t = L.tree;
   const sw = s.sway, ox = sw * 2.2 * Math.sin(swayT * .23) * Math.cos(swayT * .11), oy = sw * 1.6 * Math.sin(swayT * .19 + 1);
   const cS = crownShadow(s.sd, s.sCot, s.sSin), cM = crownShadow(s.md, s.mCot, s.mSin);
-  // what has to be redrawn: everything, or (only the leaves and the cat moving) just their corner of the screen
-  let box = null;
-  if (!full) {
+  // what has to be redrawn: everything, or (only the leaves, the cat or the pointer moving) just their corners of the
+  // screen: the leaves and the cat at their own calm pace, the pointer's shadow (a small box) whenever it moves
+  let boxes = null;
+  const cb = curBoxes(s); boxes = [];
+  if (!full && now - lastSceneT >= 1000 / (window.__twCalm || 12) - 6) {   // (the pointer's 60 fps never hurries the leaves)
     const bx = [], add = (x, y, r) => bx.push([x - r, y - r, x + r, y + r]);
     add(t.x, t.y, t.R * 1.25 + 6);
     if (s.sunC[0] > .001) add(cS[0], cS[1], t.R * 1.3 * cS[2] + 12);
     if (s.moonOn) add(cM[0], cM[1], t.R * 1.3 * cM[2] + 12);
     const cr = 75 * L.catS, so = Math.min(12 * U * s.sCot, 180) + 8;
     add(cat.x, cat.y, cr + so); if (cat.px !== undefined) add(cat.px, cat.py, cr + so);
-    box = bx.reduce((a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]);
+    boxes.push(bx.reduce((a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]));
+    lastSceneT = now; cat.px = cat.x; cat.py = cat.y;
   }
+  if (full) { boxes = null; lastSceneT = now; } else boxes.push(...cb);
+  if (boxes && !boxes.length) return;
   gl.viewport(0, 0, cv.width, cv.height); gl.useProgram(COMP); gl.bindVertexArray(vao);
-  if (box) { gl.enable(gl.SCISSOR_TEST); const x0 = Math.floor(clamp(box[0], 0, W) * K), x1 = Math.ceil(clamp(box[2], 0, W) * K), y0 = Math.floor(clamp(H - box[3], 0, H) * K), y1 = Math.ceil(clamp(H - box[1], 0, H) * K);
-    gl.scissor(x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)); partials++; } else gl.disable(gl.SCISSOR_TEST);
   const tx = [T.floor, T.props, T.propsH, T.shade, T.leaf], names = ['uFloor', 'uProps', 'uPropsH', 'uShade', 'uLeaf'];
   tx.forEach((x, i) => { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, x); gl.uniform1i(u[names[i]], i); });
   gl.uniform2f(u.uDev, cv.width, cv.height); gl.uniform2f(u.uCss, W, H); gl.uniform1f(u.uK, cv.width / W); gl.uniform1f(u.uT, swayT);
@@ -840,9 +872,13 @@ function render(now) {
   gl.uniform4f(u.uCat0, cat.x, cat.y, cat.hd, cat.curl); gl.uniform4f(u.uCat1, cat.phase, cat.legs, cat.breath, cat.tail); gl.uniform4f(u.uCat2, 0, 0, 9 * U, L.catS);
   gl.uniform4fv(u.uLamp, bufL); gl.uniform1i(u.uNL, L.lamps.length); gl.uniform4f(u.uWell, L.well.x, L.well.y, L.well.r * .72, 40 * U);
   gl.uniform4fv(u.uR, bufR); gl.uniform4fv(u.uZ, bufZ); gl.uniform1i(u.uNR, nPan); gl.uniform4fv(u.uQ, bufQ);
-  gl.drawArrays(gl.TRIANGLES, 0, 3);
-  gl.disable(gl.SCISSOR_TEST);
-  cat.px = cat.x; cat.py = cat.y; full = false; draws++;
+  gl.uniform4f(u.uCur, cur.x, cur.y, cur.a, 30 * U);
+  if (!boxes) { gl.disable(gl.SCISSOR_TEST); gl.drawArrays(gl.TRIANGLES, 0, 3); cat.px = cat.x; cat.py = cat.y; }
+  else { gl.enable(gl.SCISSOR_TEST);
+    for (const box of boxes) { const x0 = Math.floor(clamp(box[0], 0, W) * K), x1 = Math.ceil(clamp(box[2], 0, W) * K), y0 = Math.floor(clamp(H - box[3], 0, H) * K), y1 = Math.ceil(clamp(H - box[1], 0, H) * K);
+      if (x1 <= x0 || y1 <= y0) continue; gl.scissor(x0, y0, x1 - x0, y1 - y0); gl.drawArrays(gl.TRIANGLES, 0, 3); partials++; }
+    gl.disable(gl.SCISSOR_TEST); }
+  cur.dx = cur.x; cur.dy = cur.y; cur.da = cur.a; full = false; draws++;
 }
 
 /* ======================= the cat: naps in the sun, gets up when the shade reaches it ======================= */
@@ -937,13 +973,14 @@ function loop0(now) {
   if (stepGlide(now)) { shadeDirty = true; full = true; }
   const live = now < liveUntil;
   if (stepPanels(dt)) { shadeDirty = true; if (!live) window.__twSettle && window.__twSettle(150); }
+  const curFading = stepCursor(dt);
   const catMoving = stepCat(now, dt);
   const swaying = sky.sway > .002;
   if (swaying) swayT += dt * sky.sway;
   if (shadeDirty) { renderShade(); shadeDirty = false; full = true; }
   render(now);
   window.__twCalm = catMoving ? 24 : 12;
-  if (catMoving || swaying || glide || live || shadeDirtyNext()) requestAnimationFrame(loop); else running = false;
+  if (catMoving || swaying || glide || live || curFading || shadeDirtyNext()) requestAnimationFrame(loop); else running = false;
 }
 const shadeDirtyNext = () => panels.some(p => p.dying || Math.abs(p.z - p.zt) > .05 || Math.abs(p.x - p.tx) > .05 || Math.abs(p.y - p.ty) > .05 || Math.abs(p.w - p.tw) > .05 || Math.abs(p.h - p.th) > .05);
 // each minute the sun moves about a quarter of a degree: glide the light there over a few seconds
@@ -969,7 +1006,8 @@ const handle = m => {
     if (AREA && AREA.join(',') === k) return; const first = !AREA; AREA = r;
     if (first && performance.now() - bootAt < 2500) { build(); placeCat(); wake(); }   // (only while nothing has really been seen yet: later the yard stays put)
     return; }
-  if (m.t === 'cursor' || m.t === 'cursorOff') return;
+  if (m.t === 'cursor') { cur.x = m.x / K; cur.y = m.y / K; cur.ta = m.w ? 0 : 1; wake(); return; }
+  if (m.t === 'cursorOff') { cur.ta = 0; wake(); return; }
   if (m.t === 'dicons') { iconRects = (m.a || m.i || []).map(([l, t, r, b]) => ({ x: l / K, y: t / K, w: (r - l) / K, h: (b - t) / K })); sendPanels(false); wake(); scheduleCatCheck(2500); return; }
   if (m.t === 'windows') { lastWinMsg = m; if (m.live) liveUntil = performance.now() + 250; sendPanels(!!m.live); window.__twSettle && window.__twSettle(300); wake(); scheduleCatCheck(m.live ? 3000 : 2000); }
 };
@@ -984,7 +1022,7 @@ window.__dbg = () => { const s = sky, f = v => v.toFixed(1);
   let when = ''; try { when = new Date(s.ms).toLocaleString('en-GB', { timeZone: SITE.tz, hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' }); } catch (_) {}
   return `run=${running} paused=${paused} fps=${fpsEMA | 0} draws=${draws} partial=${partials} rafs=${rafs} t=${when} ${SITE.name} sun=${f(s.se)}°/${f(s.saz)}° moon=${f(s.me)}° ${(s.frac * 100) | 0}% lant=${s.lant.toFixed(2)} sway=${s.sway.toFixed(2)} cat=${cat.state}@${cat.x | 0},${cat.y | 0} panels=${panels.length} shade=${shadeMs.toFixed(2)}ms ${SW}x${SHh}`; };
 const host = window.chrome && window.chrome.webview;
-if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('nocursor'); host.postMessage('ready'); }   // (the yard ignores the pointer)
+if (host) { host.addEventListener('message', ev => handle(JSON.parse(ev.data))); host.postMessage('ready'); }
 else { handle({ t: 'windows', r: [[W * .2 * K, H * .22 * K, W * .55 * K, H * .6 * K], [W * .58 * K, H * .52 * K, W * .86 * K, H * .82 * K]], n: ['Notes', 'Safari'] }); }
 </script>
 </body>
