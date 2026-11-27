@@ -4,13 +4,29 @@
 
 ### A new wall: Courtyard
 - A sunlit Mediterranean courtyard seen from above, and your windows cast real shadows in it: from the actual sun at
-  your location, long and golden in the morning, short at noon, stretching amber towards evening. At night the moon
-  takes over, with warm lantern light along the walls.
-- Pale limestone flags with sunken joints that catch the light, an olive tree whose dappled shade sways, pots of
-  rosemary, lavender and geranium, a bench, an old well, and a cat that naps in whatever sun is left, getting up and
-  moving when the shade reaches it.
-- Light on your battery: the sun moves slowly, so the yard is redrawn only when it or your windows move; at night it
-  rests completely.
+  your location, long and golden in the morning, short at noon, stretching amber towards evening, then a slow dusk.
+  At night the moon takes over, with warm lantern light pooling along the walls.
+- Terracotta octagons with little glazed squares, set in recessed joints that catch the light at a low sun; an olive
+  tree in the corner whose dappled shade sways; pots of rosemary, lavender, geranium and basil; a wooden bench with a
+  cup of tea and a book; an old well; and a ginger cat that naps in whatever sun is left, getting up and moving when
+  the shade reaches it.
+- Shadows fall on everything: the floor, the pots, the leaves of the olive. They keep up with a window you drag, and
+  come and go with windows you open and close. Your pointer casts one too.
+- Light on your battery: the sun moves slowly, so the yard is redrawn only where something moves; at night it rests.
+
+### Stage Manager, as you see it
+- Every wall now meets Stage Manager's strip as it's drawn: each card turned in perspective, each app's icon at its
+  real size (they were plain boxes, the icons twice too big). Snowfall settles snow on each card's sloped top; Koi Reef
+  grows a small reef round each card; Garden Plan's bed follows the cards, flowering in the gaps; Model Railway keeps
+  its villages out from under them; Gallery's niche fits them and each card casts its own shadow; Courtyard, Celestial
+  Atlas, Estate, Ink Map, Meadow, Beach and Wind Map follow their turned shapes too.
+- The pointer counts as over the wallpaper in the empty corners round a card or an icon (Lava Lamp and Wind Tunnel
+  stopped following it there).
+
+### Fixes
+- A window opened or closed from the keyboard (⌘N, ⌘W) reaches the walls at once; it could take a quarter of a second.
+- Full-screen apps no longer reshape the walls: switching back to the desktop from one made every wall lay itself out
+  round a giant window as it slid away.
 
 ## [1.4.3]
 

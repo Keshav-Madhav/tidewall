@@ -431,11 +431,11 @@ void main() {
     cT = mix(cT, vec3(.88, .84, .78), .22 * smoothstep(.72, .92, fbm(p * .02 + 7.)));    // salt bloom
     cT *= 1. - .12 * (1. - smoothstep(1., 6., -dOct));                                     // burnt rims
     // a few cracked tiles: a hairline that kinks once and sends off a short branch, stopping short of the joints
-    if (h21(cell + 9.) < .07) { float a0 = h21(cell + 4.) * 6.283, a1 = a0 + 2.2 + h21(cell + 6.) * 1.8;
+    if (h21(cell + 9.) < .045) { float a0 = h21(cell + 4.) * 6.283, a1 = a0 + 2.2 + h21(cell + 6.) * 1.8;
       vec2 A = vec2(cos(a0), sin(a0)) * uTile * .55, Bk = (vec2(h21(cell + 8.), h21(cell + 10.)) - .5) * uTile * .35, C = vec2(cos(a1), sin(a1)) * uTile * .55;
       vec2 Dn = Bk + vec2(cos(a0 + 1.9), sin(a0 + 1.9)) * uTile * (.12 + .14 * h21(cell + 12.));
       float cr = min(min(segDist(l, A, Bk), segDist(l, Bk, C)), segDist(l, Bk, Dn) + .2) + .3 * (vn(l * 1.3 + cell) - .5);
-      cT *= 1. - .32 * (1. - smoothstep(.2, .85, cr)) * smoothstep(.5, 3., -dOct); }
+      cT *= 1. - .24 * (1. - smoothstep(.2, .85, cr)) * smoothstep(.5, 3., -dOct); }
     float dome = 1. - clamp(length(l) / (uTile * .62), 0., 1.);                           // the face a little domed, its edges worn round
     float hT = .615 + .03 * dome + .008 * mid - .24 * (1. - smoothstep(0., 3. + 1.4 * vn(p * .5 + cell), -dOct - g * .5))
       - .008 * smoothstep(.88, .98, vn(p * .7 + cell * 3.));                               // a little soft pitting
