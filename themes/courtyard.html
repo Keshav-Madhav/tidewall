@@ -411,7 +411,7 @@ const NR = 64, NC = 16;
 const SHADE = prog(`#version 300 es
 precision highp float; out vec4 o;
 uniform vec2 uCss; uniform float uS;
-uniform vec4 uR[${NR}]; uniform vec4 uZ[${NR}]; uniform int uNR;     // rect l,t,r,b | height, grounded, corner radius, -
+uniform vec4 uR[${NR}]; uniform vec4 uZ[${NR}]; uniform int uNR;     // rect l,t,r,b | height, grounded, corner radius, solid (a surface)
 uniform vec4 uC[${NC}]; uniform int uNC;                                 // cylinders: x, y, r, h
 uniform vec4 uSun, uMoon; uniform float uSunOn, uMoonOn, uLantOn;     // dx, dy, cot(elevation), sin(elevation)
 uniform vec4 uL[3]; uniform int uNL;                                     // lanterns: x, y, height, power
@@ -419,42 +419,50 @@ uniform vec2 uWall;                                                      // widt
 float boxSD(vec2 q, vec4 b, float rad) { vec2 c = (b.xy + b.zw) * .5, e = (b.zw - b.xy) * .5 - rad; vec2 d = abs(q - c) - e; return length(max(d, 0.)) + min(max(d.x, d.y), 0.) - rad; }
 float cov(float sd, float pen) { return 1. - smoothstep(-pen, pen, sd); }
 float segD(vec2 p, vec2 a, vec2 b, out float u) { vec2 pa = p - a, ba = b - a; u = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-4), 0., 1.); return length(pa - ba * u); }
-// how much of a directional light (sun or moon) reaches the floor at p
-float dirVis(vec2 p, vec4 Lg, float kA) {
+// how high the surface at p stands: the floor, or the top of a pot, the well, the planter, the bench. A caster only
+// shades what lies below its own top, and only by the height between them (a pot never shades itself, and its
+// neighbour's shadow climbs onto it shortened, not as if it were still on the floor)
+float zAt(vec2 p) { float z = 0.;
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 zz = uZ[i]; if (zz.w > .5 && boxSD(p, uR[i], zz.z) < 0.) z = max(z, zz.x); }
+  for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; if (length(p - c.xy) < c.z) z = max(z, c.w); }
+  return z; }
+// how much of a directional light (sun or moon) reaches the surface at p (height zr)
+float dirVis(vec2 p, float zr, vec4 Lg, float kA) {
   vec2 d = Lg.xy; float ct = Lg.z, sE = Lg.w, occ = 0.;
-  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 b = uR[i], z = uZ[i];
-    if (z.y < .5) { vec2 q = p + d * z.x * ct; occ = max(occ, cov(boxSD(q, b, z.z), .6 + z.x / sE * kA)); }
-    else for (int k = 1; k <= 3; k++) { float zz = z.x * float(k) / 3.; vec2 q = p + d * zz * ct; occ = max(occ, cov(boxSD(q, b, z.z), .6 + zz / sE * kA)); } }
-  for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u;
-    float dist = segD(p, c.xy, c.xy - d * c.w * ct, u); float pen = .6 + u * c.w / sE * kA;
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 b = uR[i], z = uZ[i]; float top = z.x - zr; if (top <= .5) continue;
+    if (z.y < .5) { vec2 q = p + d * top * ct; occ = max(occ, cov(boxSD(q, b, z.z), .6 + top / sE * kA)); }
+    else for (int k = 1; k <= 3; k++) { float zz = top * float(k) / 3.; vec2 q = p + d * zz * ct; occ = max(occ, cov(boxSD(q, b, z.z), .6 + zz / sE * kA)); } }
+  for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u, top = c.w - zr; if (top <= .5) continue;
+    float dist = segD(p, c.xy, c.xy - d * top * ct, u); float pen = .6 + u * top / sE * kA;
     occ = max(occ, 1. - smoothstep(c.z - pen, c.z + pen, dist)); }
   // the walls round the yard: half-planes of height uWall.y
   vec4 dw = vec4(p.x, uCss.x - p.x, p.y, uCss.y - p.y) - uWall.x;       // distance in from each wall's face
   vec4 nd = vec4(-d.x, d.x, -d.y, d.y);                                    // how far each step toward the light goes toward that wall
-  for (int k = 0; k < 4; k++) if (nd[k] > .02 && dw[k] > 0.) { float s = dw[k] / nd[k], len = uWall.y * ct; float pen = .6 + s * kA * 1.4;
+  for (int k = 0; k < 4; k++) if (nd[k] > .02 && dw[k] > 0.) { float s = dw[k] / nd[k], len = max(uWall.y - zr, 0.) * ct; float pen = .6 + s * kA * 1.4;
     occ = max(occ, 1. - smoothstep(len - pen, len + pen, s)); }
   return 1. - occ;
 }
 void main() {
-  vec2 p = gl_FragCoord.xy / uS;
-  float sv = uSunOn > .5 ? dirVis(p, uSun, .022) : 1.;
-  float mv = uMoonOn > .5 ? dirVis(p, uMoon, .03) : 1.;
+  vec2 p = gl_FragCoord.xy / uS; float zr = zAt(p);
+  float sv = uSunOn > .5 ? dirVis(p, zr, uSun, .022) : 1.;
+  float mv = uMoonOn > .5 ? dirVis(p, zr, uMoon, .03) : 1.;
   // the sky's own shade: panels hide a little of the sky from the floor round them; pots and walls darken their feet
   float sky = 1.;
-  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; float w = z.y > .5 ? .5 : .2 * smoothstep(0., 30., z.x);
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; if (z.x <= zr + .5) continue; float w = z.y > .5 ? .5 : .2 * smoothstep(0., 30., z.x - zr);
     sky *= 1. - w * cov(boxSD(p, uR[i], z.z), 10. + z.x * 1.4); }
-  for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float dd = length(p - c.xy); sky *= 1. - .45 * (1. - smoothstep(c.z, c.z + c.w * .9, dd)); }
-  float dWall = min(min(p.x, uCss.x - p.x), min(p.y, uCss.y - p.y)) - uWall.x; sky *= 1. - .28 * exp(-max(dWall, 0.) / 26.);
+  for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; if (c.w <= zr + .5) continue; float dd = length(p - c.xy); sky *= 1. - .45 * (1. - smoothstep(c.z, c.z + c.w * .9, dd)); }
+  float dWall = min(min(p.x, uCss.x - p.x), min(p.y, uCss.y - p.y)) - uWall.x; sky *= 1. - .28 * (1. - smoothstep(0., uWall.y, zr)) * exp(-max(dWall, 0.) / 26.);
   // the lanterns: point lights, each blocked by what stands between it and the floor
   float E = 0.;
-  if (uLantOn > .001) for (int k = 0; k < 3; k++) { if (k >= uNL) break; vec4 Lk = uL[k]; float hL = Lk.z; vec2 dv = p - Lk.xy; float r2 = dot(dv, dv) + hL * hL;
+  if (uLantOn > .001) for (int k = 0; k < 3; k++) { if (k >= uNL) break; vec4 Lk = uL[k]; float hL = max(Lk.z - zr, 1.); vec2 dv = p - Lk.xy; float r2 = dot(dv, dv) + hL * hL;
     float irr = pow(hL * hL / r2, 1.5) + .008 * exp(-sqrt(r2) / (hL * 3.)); float occ = 0.;
     for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 z = uZ[i]; vec4 b = uR[i];
       int nk = z.y > .5 ? 3 : 1;
-      for (int s = 1; s <= 3; s++) { if (s > nk) break; float zz = z.y > .5 ? z.x * float(s) / 3. : z.x; if (zz >= hL - 1.) continue;
+      float top = z.x - zr; if (top <= .5) continue;
+      for (int s = 1; s <= 3; s++) { if (s > nk) break; float zz = z.y > .5 ? top * float(s) / 3. : top; if (zz >= hL - 1.) continue;
         vec2 q = p + (Lk.xy - p) * (zz / hL); float pen = .8 + 7. * zz / (hL - zz); occ = max(occ, cov(boxSD(q, b, z.z), pen)); } }
-    for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u;
-      float dist = segD(c.xy, p, p + (Lk.xy - p) * min(1., c.w / hL), u); float pen = .8 + .06 * length(p - c.xy);
+    for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u; if (c.w <= zr + .5) continue;
+      float dist = segD(c.xy, p, p + (Lk.xy - p) * min(1., (c.w - zr) / hL), u); float pen = .8 + .06 * length(p - c.xy);
       occ = max(occ, 1. - smoothstep(c.z - pen, c.z + pen, dist)); }
     E += Lk.w * irr * (1. - occ); }
   o = vec4(sv, mv, E * uLantOn * .5, sky);
@@ -625,7 +633,8 @@ void main() {
     vec2 qm = p + uMoonG.xy * uCat2.z * uMoonG.z; if (length(qm - uCat0.xy) < 80. * uCat2.w && uMoonC.b > .0005) catM = smoothstep(-1.5, 2., catEval(qm, ch).w); }
   float sunV = sh.r * cs * catS * selfS, moonV = sh.g * cm * catM * selfM;
   vec3 sky = uSkyC * sh.a * (1. - .22 * seam), lant = uLantC * sh.b * 2.6 * (1. - .25 * seam);
-  vec3 lit = sky * (.74 + .26 * n.z) + uSunC * sunV * relief(n, uSunL) + uMoonC * moonV * relief(n, uMoonL) + lant;
+  float rc = mix(1.35, 2.3, onFloor);                                                     // (a low sun's raking boost is for the floor's relief: on a petal it only bleaches)
+  vec3 lit = sky * (.74 + .26 * n.z) + uSunC * sunV * min(relief(n, uSunL), rc) + uMoonC * moonV * min(relief(n, uMoonL), rc) + lant;
   if (abs(mat - .353) < .1) lit += (uSunC * sunV + uMoonC * moonV) * .18;                 // leaves let a little light through
   lit += (uSkyC * 1.6 + uMoonC * .5 + vec3(.010, .012, .020) * uNight) * (1. - onFloor);         // pots and plants: dark but present at night
   vec3 col = alb * lit;
@@ -659,7 +668,7 @@ void main() {
     if (lf.a > .004) {
       vec3 la = pow(lf.rgb, vec3(2.2)); vec2 rr = crel / uCan.z; float nz = sqrt(max(.1, 1. - dot(rr, rr) * .8));
       vec3 cn = normalize(vec3(rr * .8, nz)); float dens = textureLod(uLeaf, cuv, 4.).a;
-      vec3 cl = uSkyC * (.5 + .5 * nz) * mix(1., .6, dens) + uSunC * relief(cn, uSunL) * mix(1., .7, dens) * .95 + uMoonC * relief(cn, uMoonL) + uLantC * sh.b * 1.4
+      vec3 cl = uSkyC * (.5 + .5 * nz) * mix(1., .6, dens) + uSunC * max(relief(cn, uSunL), .32) * mix(1., .7, dens) * .95 + uMoonC * max(relief(cn, uMoonL), .32) + uLantC * sh.b * 1.4
         + uSunC * .12 * (1. - dens);
       col = mix(col, la * cl, lf.a);
     }
@@ -669,7 +678,7 @@ void main() {
   col *= uExpo;
   { float l = dot(col, vec3(.2126, .7152, .0722)), t = l * (2.51 * l + .03) / (l * (2.43 * l + .59) + .14);
     vec3 c2 = col * (t / max(l, 1e-5)); float over = max(max(c2.r, c2.g), c2.b);
-    col = clamp(mix(c2, vec3(t), clamp(over - 1., 0., 1.)), 0., 1.); }
+    col = clamp(mix(c2, vec3(t), clamp(over - 1., 0., 1.) * .3), 0., 1.); }   // (only a little toward white: a sunlit red petal stays red)
   o = vec4(pow(col, vec3(1. / 2.2)) + (fract(sin(dot(fc, vec2(12.9898, 78.233))) * 43758.5453) - .5) / 255., 1.);   // a dither: no banding in the dark
 }`, 'comp');
 
@@ -715,9 +724,9 @@ const bufR = f32(NR), bufZ = f32(NR), bufC = f32(NC), bufL = f32(3);
 function renderShade() {
   const t0 = performance.now();
   let n = 0;
-  const addR = (x, y, w, h, z, grounded, rad) => { if (n >= NR || w < 1 || h < 1) return; bufR.set([x, y, x + w, y + h], n * 4); bufZ.set([z, grounded ? 1 : 0, Math.min(rad, w / 2, h / 2), 0], n * 4); n++; };
+  const addR = (x, y, w, h, z, grounded, rad, solid = 0) => { if (n >= NR || w < 1 || h < 1) return; bufR.set([x, y, x + w, y + h], n * 4); bufZ.set([z, grounded ? 1 : 0, Math.min(rad, w / 2, h / 2), solid], n * 4); n++; };
   for (const p of panels) addR(p.x, p.y, p.w, p.h, p.z, false, p.icon ? 9 : 10);
-  for (const b of L.boxes) addR(b.x, b.y, b.w, b.h, b.z, b.grounded, b.rad);
+  for (const b of L.boxes) addR(b.x, b.y, b.w, b.h, b.z, b.grounded, b.rad, 1);   // (solid: their tops are surfaces)
   let c = 0; for (const q of L.cyl) { if (c >= NC) break; bufC.set([q.x, q.y, q.r, q.h], c * 4); c++; }
   L.lamps.forEach((l, i) => bufL.set([l.x, l.y, l.h, l.p], i * 4));
   gl.bindFramebuffer(gl.FRAMEBUFFER, T.shadeF); gl.viewport(0, 0, SW, SHh); gl.disable(gl.SCISSOR_TEST); gl.useProgram(SHADE); gl.bindVertexArray(vao);
