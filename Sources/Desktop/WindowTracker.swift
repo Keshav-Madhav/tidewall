@@ -1,7 +1,7 @@
 import Cocoa
 
-/// Where every window is, from the window list (which needs no permission): a look 8 times a second while nothing moves,
-/// at 120 Hz from the moment the mouse moves or an app activates, hides, launches or quits.
+/// Where every window is, from the window list (which needs no permission): a look 4 times a second while nothing moves,
+/// at 120 Hz from the moment the mouse moves or an app activates, hides, launches or quits, or a ⌘ shortcut is pressed.
 final class Tracker {
   var onUpdate: (_ rects: [CGRect], _ live: Bool) -> Void = { _, _ in }
   var onCursor: (CGPoint) -> Void = { _ in }
@@ -18,9 +18,14 @@ final class Tracker {
   static var widgetRects = Set<String>()
   private static var widgetPid: [pid_t: Bool] = [:]
 
-  /// (8 a second: a window opened or closed from the keyboard, which nothing tells us of, showed on the wall up to a
-  /// quarter second late. A look costs about a millisecond. With windows ignored, 4 is plenty)
-  private static var idleInterval: Double { Cfg.reactWindows ? 0.125 : 0.25 }
+  private static let idleInterval = 0.25
+  /// A window opened or closed from the keyboard (⌘N, ⌘W) is news nothing sends us, and at 4 looks a second it reached
+  /// the walls up to a quarter second late. Watching keys needs a permission we don't ask for, but the system's clock of
+  /// the last key press doesn't: read 30 times a second (microseconds), it sets off 120 Hz looks for half a second after
+  /// a ⌘ shortcut, and one look just after any other key (Esc or Return closing a panel), at most 8 a second.
+  private static var watchKeys: Bool { Cfg.reactWindows && !idle && !allHidden }
+  private var restTick: Double { Self.watchKeys ? min(slowInterval, 1.0 / 30) : slowInterval }
+  private var lastKeyAt = 0.0, keyLookAt = 0.0
 
   private let me = ProcessInfo.processInfo.processIdentifier
   private var timer: Timer?
@@ -42,7 +47,7 @@ final class Tracker {
   private var stats = PollStats()
 
   func start() {
-    schedule(interval: slowInterval)
+    schedule(interval: restTick)
     let mouse: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDown, .leftMouseDragged, .leftMouseUp]
     mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouse) { [weak self] e in
       guard let self, !Self.idle else { return }
@@ -79,13 +84,13 @@ final class Tracker {
 
   /// Ticks every `interval`; a faster timer already running stays (a press beats the pointer moving).
   private func schedule(interval: Double) {
-    let fast = interval < slowInterval
+    let fast = interval < restTick
     if timer != nil && (interval == timerInterval || (fast && fastTimer && timerInterval < interval)) { return }
     timer?.invalidate()
     fastTimer = fast
     timerInterval = interval
     let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.tick() }
-    t.tolerance = fast ? 0.002 : 0.03
+    t.tolerance = fast ? 0.002 : min(0.03, interval * 0.25)
     RunLoop.main.add(t, forMode: .common)
     timer = t
   }
@@ -93,16 +98,27 @@ final class Tracker {
   private func tick() {
     let t = now()
     trackCursor(at: t)
+    var keyLook = false
+    if Self.watchKeys {
+      let at = t - CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
+      if lastKeyAt == 0 { lastKeyAt = at }
+      else if at > lastKeyAt + 0.001 {
+        lastKeyAt = at
+        if CGEventSource.flagsState(.combinedSessionState).contains(.maskCommand) { burst(0.5) }
+        else if keyLookAt == 0 { keyLookAt = max(t + 0.05, lastPoll + 0.125) }
+      }
+      if keyLookAt > 0 && t >= keyLookAt { keyLookAt = 0; keyLook = true }
+    }
     let dragging = NSEvent.pressedMouseButtons & 1 != 0 || SimInput.pressed
     let fast = dragging || t < burstUntil
-    if !fast && t > mouseUntil && (fastTimer || timerInterval != slowInterval) { schedule(interval: slowInterval) }
+    if !fast && t > mouseUntil && (fastTimer || timerInterval != restTick) { schedule(interval: restTick) }
     else if !fast && t > pressUntil && timerInterval == Self.fastInterval {   // the press is over, the pointer still moving
       timer?.invalidate(); timer = nil
-      schedule(interval: Self.wantsCursor ? Self.cursorInterval : slowInterval)
+      schedule(interval: Self.wantsCursor ? Self.cursorInterval : restTick)
     }
     holdLowLatency(fast, at: t)
     // fast: every tick, as the page paces itself to its own fps
-    guard fast || t - lastPoll >= (Self.idle ? 2 : slowInterval) else { return }
+    guard fast || keyLook || t - lastPoll >= (Self.idle ? 2 : slowInterval) else { return }
     if fast && lastPoll > 0 { stats.maxGap = max(stats.maxGap, t - lastPoll) }
     lastPoll = t
 

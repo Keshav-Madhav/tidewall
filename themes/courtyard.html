@@ -146,8 +146,8 @@ function layout() {
 
 /* ======================= your windows (and icons): panels a little above the floor ======================= */
 // Each tracked panel eases to where it is (snaps while you drag it, so its shadow tracks every frame), rises from the
-// floor when it opens (its shadow slides out from under it, in about a tenth of a second) and sinks and shrinks to its
-// middle when it closes (gone in under a tenth: the window itself is already gone by the time we hear of it).
+// floor when it opens (its shadow slides out from under it, in about 25 ms) and sinks and shrinks to its middle when it
+// closes (as fast: the window itself is already gone by the time we hear of it).
 let panels = [], liveUntil = 0, lastWinChange = 0, lastWinMsg = null, iconRects = [];
 function setPanels(list, live) {
   const used = new Set(), next = [];
@@ -182,7 +182,7 @@ function setPanels(list, live) {
   panels = next; shadeDirty = true; lastWinChange = performance.now();
 }
 function stepPanels(dt) {
-  let moving = false; const k = 1 - Math.exp(-dt * 16), kz = 1 - Math.exp(-dt * 30), kd = 1 - Math.exp(-dt * 36);
+  let moving = false; const k = 1 - Math.exp(-dt * 16), kz = 1 - Math.exp(-dt * 90), kd = 1 - Math.exp(-dt * 110);   // (in and out over 2-3 frames: a morph, not a pop, and no lag you can see)
   const now = performance.now(), live = now < liveUntil, LEAD = .032;
   for (const p of panels) {
     if (live && p.mt && (p.vx || p.vy)) {   // in your hand: where it is now, not where it was when last reported
