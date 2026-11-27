@@ -85,9 +85,10 @@ function moonIllum(ms) { const d = toDays(ms), s = sunCoords(d), m = moonCoords(
 // linear RGB, already scaled by strength. Sun: what a flat floor receives. Sky: the fill in every shadow (blue by day).
 const SUN_K0 = [[-1, [0, 0, 0]], [0, [.30, .09, .03]], [3, [1.10, .42, .13]], [6, [1.60, .78, .32]], [12, [2.05, 1.32, .78]],
   [20, [2.20, 1.66, 1.12]], [35, [2.32, 1.98, 1.52]], [90, [2.40, 2.14, 1.78]]];
-const SKY_K = [[-90, [.010, .014, .030]], [-18, [.010, .014, .030]], [-12, [.016, .024, .055]], [-6, [.050, .070, .150]],
-  [-3, [.100, .110, .210]], [0, [.180, .165, .230]], [3, [.240, .230, .290]], [6, [.300, .310, .390]], [12, [.360, .400, .520]],
-  [20, [.400, .460, .620]], [35, [.420, .500, .680]], [90, [.430, .520, .700]]];
+// (twilight holds a while: a yard just after sunset is dusk, not darker than the middle of the night)
+const SKY_K = [[-90, [.011, .015, .032]], [-18, [.011, .015, .032]], [-12, [.026, .034, .075]], [-6, [.078, .092, .190]],
+  [-3, [.130, .135, .250]], [0, [.190, .170, .245]], [3, [.240, .230, .300]], [6, [.295, .310, .410]], [12, [.345, .400, .560]],
+  [20, [.380, .455, .670]], [35, [.395, .495, .740]], [90, [.405, .515, .760]]];
 const SUN_K = SUN_K0.map(([e, c]) => [e, c.map(v => v * .46)]);
 function keyAt(T, x) { if (x <= T[0][0]) return T[0][1]; for (let i = 1; i < T.length; i++) if (x <= T[i][0]) {
   const [a, ca] = T[i - 1], [b, cb] = T[i], t = smooth(0, 1, (x - a) / (b - a)); return ca.map((v, j) => lerp(v, cb[j], t)); } return T[T.length - 1][1]; }
@@ -247,25 +248,38 @@ function paintProps() {
       b.strokeStyle = hm(.95 - r1 / r * .3, F); b.lineWidth = 1.7 * u; b.beginPath(); b.moveTo(x + Math.cos(an) * r0, y + Math.sin(an) * r0); b.lineTo(x + Math.cos(an + .15) * r1, y + Math.sin(an + .15) * r1); b.stroke();
       if (R() < .12) disc(a, x + Math.cos(an) * r1 * .9, y + Math.sin(an) * r1 * .9, 1.3 * u, rgb(.62, .68, .90)); }
     if (p.kind === 'basil') for (let i = 0; i < 26; i++) { const an = i * 2.4, rr = r * (.85 - i / 26 * .75), g = .5 + R() * .15;
-      const lx = x + Math.cos(an) * rr, ly = y + Math.sin(an) * rr; leaf(lx, ly, 8 * u, 5.5 * u, an, rgb(.25 * g * 1.6, .52 * g * 1.5, .14 * g * 1.4), .7 + (1 - rr / r) * .3);
-      a.strokeStyle = rgb(.45, .68, .32, .7); a.lineWidth = .7 * u; a.beginPath(); a.moveTo(lx - Math.cos(an) * 6 * u, ly - Math.sin(an) * 6 * u); a.lineTo(lx + Math.cos(an) * 6 * u, ly + Math.sin(an) * 6 * u); a.stroke(); }
+      const lx = x + Math.cos(an) * rr, ly = y + Math.sin(an) * rr; leaf(lx, ly, 8 * u, 5.5 * u, an, rgb(.15 + .14 * g, .28 + .2 * g, .10 + .07 * g), .7 + (1 - rr / r) * .3);
+      a.strokeStyle = rgb(.40, .52, .30, .4); a.lineWidth = .6 * u; a.beginPath(); a.moveTo(lx - Math.cos(an) * 6 * u, ly - Math.sin(an) * 6 * u); a.lineTo(lx + Math.cos(an) * 6 * u, ly + Math.sin(an) * 6 * u); a.stroke(); }
     if (p.kind === 'lavender') { for (let i = 0; i < 150; i++) { const an = R() * 6.28, rr = Math.sqrt(R()) * r * .95, g = .42 + R() * .1;
         leaf(x + Math.cos(an) * rr, y + Math.sin(an) * rr, 5 * u, 1.2 * u, an + (R() - .5), rgb(g, g * 1.12, g * .92), .75 + (1 - rr / r) * .2); }
       for (let i = 0; i < 46; i++) { const an = R() * 6.28, rr = r * (.55 + R() * .6), lx = x + Math.cos(an) * rr, ly = y + Math.sin(an) * rr;
         leaf(lx, ly, 4.5 * u, 2 * u, an, rgb(.46, .34, .64), .9); disc(a, lx + Math.cos(an) * 2 * u, ly + Math.sin(an) * 2 * u, 1.1 * u, rgb(.34, .22, .52)); } }
     if (p.kind === 'geranium') { for (let i = 0; i < 13; i++) { const an = i * 2.4, rr = r * (.9 - i / 13 * .7), lx = x + Math.cos(an) * rr, ly = y + Math.sin(an) * rr, lr = (8 + R() * 3) * u;
-        disc(a, lx, ly, lr, rgb(.25, .45, .17)); a.strokeStyle = rgb(.18, .30, .12, .8); a.lineWidth = 1.6 * u; a.beginPath(); a.arc(lx, ly, lr * .55, 0, 7); a.stroke();
+        disc(a, lx, ly, lr, radial(a, lx, ly, lr, [[0, rgb(.20, .34, .14)], [.6, rgb(.23, .38, .16)], [1, rgb(.19, .31, .13)]]));
         disc(b, lx, ly, lr, radial(b, lx, ly, lr, [[0, hm(.85, F)], [1, hm(.7, F)]])); }
       for (let c = 0; c < 3; c++) { const an = c * 2.1 + R(), cx = x + Math.cos(an) * r * .4, cy = y + Math.sin(an) * r * .4;
         for (let i = 0; i < 14; i++) { const a2 = R() * 6.28, rr = R() * 7 * u; leaf(cx + Math.cos(a2) * rr, cy + Math.sin(a2) * rr, 2.8 * u, 2.6 * u, 0, rgb(.86, .14 + R() * .08, .17), 1); } } }
   };
   L.pots.forEach(pot);
 
-  // a watering can by the pots
-  { const c = L.can; ell(a, c.x, c.y, c.r * 1.25, c.r, .4, rgb(.56, .58, .58)); ell(b, c.x, c.y, c.r * 1.25, c.r, .4, radial(b, c.x, c.y, c.r * 1.2, [[0, hm(.6)], [1, hm(.35)]]));
-    a.strokeStyle = rgb(.50, .52, .52); a.lineWidth = 3 * u; a.beginPath(); a.moveTo(c.x + 10 * u, c.y + 4 * u); a.lineTo(c.x + 30 * u, c.y + 16 * u); a.stroke();
-    b.strokeStyle = hm(.4); b.lineWidth = 3 * u; b.beginPath(); b.moveTo(c.x + 10 * u, c.y + 4 * u); b.lineTo(c.x + 30 * u, c.y + 16 * u); b.stroke();
-    a.lineWidth = 2.2 * u; a.strokeStyle = rgb(.42, .44, .44); a.beginPath(); a.ellipse(c.x - 2 * u, c.y - 2 * u, c.r * .9, c.r * .5, .4, 3.4, 6.0); a.stroke(); disc(a, c.x - 9 * u, c.y - 5 * u, 4 * u, rgb(.3, .32, .32)); }
+  // a watering can by the pots, seen from above: a round galvanised body, its handle arching over the top, a long spout
+  // with its rose
+  { const c = L.can, r = c.r, an = -.55, ex = Math.cos(an), ey = Math.sin(an);
+    const sx = c.x + ex * r * .8, sy = c.y + ey * r * .8, tx = c.x + ex * (r + 26 * u), ty = c.y + ey * (r + 26 * u);
+    a.lineCap = 'round'; b.lineCap = 'round';
+    a.strokeStyle = rgb(.47, .50, .49); a.lineWidth = 4 * u; a.beginPath(); a.moveTo(sx, sy); a.lineTo(tx, ty); a.stroke();
+    a.strokeStyle = rgb(.58, .61, .60); a.lineWidth = 1.2 * u; a.beginPath(); a.moveTo(sx, sy - 1 * u); a.lineTo(tx, ty - 1 * u); a.stroke();
+    b.strokeStyle = hm(.42); b.lineWidth = 4 * u; b.beginPath(); b.moveTo(sx, sy); b.lineTo(tx, ty); b.stroke();
+    disc(a, tx, ty, 5 * u, rgb(.50, .53, .52)); disc(b, tx, ty, 5 * u, radial(b, tx, ty, 5 * u, [[0, hm(.52)], [1, hm(.40)]]));
+    for (let i = 0; i < 7; i++) { const t = i / 7 * 6.283; disc(a, tx + Math.cos(t) * 2.6 * u, ty + Math.sin(t) * 2.6 * u, .55 * u, rgb(.26, .27, .27)); }
+    disc(a, c.x, c.y, r, radial(a, c.x - r * .3, c.y - r * .3, r * 1.3, [[0, rgb(.66, .69, .68)], [1, rgb(.46, .49, .48)]]));
+    disc(b, c.x, c.y, r, radial(b, c.x, c.y, r, [[0, hm(.60)], [.85, hm(.58)], [1, hm(.40)]]));
+    a.strokeStyle = rgb(.72, .75, .74); a.lineWidth = 1.2 * u; a.beginPath(); a.arc(c.x, c.y, r - 1.2 * u, 0, 7); a.stroke();
+    ell(a, c.x - ex * r * .35, c.y - ey * r * .35, r * .42, r * .32, an, rgb(.16, .17, .17)); ell(b, c.x - ex * r * .35, c.y - ey * r * .35, r * .42, r * .32, an, hm(.35, 0, .5));
+    a.strokeStyle = rgb(.40, .43, .42); a.lineWidth = 2.6 * u; a.beginPath(); a.moveTo(c.x - ey * r * .95, c.y + ex * r * .95);
+    a.quadraticCurveTo(c.x - ex * r * .2, c.y - ey * r * .2, c.x + ey * r * .95, c.y - ex * r * .95); a.stroke();
+    b.strokeStyle = hm(.82); b.lineWidth = 2.6 * u; b.beginPath(); b.moveTo(c.x - ey * r * .95, c.y + ex * r * .95);
+    b.quadraticCurveTo(c.x - ex * r * .2, c.y - ey * r * .2, c.x + ey * r * .95, c.y - ex * r * .95); b.stroke(); }
 
   // the well: a ring of stone blocks round dark water; a wooden bucket on the coping
   { const w = L.well, ri = w.r * .72;
@@ -279,25 +293,46 @@ function paintProps() {
     a.strokeStyle = rgb(.25, .25, .27); a.lineWidth = 1.5 * u; a.beginPath(); a.arc(bk.x, bk.y, bk.r * .9, 0, 7); a.stroke();
     a.strokeStyle = rgb(.70, .62, .45); a.lineWidth = 1.6 * u; a.beginPath(); a.moveTo(bk.x - 4 * u, bk.y); a.bezierCurveTo(bk.x - 22 * u, bk.y + 6 * u, w.x + ri, w.y - 8 * u, w.x + ri * .7, w.y - 4 * u); a.stroke(); }
 
-  // the bench: a limestone slab
-  { const p = L.bench, r = 7 * u; a.fillStyle = rgb(.63, .58, .49); a.beginPath(); a.roundRect(p.x, p.y, p.w, p.h, r); a.fill();
-    for (let i = 0; i < 12; i++) { const t = i / 11; b.fillStyle = hm(.50 + .2 * Math.sin(t * 1.5708)); b.beginPath(); b.roundRect(p.x + t * 5 * u, p.y + t * 5 * u, p.w - t * 10 * u, p.h - t * 10 * u, Math.max(1, r - t * 4 * u)); b.fill(); }
-    a.strokeStyle = rgb(.55, .50, .42, .35); a.lineWidth = .8 * u; for (let i = 0; i < 4; i++) { a.beginPath(); let x0 = p.x + R() * p.w, y0 = p.y + R() * p.h; a.moveTo(x0, y0); for (let k = 0; k < 6; k++) { x0 += (R() - .3) * 14 * u; y0 += (R() - .5) * 8 * u; a.lineTo(clamp(x0, p.x + 3, p.x + p.w - 3), clamp(y0, p.y + 3, p.y + p.h - 3)); } a.stroke(); }   // faint veins
-    for (let i = 0; i < 90; i++) disc(a, p.x + 4 + R() * (p.w - 8), p.y + 4 + R() * (p.h - 8), (.4 + R() * .8) * u, rgb(.56, .52, .45, .45));
-    // a folded linen cloth and a cup of tea
-    a.fillStyle = rgb(.86, .84, .80); a.beginPath(); a.roundRect(p.x + p.w * .62, p.y + 8 * u, 40 * u, 30 * u, 3 * u); a.fill();
-    b.fillStyle = hm(.68); b.beginPath(); b.roundRect(p.x + p.w * .62, p.y + 8 * u, 40 * u, 30 * u, 3 * u); b.fill();
-    a.strokeStyle = rgb(.55, .62, .78, .9); a.lineWidth = 1.2 * u; for (let i = 0; i < 3; i++) { a.beginPath(); a.moveTo(p.x + p.w * .62 + 4 * u, p.y + (14 + i * 8) * u); a.lineTo(p.x + p.w * .62 + 36 * u, p.y + (14 + i * 8) * u); a.stroke(); }
-    const cx = p.x + p.w * .28, cy = p.y + p.h * .5; disc(a, cx, cy, 8 * u, rgb(.93, .92, .88)); disc(b, cx, cy, 8 * u, hm(.72)); disc(a, cx, cy, 6 * u, rgb(.42, .22, .10)); disc(b, cx, cy, 6 * u, hm(.66, WATER));
-    a.strokeStyle = rgb(.93, .92, .88); a.lineWidth = 2 * u; a.beginPath(); a.arc(cx + 9 * u, cy, 3.5 * u, -1.2, 1.2); a.stroke(); }
+  // the bench: weathered wooden slats on an iron frame (seen through the gaps), a cup of tea on its saucer, a book
+  { const p = L.bench, n = 4, gap = 2.6 * u, ph = (p.h - gap * (n - 1)) / n;
+    a.fillStyle = rgb(.10, .08, .07); a.beginPath(); a.roundRect(p.x + 2 * u, p.y + 1 * u, p.w - 4 * u, p.h - 2 * u, 3 * u); a.fill();
+    b.fillStyle = hm(.28); b.beginPath(); b.roundRect(p.x + 2 * u, p.y + 1 * u, p.w - 4 * u, p.h - 2 * u, 3 * u); b.fill();
+    for (const fx of [p.x + 16 * u, p.x + p.w - 16 * u]) { a.fillStyle = rgb(.16, .14, .13); a.fillRect(fx - 3 * u, p.y - 1 * u, 6 * u, p.h + 2 * u); b.fillStyle = hm(.34); b.fillRect(fx - 3 * u, p.y - 1 * u, 6 * u, p.h + 2 * u); }
+    for (let i = 0; i < n; i++) { const y0 = p.y + i * (ph + gap), wv = .9 + R() * .18;
+      a.fillStyle = rgb(.50 * wv, .35 * wv, .22 * wv); a.beginPath(); a.roundRect(p.x, y0, p.w, ph, 2.5 * u); a.fill();
+      b.fillStyle = hm(.52); b.beginPath(); b.roundRect(p.x, y0, p.w, ph, 2.5 * u); b.fill();
+      b.fillStyle = hm(.62); b.beginPath(); b.roundRect(p.x + 1.5 * u, y0 + 1.5 * u, p.w - 3 * u, ph - 3 * u, 1.5 * u); b.fill();
+      // the grain, a weathered pale middle where people sit, a nail at each end of the frame
+      for (let k = 0; k < 5; k++) { const gy = y0 + ph * (.15 + .7 * R()), g = .78 + R() * .1; a.strokeStyle = rgb(.42 * g, .29 * g, .18 * g, .55); a.lineWidth = .6 * u;
+        a.beginPath(); a.moveTo(p.x + 3 * u, gy); for (let x = p.x + 3 * u; x < p.x + p.w - 3 * u; x += 14 * u) a.lineTo(x + 14 * u, gy + (R() - .5) * 1.4 * u); a.stroke(); }
+      a.fillStyle = rgb(.70, .60, .48, .22); a.beginPath(); a.roundRect(p.x + p.w * .25, y0 + 2 * u, p.w * .5, ph - 4 * u, 2 * u); a.fill();
+      for (const fx of [p.x + 16 * u, p.x + p.w - 16 * u]) disc(a, fx, y0 + ph / 2, .9 * u, rgb(.20, .18, .17)); }
+    // a closed book (green cloth, cream page edge) and a cup on its saucer
+    { const bx = p.x + p.w * .64, by = p.y + 9 * u, bw = 36 * u, bh = 26 * u;
+      a.save(); a.translate(bx + bw / 2, by + bh / 2); a.rotate(-.06); b.save(); b.translate(bx + bw / 2, by + bh / 2); b.rotate(-.06);
+      a.fillStyle = rgb(.86, .82, .72); a.fillRect(-bw / 2 + 2 * u, -bh / 2 + 1.5 * u, bw - 2 * u, bh - 1 * u);
+      a.fillStyle = rgb(.17, .30, .27); a.beginPath(); a.roundRect(-bw / 2, -bh / 2, bw - 2 * u, bh - 2 * u, 1.5 * u); a.fill();
+      a.fillStyle = rgb(.12, .22, .20); a.fillRect(-bw / 2, -bh / 2, 4 * u, bh - 2 * u);
+      a.strokeStyle = rgb(.62, .52, .30, .7); a.lineWidth = .7 * u; a.strokeRect(-bw / 2 + 8 * u, -bh / 2 + 6 * u, bw - 18 * u, bh - 14 * u);
+      b.fillStyle = hm(.74); b.fillRect(-bw / 2, -bh / 2, bw, bh); a.restore(); b.restore(); }
+    const cx = p.x + p.w * .28, cy = p.y + p.h * .5;
+    disc(a, cx, cy, 10 * u, rgb(.90, .89, .85)); disc(b, cx, cy, 10 * u, radial(b, cx, cy, 10 * u, [[0, hm(.66)], [.8, hm(.68)], [1, hm(.62)]]));
+    a.strokeStyle = rgb(.74, .72, .68); a.lineWidth = .8 * u; a.beginPath(); a.arc(cx, cy, 8.4 * u, 0, 7); a.stroke();
+    disc(a, cx, cy, 6.4 * u, rgb(.95, .94, .91)); disc(b, cx, cy, 6.4 * u, hm(.80));
+    disc(a, cx, cy, 5 * u, rgb(.36, .18, .08)); disc(b, cx, cy, 5 * u, hm(.74, WATER));
+    a.strokeStyle = rgb(.95, .94, .91); a.lineWidth = 2 * u; a.beginPath(); a.arc(cx + 8 * u, cy, 2.8 * u, -1.3, 1.3); a.stroke(); }
 
-  // the lanterns: an iron bracket from the wall, a glass box with a cap
-  for (const l of L.lamps) { const s = 9 * u, wx = l.side === 'l' ? 0 : l.side === 'r' ? W : l.x, wy = l.side === 't' ? L.top : l.y;
-    a.strokeStyle = rgb(.10, .09, .09); a.lineWidth = 2.4 * u; a.beginPath(); a.moveTo(l.side === 't' ? l.x : wx + (l.side === 'l' ? L.WB - 2 : -L.WB + 2), l.side === 't' ? L.top + L.WB - 2 : l.y); a.lineTo(l.x, l.y); a.stroke();
-    a.fillStyle = rgb(.12, .11, .10); a.beginPath(); a.roundRect(l.x - s, l.y - s, 2 * s, 2 * s, 2 * u); a.fill(); b.fillStyle = hm(1); b.beginPath(); b.roundRect(l.x - s, l.y - s, 2 * s, 2 * s, 2 * u); b.fill();
-    for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { a.fillStyle = rgb(.90, .72, .42); a.beginPath(); a.rect(l.x + dx * s * .55 - s * .3, l.y + dy * s * .55 - s * .3, s * .6, s * .6); a.fill();
-      b.fillStyle = `rgb(220,${EMIT},255)`; b.beginPath(); b.rect(l.x + dx * s * .55 - s * .3, l.y + dy * s * .55 - s * .3, s * .6, s * .6); b.fill(); }
-    disc(a, l.x, l.y, 3 * u, rgb(.18, .16, .15)); void wy; }
+  // the lanterns: an iron bracket from the wall; from above, a hipped iron cap over a box of warm glass
+  for (const l of L.lamps) { const s = 9 * u, wx = l.side === 'l' ? 0 : l.side === 'r' ? W : l.x;
+    a.strokeStyle = rgb(.10, .09, .09); a.lineWidth = 2.4 * u; a.lineCap = 'round'; a.beginPath(); a.moveTo(l.side === 't' ? l.x : wx + (l.side === 'l' ? L.WB - 2 : -L.WB + 2), l.side === 't' ? L.top + L.WB - 2 : l.y); a.lineTo(l.x, l.y); a.stroke();
+    a.fillStyle = rgb(.90, .70, .40); a.beginPath(); a.roundRect(l.x - s, l.y - s, 2 * s, 2 * s, 1.5 * u); a.fill();
+    b.fillStyle = `rgb(220,${EMIT},255)`; b.beginPath(); b.roundRect(l.x - s, l.y - s, 2 * s, 2 * s, 1.5 * u); b.fill();
+    const c = s * .78; a.fillStyle = rgb(.11, .10, .09); a.beginPath();
+    for (let i = 0; i < 8; i++) { const t = (i + .5) / 8 * 6.283; a.lineTo(l.x + Math.cos(t) * c, l.y + Math.sin(t) * c); } a.closePath(); a.fill();
+    b.fillStyle = hm(1); b.beginPath(); for (let i = 0; i < 8; i++) { const t = (i + .5) / 8 * 6.283; b.lineTo(l.x + Math.cos(t) * c, l.y + Math.sin(t) * c); } b.closePath(); b.fill();
+    a.strokeStyle = rgb(.24, .22, .20); a.lineWidth = .8 * u;
+    for (let i = 0; i < 4; i++) { const t = i / 4 * 6.283 + .785; a.beginPath(); a.moveTo(l.x, l.y); a.lineTo(l.x + Math.cos(t) * c * .95, l.y + Math.sin(t) * c * .95); a.stroke(); }
+    disc(a, l.x, l.y, 1.8 * u, rgb(.30, .27, .24)); }
   return [A, B];
 }
 
@@ -342,13 +377,14 @@ const FLOOR = prog(`#version 300 es
 precision highp float; out vec4 o;
 uniform vec2 uCss; uniform float uS, uWB, uBand, uTile;
 ${NOISE}
+float segDist(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.)); }
 void main() {
   vec2 p = gl_FragCoord.xy / uS;                        // css px, y down (row 0 is the top of the texture)
   float dW = min(min(p.x, uCss.x - p.x), min(p.y, uCss.y - p.y));
   vec3 col; float h;
   float big = fbm(p * .004 + 3.1), mid = fbm(p * .03), fine = vn(p * .9);
   if (dW < uWB) {                                       // the wall's coping: lime-washed, a little uneven
-    col = vec3(.93, .91, .86) * (.94 + .08 * mid) - .03 * smoothstep(.6, .9, fbm(p * .05 + 9.));
+    col = vec3(.93, .91, .86) * (.90 + .13 * mid + .04 * (fine - .5)) - .05 * smoothstep(.55, .9, fbm(p * .05 + 9.)) - .04 * smoothstep(.6, .95, fbm(p * .012 + 4.));
     float e = smoothstep(uWB - 2.5, uWB, dW); col *= 1. - .18 * e; h = 1. - .3 * e;
   } else if (dW < uWB + uBand) {                        // the limestone border: slabs in a running row along each wall
     bool lr = min(p.x, uCss.x - p.x) < min(p.y, uCss.y - p.y);
@@ -372,7 +408,7 @@ void main() {
     float edge = min(dj, de);
     float j = 1. - smoothstep(.6, 1.6, edge);
     col = mix(col, vec3(.56, .51, .43), j);
-    h = .62 + .012 * mid - .24 * (1. - smoothstep(.8, 4. + vn(p * .5 + id) , edge)) - .008 * smoothstep(.88, .98, vn(p * .7 + id * 5.));
+    h = .62 + .012 * mid - .13 * (1. - smoothstep(1., 5. + vn(p * .5 + id) , edge)) - .008 * smoothstep(.88, .98, vn(p * .7 + id * 5.));
   } else {                                              // the field: terracotta octagons, little glazed squares at the corners
     vec2 q = p - vec2(uWB + uBand);
     vec2 cell = floor(q / uTile), l = q - (cell + .5) * uTile, al = abs(l);
@@ -394,7 +430,12 @@ void main() {
     cT = mix(cT, vec3(.84, .66, .54), .35 * smoothstep(.56, .82, big));                   // worn paler where people walk
     cT = mix(cT, vec3(.88, .84, .78), .22 * smoothstep(.72, .92, fbm(p * .02 + 7.)));    // salt bloom
     cT *= 1. - .12 * (1. - smoothstep(1., 6., -dOct));                                     // burnt rims
-    if (h21(cell + 9.) < .07) { float cr = abs(l.y - l.x * (h21(cell + 4.) - .5) * 1.5 + (vn(l * .2 + cell) - .5) * 8.); cT *= 1. - .3 * (1. - smoothstep(.3, 1.2, cr)); }
+    // a few cracked tiles: a hairline that kinks once and sends off a short branch, stopping short of the joints
+    if (h21(cell + 9.) < .07) { float a0 = h21(cell + 4.) * 6.283, a1 = a0 + 2.2 + h21(cell + 6.) * 1.8;
+      vec2 A = vec2(cos(a0), sin(a0)) * uTile * .55, Bk = (vec2(h21(cell + 8.), h21(cell + 10.)) - .5) * uTile * .35, C = vec2(cos(a1), sin(a1)) * uTile * .55;
+      vec2 Dn = Bk + vec2(cos(a0 + 1.9), sin(a0 + 1.9)) * uTile * (.12 + .14 * h21(cell + 12.));
+      float cr = min(min(segDist(l, A, Bk), segDist(l, Bk, C)), segDist(l, Bk, Dn) + .2) + .3 * (vn(l * 1.3 + cell) - .5);
+      cT *= 1. - .32 * (1. - smoothstep(.2, .85, cr)) * smoothstep(.5, 3., -dOct); }
     float dome = 1. - clamp(length(l) / (uTile * .62), 0., 1.);                           // the face a little domed, its edges worn round
     float hT = .615 + .03 * dome + .008 * mid - .24 * (1. - smoothstep(0., 3. + 1.4 * vn(p * .5 + cell), -dOct - g * .5))
       - .008 * smoothstep(.88, .98, vn(p * .7 + cell * 3.));                               // a little soft pitting
@@ -439,14 +480,14 @@ float segD(vec2 p, vec2 a, vec2 b, out float u) { vec2 pa = p - a, ba = b - a; u
 // shades what lies below its own top, and only by the height between them (a pot never shades itself, and its
 // neighbour's shadow climbs onto it shortened, not as if it were still on the floor)
 float zAt(vec2 p) { float z = 0.;
-  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 zz = uZ[i]; if (zz.w > .5 && boxSD(p, uR[i], zz.z) < 0.) z = max(z, zz.x); }
-  for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; if (length(p - c.xy) < c.z) z = max(z, c.w); }
+  for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 zz = uZ[i]; if (zz.w > .5 && boxSD(p, uR[i], zz.z) < -3.) z = max(z, zz.x); }
+  for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; if (length(p - c.xy) < c.z - 3.) z = max(z, c.w); }
   return z; }
 // how much of a directional light (sun or moon) reaches the surface at p (height zr)
 float dirVis(vec2 p, float zr, vec4 Lg, float kA) {
   vec2 d = Lg.xy; float ct = Lg.z, sE = Lg.w, occ = 0.;
   for (int i = 0; i < ${NR}; i++) { if (i >= uNR) break; vec4 b = uR[i], z = uZ[i]; float top = z.x - zr; if (z.w < .5) top = max(top, z.x * .3); if (top <= .5) continue;
-    if (abs(z.y - 1.) > .5) { vec2 q = p + d * top * ct; occ = max(occ, cov(panSD(q, i), .6 + top / sE * kA)); }
+    if (abs(z.y - 1.) > .5) { vec2 q = p + d * top * ct; float sm = z.w > .1 && z.w < .5 ? 1. : 0.; occ = max(occ, cov(panSD(q, i), .6 + top / sE * kA + 3. * sm) * (1. - .25 * sm)); }
     else for (int k = 1; k <= 3; k++) { float zz = top * float(k) / 3.; vec2 q = p + d * zz * ct; occ = max(occ, cov(boxSD(q, b, z.z), .6 + zz / sE * kA)); } }
   for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u, top = c.w - zr; if (top <= .5) continue;
     float dist = segD(p, c.xy, c.xy - d * top * ct, u); float pen = .6 + u * top / sE * kA;
@@ -476,7 +517,8 @@ void main() {
       int nk = abs(z.y - 1.) < .5 ? 3 : 1;
       float top = z.x - zr; if (z.w < .5) top = max(top, z.x * .3); if (top <= .5) continue;
       for (int s = 1; s <= 3; s++) { if (s > nk) break; float zz = nk == 3 ? top * float(s) / 3. : top; if (zz >= hL - 1.) continue;
-        vec2 q = p + (Lk.xy - p) * (zz / hL); float pen = .8 + 7. * zz / (hL - zz); occ = max(occ, cov(panSD(q, i), pen)); } }
+        vec2 q = p + (Lk.xy - p) * (zz / hL); float pen = .8 + 7. * zz / (hL - zz), pan = z.w < .5 && abs(z.y - 1.) > .5 ? 1. : 0.;
+        occ = max(occ, cov(panSD(q, i), pen * (1. + 2. * pan)) * (1. - .55 * pan)); } }
     for (int j = 0; j < ${NC}; j++) { if (j >= uNC) break; vec4 c = uC[j]; float u; if (c.w <= zr + .5) continue;
       float dist = segD(c.xy, p, p + (Lk.xy - p) * min(1., (c.w - zr) / hL), u); float pen = .8 + .06 * length(p - c.xy);
       occ = max(occ, 1. - smoothstep(c.z - pen, c.z + pen, dist)); }
@@ -654,6 +696,13 @@ vec4 catEval(vec2 p, out float hgt) {
   hgt = mix(hW, hC, m) * sc / 1.9;
   return vec4(mix(fW, fC, smoothstep(.2, .8, cu)), mix(dW, dC, m) * sc);
 }
+// the cat's shadow: its outline swept from its feet along the light, narrowing toward its back (a body is a dome)
+float catShadow(vec2 p, vec4 Lg, float soft) {
+  float h; vec2 o = Lg.xy * min(uCat2.z * Lg.z, 60.);
+  if (min(length(p - uCat0.xy), length(p + o - uCat0.xy)) > 80. * uCat2.w) return 1.;
+  float d = 1e3;
+  for (int k = 1; k <= 3; k++) { float f = float(k) / 3.; d = min(d, catEval(p + o * f, h).w + f * 4. * uCat2.w); }
+  return smoothstep(-soft - length(o) * .02, 1.5, d); }
 void main() {
   vec2 fc = gl_FragCoord.xy; vec2 p = vec2(fc.x, uDev.y - fc.y) / uK, uv = p / uCss;
   vec4 fl = texture(uFloor, uv), pr = texture(uProps, uv), ph = texture(uPropsH, uv);
@@ -670,7 +719,7 @@ void main() {
     float fol = smoothstep(.25, .3, mat), gr = fbm(p * .12), fi = vn(p * .55);
     alb *= mix(.80 + .34 * gr + .12 * fi, .88 + .24 * fi, fol);
     vec2 gn = vec2(vn(p * .55 + vec2(.6, 0.)) - fi, vn(p * .55 + vec2(0., .6)) - fi) + .5 * vec2(fbm(p * .12 + vec2(.3, 0.)) - gr, fbm(p * .12 + vec2(0., .3)) - gr);
-    n = normalize(n + vec3(-gn * mix(.22, .12, fol), 0.)); }
+    n = normalize(n + vec3(-gn * mix(.22, .12, fol) * mix(.35, 1., smoothstep(.12, .45, uSunL.z)), 0.)); }
   vec4 sh = shadeAt(uv), sh0 = sh;                                                       // (sh0: as it is above the floor, for what stands on it)
   // down in a joint a shadow's edge lands a little further on (the light has further to come): the edge steps across the seams
   if (hrel < -.05) { sh.r = texture(uShade, (p - uSunG.xy * hrel * uSunG.z) / uCss).r; sh.g = texture(uShade, (p - uMoonG.xy * hrel * uMoonG.z) / uCss).g; }
@@ -681,8 +730,8 @@ void main() {
   float cs = uSunC.r > .001 ? canShadow(p, uCanS, uSunG.xy) : 1., cm = uMoonC.b > .0005 ? canShadow(p, uCanM, uMoonG.xy) : 1.;
   // the cat's own shadow
   float catS = 1., catM = 1., ch;
-  { vec2 q = p + uSunG.xy * uCat2.z * uSunG.z; if (length(q - uCat0.xy) < 80. * uCat2.w && uSunC.r > .001) catS = smoothstep(-1.2 - uCat2.z / uSunG.w * .03, 1.5, catEval(q, ch).w);
-    vec2 qm = p + uMoonG.xy * uCat2.z * uMoonG.z; if (length(qm - uCat0.xy) < 80. * uCat2.w && uMoonC.b > .0005) catM = smoothstep(-1.5, 2., catEval(qm, ch).w); }
+  if (uSunC.r > .001) catS = catShadow(p, uSunG, 1.2);
+  if (uMoonC.b > .0005) catM = catShadow(p, uMoonG, 1.5);
   float sunV = sh.r * cs * catS * selfS, moonV = sh.g * cm * catM * selfM;
   float curS = uSunC.r > .001 ? curShade(p, uSunG, .03) : 1., curM = uMoonC.b > .0005 ? curShade(p, uMoonG, .04) : 1.;
   sunV *= curS; moonV *= curM;
@@ -690,7 +739,7 @@ void main() {
   float rc = mix(1.35, 2.3, onFloor);                                                     // (a low sun's raking boost is for the floor's relief: on a petal it only bleaches)
   vec3 lit = sky * (.74 + .26 * n.z) + uSunC * sunV * min(relief(n, uSunL), rc) + uMoonC * moonV * min(relief(n, uMoonL), rc) + lant;
   if (abs(mat - .353) < .1) lit += (uSunC * sunV + uMoonC * moonV) * .18;                 // leaves let a little light through
-  lit += (uSkyC * 1.6 + uMoonC * .5 + vec3(.010, .012, .020) * uNight) * (1. - onFloor);         // pots and plants: dark but present at night
+  lit += (uSkyC * .45 * sh.a + uMoonC * .3 + vec3(.010, .012, .020) * uNight) * (1. - onFloor);   // pots and plants: dark but present at night (no glow in the shade)
   vec3 col = alb * lit;
   // light raking into a joint: the lit flag edges bounce warm light down into it (most at a low sun)
   col += alb * uSunC * sh.r * cs * seam * .8 * (1. - uSunL.z) * vec3(1., .78, .55);  { vec3 cool = alb * (sky * (.74 + .26 * n.z) + uMoonC * moonV * relief(n, uMoonL)); col += (vec3(dot(cool, vec3(.3, .55, .15))) * vec3(.55, .78, 1.3) - cool) * uNight * .75; }
@@ -718,8 +767,9 @@ void main() {
     if (edge < 1.5) {
       float e = .8 / uK, hx, hy; catEval(p + vec2(e, 0.), hx); catEval(p + vec2(0., e), hy);
       float sx = vn(fs + vec2(.5, 0.)) - vn(fs), sy = vn(fs + vec2(0., .5)) - vn(fs);
-      vec3 cn = normalize(vec3(-(hx - ch) / e * .5 - sx * .5, -(hy - ch) / e * .5 - sy * .5, 1.));
-      vec3 ca = pow(c.rgb, vec3(2.2)) * (.78 + .4 * st);
+      float gz = mix(.3, 1., smoothstep(.12, .45, uSunL.z));   // (fur strands flatten in grazing light: no stipple)
+      vec3 cn = normalize(vec3(-(hx - ch) / e * .5 - sx * .5 * gz, -(hy - ch) / e * .5 - sy * .5 * gz, 1.));
+      vec3 ca = pow(c.rgb, vec3(2.2)) * mix(.92 + .12 * st, .84 + .28 * st, gz);   // (strands quieter in a raking light: fur, not basketwork)
       // (a point up on its back meets a shadow's edge further from the light than the floor does: the edge wraps over it)
       float sv = shadeAt((p - uSunG.xy * ch * uSunG.z) / uCss).r * cs, mv = shadeAt((p - uMoonG.xy * ch * uMoonG.z) / uCss).g * cm;
       vec3 cl = uSkyC * sh0.a * (.6 + .4 * cn.z) + uSunC * sv * min(relief(cn, uSunL), 1.4) + uMoonC * mv * relief(cn, uMoonL) + uLantC * sh0.b * 2.6;   // (the floor's joints under it don't shade a cat)
@@ -747,7 +797,7 @@ void main() {
     }
   }
   // the lanterns' own glow round them
-  for (int i = 0; i < 3; i++) { if (i >= uNL) break; float d = length(p - uLamp[i].xy); col += uLantC * uLantOn * (.55 * exp(-d * d / 300.) + .08 * exp(-d / 40.)); }
+  for (int i = 0; i < 3; i++) { if (i >= uNL) break; float d = length(p - uLamp[i].xy); col += uLantC * uLantOn * (.30 * exp(-d * d / 300.) + .07 * exp(-d / 40.)); }
   col *= uExpo;
   { float l = dot(col, vec3(.2126, .7152, .0722)), t = l * (2.51 * l + .03) / (l * (2.43 * l + .59) + .14);
     vec3 c2 = col * (t / max(l, 1e-5)); float over = max(max(c2.r, c2.g), c2.b);
@@ -803,7 +853,7 @@ function renderShade() {
     let kind = grounded ? 1 : 0;
     if (qn && nq < NQ) { bufQ.set(qn.map((v, j) => j % 2 ? y + v * h : x + v * w), nq * 8); kind = 2 + nq; nq++; }
     bufZ.set([z, kind, Math.min(rad, w / 2, h / 2), solid], n * 4); n++; };
-  for (const p of panels) addR(p.x, p.y, p.w, p.h, p.z, false, p.badge ? p.w * .23 : p.icon ? 9 : 10, 0, p.qn);
+  for (const p of panels) addR(p.x, p.y, p.w, p.h, p.z, false, p.badge ? p.w * .23 : p.icon ? 9 : 10, p.sm || p.badge ? .25 : 0, p.qn);   // (.25: Stage Manager's, shading more lightly)
   for (const b of L.boxes) addR(b.x, b.y, b.w, b.h, b.z, b.grounded, b.rad, 1);   // (solid: their tops are surfaces)
   let c = 0; for (const q of L.cyl) { if (c >= NC) break; bufC.set([q.x, q.y, q.r, q.h], c * 4); c++; }
   L.lamps.forEach((l, i) => bufL.set([l.x, l.y, l.h, l.p], i * 4));
