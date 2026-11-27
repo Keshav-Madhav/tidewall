@@ -125,8 +125,8 @@ function layout() {
   const u = U, WB = 14 * u, BAND = 64 * u;
   const X = f => W * f, Y = f => top + hh * f;
   const inX = (x, r) => clamp(x, WB + r + 4, W - WB - r - 4), inY = (y, r) => clamp(y, top + WB + r + 4, bot - WB - r - 4);
-  const tree = { x: X(.77), y: Y(.33), R: 150 * u, zc: 150 * u };
-  const pots = [], potA = { x: inX(X(.075), 34 * u), y: inY(Y(.80), 34 * u) }, potB = { x: inX(X(.30), 30 * u), y: inY(Y(.06), 30 * u) };
+  const tree = { x: WB + 196 * u, y: top + WB + 186 * u, R: 150 * u, zc: 150 * u };   // the top-left corner
+  const pots = [], potA = { x: inX(X(.075), 34 * u), y: inY(Y(.80), 34 * u) }, potB = { x: inX(X(.88), 30 * u), y: inY(Y(.07), 30 * u) };
   pots.push({ x: potA.x, y: potA.y, r: 34 * u, h: 40 * u, kind: 'rosemary' });
   pots.push({ x: potA.x + 64 * u, y: potA.y + 26 * u, r: 26 * u, h: 32 * u, kind: 'basil' });
   pots.push({ x: potA.x + 10 * u, y: potA.y - 66 * u, r: 24 * u, h: 34 * u, kind: 'geranium' });
@@ -220,8 +220,8 @@ function paintProps() {
 
   // the planter: a limestone box, soil, the old trunk
   { const p = L.planter, r = 8 * u;
-    a.fillStyle = rgb(.83, .78, .67); a.beginPath(); a.roundRect(p.x, p.y, p.w, p.h, r); a.fill();
-    for (let i = 0; i < 3; i++) { b.fillStyle = hm(.40 + i * .06); b.beginPath(); b.roundRect(p.x + i * 2 * u, p.y + i * 2 * u, p.w - i * 4 * u, p.h - i * 4 * u, r); b.fill(); }
+    a.fillStyle = rgb(.72, .67, .57); a.beginPath(); a.roundRect(p.x, p.y, p.w, p.h, r); a.fill();
+    for (let i = 0; i < 10; i++) { const t = i / 9; b.fillStyle = hm(.38 + .16 * Math.sin(t * 1.5708)); b.beginPath(); b.roundRect(p.x + t * 6 * u, p.y + t * 6 * u, p.w - t * 12 * u, p.h - t * 12 * u, Math.max(1, r - t * 4 * u)); b.fill(); }
     const m = 13 * u; a.fillStyle = rgb(.24, .17, .12); a.beginPath(); a.roundRect(p.x + m, p.y + m, p.w - 2 * m, p.h - 2 * m, 4 * u); a.fill();
     b.fillStyle = hm(.36, 0, .6); b.beginPath(); b.roundRect(p.x + m, p.y + m, p.w - 2 * m, p.h - 2 * m, 4 * u); b.fill();
     for (let i = 0; i < 70; i++) { const x = p.x + m + R() * (p.w - 2 * m), y = p.y + m + R() * (p.h - 2 * m), g = .3 + R() * .3;
@@ -268,7 +268,8 @@ function paintProps() {
   { const w = L.well, ri = w.r * .72;
     disc(a, w.x, w.y, w.r, rgb(.58, .54, .47)); disc(b, w.x, w.y, w.r, radial(b, w.x, w.y, w.r, [[0, hm(.5)], [.7, hm(.62)], [.86, hm(.66)], [1, hm(.48)]]));
     for (let i = 0; i < 13; i++) { const a0 = i / 13 * 6.283 + .05, a1 = (i + 1) / 13 * 6.283 - .05, g = .74 + R() * .1;
-      a.fillStyle = rgb(g, g * .95, g * .84); a.beginPath(); a.arc(w.x, w.y, w.r - 1.5 * u, a0, a1); a.arc(w.x, w.y, ri + 1.5 * u, a1, a0, true); a.closePath(); a.fill(); }
+      a.fillStyle = rgb(g * .86, g * .81, g * .70); a.beginPath(); a.arc(w.x, w.y, w.r - 1.5 * u, a0, a1); a.arc(w.x, w.y, ri + 1.5 * u, a1, a0, true); a.closePath(); a.fill();
+      b.fillStyle = hm(.66 - R() * .05); b.beginPath(); b.arc(w.x, w.y, w.r - 2.5 * u, a0 + .03, a1 - .03); b.arc(w.x, w.y, ri + 2.5 * u, a1 - .03, a0 + .03, true); b.closePath(); b.fill(); }
     disc(a, w.x, w.y, ri, rgb(.05, .08, .08)); disc(b, w.x, w.y, ri, hm(.12, WATER, .4));
     const bk = L.bucket; disc(a, bk.x, bk.y, bk.r, rgb(.45, .30, .17)); disc(b, bk.x, bk.y, bk.r, radial(b, bk.x, bk.y, bk.r, [[0, hm(.6)], [1, hm(.75)]]));
     disc(a, bk.x, bk.y, bk.r * .78, rgb(.09, .1, .09)); disc(b, bk.x, bk.y, bk.r * .78, hm(.4, WATER));
@@ -276,9 +277,10 @@ function paintProps() {
     a.strokeStyle = rgb(.70, .62, .45); a.lineWidth = 1.6 * u; a.beginPath(); a.moveTo(bk.x - 4 * u, bk.y); a.bezierCurveTo(bk.x - 22 * u, bk.y + 6 * u, w.x + ri, w.y - 8 * u, w.x + ri * .7, w.y - 4 * u); a.stroke(); }
 
   // the bench: a limestone slab
-  { const p = L.bench, r = 7 * u; a.fillStyle = rgb(.80, .76, .68); a.beginPath(); a.roundRect(p.x, p.y, p.w, p.h, r); a.fill();
-    for (let i = 0; i < 4; i++) { b.fillStyle = hm(.55 + i * .05); b.beginPath(); b.roundRect(p.x + i * 1.6 * u, p.y + i * 1.6 * u, p.w - i * 3.2 * u, p.h - i * 3.2 * u, r); b.fill(); }
-    for (let i = 0; i < 60; i++) disc(a, p.x + 4 + R() * (p.w - 8), p.y + 4 + R() * (p.h - 8), (.5 + R()) * u, rgb(.68, .64, .56, .6));
+  { const p = L.bench, r = 7 * u; a.fillStyle = rgb(.63, .58, .49); a.beginPath(); a.roundRect(p.x, p.y, p.w, p.h, r); a.fill();
+    for (let i = 0; i < 12; i++) { const t = i / 11; b.fillStyle = hm(.50 + .2 * Math.sin(t * 1.5708)); b.beginPath(); b.roundRect(p.x + t * 5 * u, p.y + t * 5 * u, p.w - t * 10 * u, p.h - t * 10 * u, Math.max(1, r - t * 4 * u)); b.fill(); }
+    a.strokeStyle = rgb(.55, .50, .42, .35); a.lineWidth = .8 * u; for (let i = 0; i < 4; i++) { a.beginPath(); let x0 = p.x + R() * p.w, y0 = p.y + R() * p.h; a.moveTo(x0, y0); for (let k = 0; k < 6; k++) { x0 += (R() - .3) * 14 * u; y0 += (R() - .5) * 8 * u; a.lineTo(clamp(x0, p.x + 3, p.x + p.w - 3), clamp(y0, p.y + 3, p.y + p.h - 3)); } a.stroke(); }   // faint veins
+    for (let i = 0; i < 90; i++) disc(a, p.x + 4 + R() * (p.w - 8), p.y + 4 + R() * (p.h - 8), (.4 + R() * .8) * u, rgb(.56, .52, .45, .45));
     // a folded linen cloth and a cup of tea
     a.fillStyle = rgb(.86, .84, .80); a.beginPath(); a.roundRect(p.x + p.w * .62, p.y + 8 * u, 40 * u, 30 * u, 3 * u); a.fill();
     b.fillStyle = hm(.68); b.beginPath(); b.roundRect(p.x + p.w * .62, p.y + 8 * u, 40 * u, 30 * u, 3 * u); b.fill();
@@ -481,6 +483,8 @@ uniform vec4 uSway;                    // offset x, y, amplitude, -
 uniform vec4 uCanS, uCanM;             // its sun / moon shadow: centre x, y, elongation, blur lod
 uniform vec4 uCat0, uCat1, uCat2;      // x, y, heading, curl | walk phase, legs, breath, tail sway | -, -, height, scale
 uniform vec4 uLamp[3]; uniform int uNL;
+uniform vec4 uWell;                    // the well: x, y, the water's radius, how far down it lies
+${NOISE}
 // the surface's height (floor, or a prop where there is one), for normals by central differences
 float hAt(vec2 uv) { float a = texture(uProps, uv).a; return mix(texture(uFloor, uv).a * 8., texture(uPropsH, uv).r * 40., a); }
 // the shadow/light pass, upsampled with a cubic B-spline (four bilinear taps): soft, smooth edges, no texel steps
@@ -513,22 +517,25 @@ vec3 arc(vec2 q, float k, float s0, float s1) {
   vec2 P = vec2(sin(k * s), 1. - cos(k * s)) * R; return vec3(length(q - P), s, (abs(R) - length(v)) * sign(k));
 }
 float smin(float a, float b, float k) { float h = clamp(.5 + .5 * (b - a) / k, 0., 1.); return mix(b, a, h) - k * h * (1. - h); }
+float smax(float a, float b, float k) { return -smin(-a, -b, k); }
+// a rounded profile: steep at the rim, level on top with no crease where it levels off
+float dome(float x) { x = clamp(x, 0., 1.); return sqrt(x * (2. - x)); }
 float segD(vec2 p, vec2 a, vec2 b, out float u) { vec2 pa = p - a, ba = b - a; u = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-4), 0., 1.); return length(pa - ba * u); }
 // returns distance (cat units), part (0 body, 1 head, 2 tail, 3 legs, 4 ears), and a coordinate along it for stripes
 vec4 walkSD(vec2 q, out float hgt) {
   const float Lb = 46.; float cu = 0., k = 0., br = 1.;
   vec3 A = arc(q, k, -Lb * .5, Lb * .5); float uu = (A.y + Lb * .5) / Lb;
-  float w = (10. + 4.2 * sin(3.1416 * clamp(uu, 0., 1.))) * br;
+  float uc = clamp(uu, 0., 1.); float w = (8. + 3.5 * exp(-pow((uc - .22) / .2, 2.)) + 3. * exp(-pow((uc - .78) / .18, 2.)) + sin(3.1416 * uc)) * br;   // hips, a waist, shoulders
   float dB = A.x - w; hgt = w * sqrt(clamp(1. - (A.x / w) * (A.x / w), 0., 1.)) * .85;
   // head at the front end, tucked round when curled
   float a1 = k * Lb * .5; vec2 P1 = abs(k) < 1e-4 ? vec2(Lb * .5, 0.) : vec2(sin(a1), 1. - cos(a1)) / k;
   float ha = a1 + cu * 1.3; vec2 Th = vec2(cos(ha), sin(ha)), Nh = vec2(-Th.y, Th.x);
   vec2 hc = P1 + Th * (8. - 3. * cu) + Nh * cu * 3.; float dH = length(q - hc) - 10.;
-  float dM = length(q - hc - Th * 7.) - 5.5; dH = smin(dH, dM, 3.);
+  float dM = length(q - hc - Th * 5.5) - 6.; dH = smin(dH, dM, 3.);
   float hh = 10. * sqrt(clamp(1. - pow(length(q - hc) / 10.5, 2.), 0., 1.)) + 3.;
   // ears
-  float ue, ue2; float dE = min(segD(q, hc + Th * 2. + Nh * 6., hc + Th * 6. + Nh * 10.5, ue), segD(q, hc + Th * 2. - Nh * 6., hc + Th * 6. - Nh * 10.5, ue2));
-  float uE = min(ue, ue2); dE -= mix(4.2, .8, uE);
+  float ue, ue2; float dE1 = segD(q, hc - Th * 1.5 + Nh * 5.5, hc + Th * 1.5 + Nh * 12.5, ue), dE2 = segD(q, hc - Th * 1.5 - Nh * 5.5, hc + Th * 1.5 - Nh * 12.5, ue2);   // ears: set back, pointing forward and out
+  float uE = dE1 < dE2 ? ue : ue2; float dE = min(dE1, dE2) - mix(4.5, .6, uE);
   // tail: from the back end, wrapping round the body when curled
   float a0 = -k * Lb * .5; vec2 P0 = abs(k) < 1e-4 ? vec2(-Lb * .5, 0.) : vec2(sin(a0), 1. - cos(a0)) / k;
   vec2 X = -vec2(cos(a0), sin(a0)), Y = vec2(-X.y, X.x); vec2 qt = vec2(dot(q - P0, X), dot(q - P0, Y));
@@ -546,15 +553,15 @@ vec4 walkSD(vec2 q, out float hgt) {
   if (dH <= d + .01 || dE <= d + .01) { part = dE < dH ? 4. : 1.; co = dot(q - hc, Th); lat = dB - dH; }
   else if (dT <= d + .01 && dT < dB) { part = 2.; co = Tl.y; }
   else if (dL <= d + .01 && dL < dB) { part = 3.; }
-  hgt = 7. * sqrt(clamp(-d / 8., 0., 1.)) + 2.5 * smoothstep(1., -5., dH) - 1.5 * smoothstep(1., -2., dT) * step(dT, dB);   // one smooth surface: no seams where the parts meet
+  hgt = 7. * dome(-d / 8.) + 2.5 * smoothstep(1., -5., dH) - 1.5 * smoothstep(1., -2., dT) * step(dT, dB);   // one smooth surface: no seams where the parts meet
   return vec4(d, part, co, lat);
 }
 vec3 furWalk(vec4 c) {
-  vec3 base = vec3(.76, .43, .17), dark = vec3(.50, .25, .08), cream = vec3(.93, .84, .68), fur = base;
-  if (c.y < .5) { float st = smoothstep(.35, .85, sin(c.z * .55 + sin(c.w * .35 + c.z * .1) * 1.3)); fur = mix(base, dark, st * .6 * smoothstep(15., 6., abs(c.w))); fur = mix(fur, dark, .35 * smoothstep(3., 0., abs(c.w))); }
-  else if (c.y < 1.5) { fur = mix(base, cream, smoothstep(4., 9., c.z) * .7); fur = mix(fur, dark, .3 * smoothstep(1.5, 0., abs(sin(c.z * .9)) * 3.) * step(c.z, 2.)); }
+  vec3 base = vec3(.74, .46, .22), dark = vec3(.47, .27, .12), cream = vec3(.90, .82, .68), fur = base;
+  if (c.y < .5) { float st = smoothstep(.4, .9, sin(c.z * .8 + sin(c.w * .3 + c.z * .13) * 1.1)); fur = mix(base, dark, st * .32 * smoothstep(15., 6., abs(c.w))); fur = mix(fur, dark, .35 * smoothstep(3., 0., abs(c.w))); }
+  else if (c.y < 1.5) { fur = mix(base, cream, smoothstep(5., 10., c.z) * .35); }
   else if (c.y < 2.5) { fur = mix(base, dark, smoothstep(.2, .8, sin(c.z * .7)) * .8); fur = mix(fur, dark, smoothstep(34., 44., c.z)); }
-  else if (c.y < 3.5) fur = cream; else fur = mix(dark, vec3(.85, .55, .5), .25);
+  else if (c.y < 3.5) fur = base * .9;                                                       // (legs: the body's colour, under it) else fur = mix(dark, vec3(.85, .55, .5), .25);
   return fur;
 }
 // asleep: a round body with the haunch, the head resting on its front edge with the nose tucked down, ears up,
@@ -567,7 +574,7 @@ vec4 curlSD(vec2 q, out float hgt, out vec3 fur) {
   float dHead = smin(length(q - hc) - 11., length(q - hc - F * 7.5) - 6.5, 3.);
   vec2 E0 = normalize(vec2(.75, -.65)); float c1 = cos(.55), s1 = sin(.55);
   vec2 e1 = vec2(E0.x * c1 - E0.y * s1, E0.x * s1 + E0.y * c1), e2 = vec2(E0.x * c1 + E0.y * s1, -E0.x * s1 + E0.y * c1);
-  float u1, u2; float dE1 = segD(q, hc + e1 * 6., hc + e1 * 17., u1) - mix(5.5, .9, u1), dE2 = segD(q, hc + e2 * 6., hc + e2 * 17., u2) - mix(5.5, .9, u2);
+  float u1, u2; float dE1 = segD(q, hc + e1 * 7., hc + e1 * 14.5, u1) - mix(4.6, 1.2, u1), dE2 = segD(q, hc + e2 * 7., hc + e2 * 14.5, u2) - mix(4.6, 1.2, u2);
   float dEar = min(dE1, dE2), ue = dE1 < dE2 ? u1 : u2;
   // tail: round the outside, from the back past the bottom to the nose
   float ang = atan(q.y, q.x), a0 = 3.1, a1 = 1.15; float t = clamp((a0 - ang) / (a0 - a1), 0., 1.);
@@ -578,22 +585,26 @@ vec4 curlSD(vec2 q, out float hgt, out vec3 fur) {
   float dPaw = length((q - vec2(5., 17.)) * vec2(.8, 1.2)) - 4.;
   float d = min(min(dBody, dHead), min(dEar, min(dTail, dPaw)));
   // colour: tabby stripes across the back (they radiate in a curled cat), a dark spine line, the head's own stripes
-  vec3 base = vec3(.76, .43, .17), dark = vec3(.50, .25, .08), cream = vec3(.93, .84, .68);
+  vec3 base = vec3(.74, .46, .22), dark = vec3(.47, .27, .12), cream = vec3(.90, .82, .68);
   float rq = length(q / vec2(23., 18.5));
   fur = base;
-  float st = smoothstep(.5, .9, sin(q.x * .42 + sin(q.y * .25) * 1.6)); fur = mix(fur, dark, st * .38 * smoothstep(1.02, .55, rq));
-  fur = mix(fur, dark, .3 * smoothstep(.1, 0., abs(rq - .6)) * step(-1.4, ang) * step(ang, 2.6));
+  float st = smoothstep(.45, .95, sin(q.x * .72 + sin(q.y * .3) * 1.4 + sin(q.y * .11 + q.x * .05) * 2.)); fur = mix(fur, dark, st * .3 * smoothstep(1.02, .55, rq));
+  fur = mix(fur, dark, .12 * smoothstep(.14, 0., abs(rq - .6)) * step(-1.4, ang) * step(ang, 2.6));
   fur = mix(fur, cream, .35 * smoothstep(.88, 1.05, rq) * step(0., q.y));                          // the paler belly fur at the rim
-  hgt = 8. * sqrt(clamp(-dBody / 10., 0., 1.));
-  if (dTail < 0. && (dBody > -1.5 || dTail < dBody)) { fur = mix(base, dark, smoothstep(.2, .8, sin(t * 16.)) * .7); fur = mix(fur, dark, smoothstep(.8, 1., t)); hgt = max(hgt, 4. * sqrt(clamp(-dTail / tw, 0., 1.)) + (dBody < 0. ? 6. : 0.)); }
-  if (dPaw < 0. && dHead > 0.) { fur = cream; hgt = max(hgt, 6. + 3. * sqrt(clamp(-dPaw / 4.5, 0., 1.))); }
-  if (dHead < 0. || dEar < 0.) {
+  hgt = 8. * dome(-dBody / 10.);
+  if (dTail < .8 && (dBody > -3. || dTail < dBody)) { vec3 tf = mix(base, dark, smoothstep(.2, .8, sin(t * 16.)) * .55); tf = mix(tf, dark, .8 * smoothstep(.8, 1., t));
+    float wT = smoothstep(.8, -.8, dTail) * max(smoothstep(-3., -1., dBody), step(dTail, dBody));   // (it fades where it tucks under: no seam)
+    fur = mix(fur, tf, wT); hgt = smax(hgt, smoothstep(1.5, -3., dTail) * (wT > 0. ? 1. : 0.) * (3.5 * dome(-dTail / tw) + 5. * smoothstep(1., -3., dBody)), 3.); }
+  if (dPaw < .8 && dHead > 0.) { float wP = smoothstep(.8, -.8, dPaw); fur = mix(fur, mix(base, cream, .28), wP * .8); hgt = smax(hgt, wP * (6. + 3. * dome(-dPaw / 4.5)), 2.); }
+  if (dHead < 1. || dEar < 1.) { vec3 bodyFur = fur;
     vec2 hq = q - hc; float along = dot(hq, F), side = dot(hq, vec2(-F.y, F.x));
     fur = base; fur = mix(fur, dark, .4 * smoothstep(.55, .9, sin(side * 1.5)) * smoothstep(-2., -9., along) * smoothstep(7., 2., abs(side)));   // thin forehead stripes   // forehead stripes
-    fur = mix(fur, cream, smoothstep(6., 11., along) * .8);                                                     // muzzle
-    if (dEar < 0. && dHead > 0.) fur = mix(base * .92, dark, smoothstep(.35, .9, ue));
-    fur *= 1. - .35 * smoothstep(-2.5, 0., max(dHead, -dEar - 1.)) * step(dBody, 0.) * step(dHead, 0.);          // the head's outline where it lies on the body
-    hgt = max(hgt, 10. + 6. * sqrt(clamp(-dHead / 10., 0., 1.)) - (dEar < 0. ? 1. : 0.));
+    fur = mix(fur, cream, smoothstep(5., 11., along) * .25);                                                    // muzzle
+    fur = mix(fur, mix(base * .92, dark, smoothstep(.35, .9, ue)), smoothstep(.5, -.5, dEar - max(dHead, -3.)));   // the ears, darker to the tips
+    fur *= 1. - .1 * smoothstep(-5., 0., dHead) * step(dBody, 0.);                                              // a little shade where the head lies on the body
+    float wH = smoothstep(1., -1., min(dHead, dEar));
+    fur = mix(bodyFur, fur, wH);
+    hgt = smax(hgt, wH * (9. + 7. * dome(-dHead / 11.) - 1.5 * smoothstep(-.5, .5, dHead)), 2.5);
   }
   return vec4(d, 0., 0., 0.);
 }
@@ -615,11 +626,17 @@ void main() {
   float hF = fl.a * HS, onFloor = 1. - smoothstep(.1, .5, pr.a);
   float hrel = min(0., fl.a - .60) * HS * onFloor;                                         // how far below the flags' faces this point is
   float seam = smoothstep(.52, .40, fl.a) * onFloor;
-  vec2 tx = 1. / uDev; vec2 g = clamp(vec2(hAt(uv + vec2(tx.x, 0.)) - hAt(uv - vec2(tx.x, 0.)), hAt(uv + vec2(0., tx.y)) - hAt(uv - vec2(0., tx.y))) * .5 * uK, -1.6, 1.6);
+  float sp = mix(2.5, 1., onFloor); vec2 tx = sp / uDev; vec2 g = clamp(vec2(hAt(uv + vec2(tx.x, 0.)) - hAt(uv - vec2(tx.x, 0.)), hAt(uv + vec2(0., tx.y)) - hAt(uv - vec2(0., tx.y))) * .5 * uK / sp, -1.6, 1.6);
   vec3 n = normalize(vec3(-g, 1.));
   vec3 alb = pow(fl.rgb * (1. - pr.a) + pr.rgb, vec3(2.2));
   float mat = ph.g * step(.02, pr.a);
-  vec4 sh = shadeAt(uv);
+  // the props' own grain: stone and fired clay are never one flat colour, and their faces are never glass-smooth
+  if (pr.a > .02 && mat < .6) {
+    float fol = smoothstep(.25, .3, mat), gr = fbm(p * .12), fi = vn(p * .55);
+    alb *= mix(.80 + .34 * gr + .12 * fi, .88 + .24 * fi, fol);
+    vec2 gn = vec2(vn(p * .55 + vec2(.6, 0.)) - fi, vn(p * .55 + vec2(0., .6)) - fi) + .5 * vec2(fbm(p * .12 + vec2(.3, 0.)) - gr, fbm(p * .12 + vec2(0., .3)) - gr);
+    n = normalize(n + vec3(-gn * mix(.22, .12, fol), 0.)); }
+  vec4 sh = shadeAt(uv), sh0 = sh;                                                       // (sh0: as it is above the floor, for what stands on it)
   // down in a joint a shadow's edge lands a little further on (the light has further to come): the edge steps across the seams
   if (hrel < -.05) { sh.r = texture(uShade, (p - uSunG.xy * hrel * uSunG.z) / uCss).r; sh.g = texture(uShade, (p - uMoonG.xy * hrel * uMoonG.z) / uCss).g; }
   // and the joint's own wall shades its floor on the side away from the light
@@ -641,18 +658,36 @@ void main() {
   // light raking into a joint: the lit flag edges bounce warm light down into it (most at a low sun)
   col += alb * uSunC * sh.r * cs * seam * .8 * (1. - uSunL.z) * vec3(1., .78, .55);  { vec3 cool = alb * (sky * (.74 + .26 * n.z) + uMoonC * moonV * relief(n, uMoonL)); col += (vec3(dot(cool, vec3(.3, .55, .15))) * vec3(.55, .78, 1.3) - cool) * uNight * .75; }
   if (abs(mat - .667) < .1) {                                                             // water: the sky (and a lantern) looked at in it
-    col = mix(col, uSkyC * .22 + uLantC * sh.b * .5 + uSunC * sunV * .03 + vec3(.004, .008, .008), .8); }
+    vec2 wr = p - uWell.xy; float wl = length(wr);
+    if (wl < uWell.z + 2.) {
+      // down a shaft: the sun reaches the water only where its path clears the coping, and the shaft's wall shows as a dark band
+      float inS = smoothstep(uWell.z - 1., uWell.z - 4., length(wr + uSunG.xy * uWell.w * uSunG.z)) * sunV;
+      float wall = smoothstep(uWell.z - 15., uWell.z - 2., wl), rr = wl / uWell.z;
+      float rip = (sin(wl * .5 - uT * 1.1 + vn(wr * .08 + uT * .1) * 4.) * .5 + .5) * .5; rip *= smoothstep(uWell.z, uWell.z * .3, wl);
+      vec3 water = vec3(.003, .008, .008) + uSkyC * (.025 + .05 * rr * rr + .012 * rip) + uSunC * inS * (.012 + .05 * pow(rip, 6.)) + uLantC * sh.b * .25;
+      vec3 shaft = pow(vec3(.46, .42, .35), vec3(2.2)) * (.75 + .5 * fbm(vec2(atan(wr.y, wr.x) * 9., wl * .3))) * (uSkyC * .5 + uSunC * inS * .4) * wall;
+      col = mix(water, shaft, wall * .9);
+    } else col = mix(col, uSkyC * .22 + uLantC * sh.b * .5 + uSunC * sunV * .03 + vec3(.004, .008, .008), .8); }
   if (mat > .95) col += alb * uLantC * uLantOn * 2.2;                                     // a lantern's glass, lit
   // ---- the cat ----
   if (length(p - uCat0.xy) < 75. * uCat2.w) {
     vec4 c = catEval(p, ch);
-    if (c.w < 1.) {
+    // fur: fine strands in the cat's own frame, running along the body (round the curl when asleep)
+    vec2 q0 = (p - uCat0.xy) / uCat2.w, hf = vec2(cos(uCat0.z), sin(uCat0.z)); vec2 q = vec2(dot(q0, hf), dot(q0, vec2(-hf.y, hf.x)));
+    vec2 fs = vec2(q.x * .8 + q.y * .3, q.y * 2.2 - q.x * .25);
+    float st = vn(fs) * .6 + vn(fs * 2.1 + 5.) * .4;
+    col *= 1. - .32 * smoothstep(5., 0., c.w) * step(0., c.w);                              // where it touches the floor
+    float edge = c.w + (st - .5) * 2.4;                                                     // a soft furry outline, not a cut-out
+    if (edge < 1.5) {
       float e = .8 / uK, hx, hy; catEval(p + vec2(e, 0.), hx); catEval(p + vec2(0., e), hy);
-      vec3 cn = normalize(vec3(-(hx - ch) / e * .6, -(hy - ch) / e * .6, 1.));
-      vec3 ca = pow(c.rgb, vec3(2.2));
-      float sv = sh.r * cs, mv = sh.g * cm;
-      vec3 cl = sky * (.6 + .4 * cn.z) + uSunC * sv * relief(cn, uSunL) + uMoonC * mv * relief(cn, uMoonL) + lant;
-      col = mix(col, ca * cl, 1. - smoothstep(-.6, .9, c.w));
+      float sx = vn(fs + vec2(.5, 0.)) - vn(fs), sy = vn(fs + vec2(0., .5)) - vn(fs);
+      vec3 cn = normalize(vec3(-(hx - ch) / e * .5 - sx * .5, -(hy - ch) / e * .5 - sy * .5, 1.));
+      vec3 ca = pow(c.rgb, vec3(2.2)) * (.78 + .4 * st);
+      // (a point up on its back meets a shadow's edge further from the light than the floor does: the edge wraps over it)
+      float sv = shadeAt((p - uSunG.xy * ch * uSunG.z) / uCss).r * cs, mv = shadeAt((p - uMoonG.xy * ch * uMoonG.z) / uCss).g * cm;
+      vec3 cl = uSkyC * sh0.a * (.6 + .4 * cn.z) + uSunC * sv * min(relief(cn, uSunL), 1.4) + uMoonC * mv * relief(cn, uMoonL) + uLantC * sh0.b * 2.6;   // (the floor's joints under it don't shade a cat)
+      cl += uSunC * sv * .12 * smoothstep(-4., 0., c.w);                                    // light caught in the fur at the rim
+      col = mix(col, ca * cl, 1. - smoothstep(-1., 1.5, edge));
     }
   }
   // ---- the olive crown ----
@@ -775,7 +810,7 @@ function render(now) {
   gl.uniform4f(u.uCan, t.x, t.y, t.R, t.zc); gl.uniform4f(u.uSway, ox, oy, sw, 0);
   gl.uniform4f(u.uCanS, ...cS); gl.uniform4f(u.uCanM, ...cM);
   gl.uniform4f(u.uCat0, cat.x, cat.y, cat.hd, cat.curl); gl.uniform4f(u.uCat1, cat.phase, cat.legs, cat.breath, cat.tail); gl.uniform4f(u.uCat2, 0, 0, 9 * U, L.catS);
-  gl.uniform4fv(u.uLamp, bufL); gl.uniform1i(u.uNL, L.lamps.length);
+  gl.uniform4fv(u.uLamp, bufL); gl.uniform1i(u.uNL, L.lamps.length); gl.uniform4f(u.uWell, L.well.x, L.well.y, L.well.r * .72, 40 * U);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.disable(gl.SCISSOR_TEST);
   cat.px = cat.x; cat.py = cat.y; full = false; draws++;
