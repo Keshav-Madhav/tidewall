@@ -11,6 +11,7 @@ internal sealed class TidewallApp : ApplicationContext
     readonly Control loop = new();
     readonly WindowTracker tracker;
     readonly DeskIcons deskIcons;
+    readonly Locator locator;
     readonly NotifyIcon tray;
     readonly System.Windows.Forms.Timer clock = new() { Interval = 1000 };
     readonly System.Windows.Forms.Timer pointer = new() { Interval = 16 };
@@ -54,6 +55,8 @@ internal sealed class TidewallApp : ApplicationContext
         if (Config.NotesSeen == null && !Config.Welcomed) Config.NotesSeen = Config.Version;   // a fresh install: nothing to announce
         RebuildMenu();
         BuildWalls();
+        // where you are, for the walls that draw the real sky (Windows asks once); a move redraws them
+        locator = new Locator(() => loop.BeginInvoke(() => { foreach (var w in walls.ToList()) ReplaceWall(w, "you moved"); RefreshMenu(); }));
         // opened by hand (Start menu, the desktop shortcut, the installer's last step), or for the first time ever: the window,
         // as on the Mac; started at login (--background) it stays out of the way
         if (Args.Has("--settings")) loop.BeginInvoke(() => ShowSettings(Args.Value("--settings")));
@@ -84,7 +87,7 @@ internal sealed class TidewallApp : ApplicationContext
         SystemEvents.PowerModeChanged += (_, e) => loop.BeginInvoke(() =>
         {
             if (e.Mode == PowerModes.Suspend) { asleep = true; Log.Write("asleep"); }
-            else if (e.Mode == PowerModes.Resume) { asleep = false; Log.Write("awake"); CheckGPUContexts(); }
+            else if (e.Mode == PowerModes.Resume) { asleep = false; Log.Write("awake"); CheckGPUContexts(); locator.Look(); }
             CheckPower(); Dispatch(false);
         });
         Wallpaper.SetPace(power.Pace, walls);

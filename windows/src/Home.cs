@@ -12,8 +12,26 @@ static class Home
     public readonly record struct Place(string Name, double Lat, double Lon, string Tz, string Cc);
 
     // (lazy: the tables below must exist first; a static initialised in order hit them before they did)
-    static readonly Lazy<Place?> current = new(Find);
-    public static Place? Current => current.Value;
+    static readonly Lazy<Place?> zone = new(Find);
+    /// Where the sky is drawn from: where Windows' location service says you are (Locator), else your time zone's city.
+    /// Windows has no free way to name the town, so the time zone's city's name stays only if it's near (~120 km);
+    /// further off, the walls get the coordinates alone. The country (Wind Map's region) is always the time zone's.
+    public static Place? Current
+    {
+        get
+        {
+            if (Config.Here is not { } h) return zone.Value;
+            var z = zone.Value;
+            string name = z is { } c && Km(c.Lat, c.Lon, h.Lat, h.Lon) < 120 ? c.Name : "";
+            return new Place(name, h.Lat, h.Lon, z?.Tz ?? "", z?.Cc ?? "");
+        }
+    }
+    static double Km(double la1, double lo1, double la2, double lo2)
+    {
+        double r = Math.PI / 180, dla = (la2 - la1) * r, dlo = (lo2 - lo1) * r;
+        double a = Math.Sin(dla / 2) * Math.Sin(dla / 2) + Math.Cos(la1 * r) * Math.Cos(la2 * r) * Math.Sin(dlo / 2) * Math.Sin(dlo / 2);
+        return 6371 * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+    }
 
     /// Windows names time zones its own way ("India Standard Time"); .NET maps them to the standard names, but the
     /// mapping (CLDR) keeps some old spellings that zone.tab has since renamed
@@ -105,7 +123,7 @@ static class Home
 
     /// The query the walls and the Settings preview are given (the same as the Mac's).
     public static string Query => Current is { } p
-        ? $"&site={Uri.EscapeDataString(p.Name)}&lat={p.Lat.ToString("F3", CultureInfo.InvariantCulture)}&lon={p.Lon.ToString("F3", CultureInfo.InvariantCulture)}&tz={Uri.EscapeDataString(p.Tz)}"
+        ? $"&site={Uri.EscapeDataString(p.Name)}&lat={p.Lat.ToString("F3", CultureInfo.InvariantCulture)}&lon={p.Lon.ToString("F3", CultureInfo.InvariantCulture)}" + (p.Tz.Length > 0 ? $"&tz={Uri.EscapeDataString(p.Tz)}" : "")
         : "";
 
     /// Wind Map's default region: the user's own country, if the map has it (its regions are ISO 3166 three-letter codes).
@@ -118,7 +136,7 @@ static class Home
         {
             // the country of your time zone's city (as on the Mac), else Windows' region setting; the map's regions are
             // three-letter codes (CLDR's table turns the two-letter ones into those)
-            var cc = Current?.Cc ?? UserRegion();
+            var cc = zone.Value?.Cc ?? UserRegion();
             var iso3 = cc == null ? null : Lines("countries.tsv").Select(l => l.Split('\t')).FirstOrDefault(f => f.Length == 2 && f[0] == cc)?[1];
             if (iso3 == null) { Log.Write($"home region: none for {cc ?? "no region"}"); return null; }
             var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(Config.ThemesRoot, "variants.json")));

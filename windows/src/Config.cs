@@ -148,6 +148,14 @@ internal static class Config
 
     /// Each wall keeps your desktop icons clear (on by default: unlike Finder's, Explorer's need no permission).
     public static bool DeskIcons { get => Get("deskIcons", true); set => Set("deskIcons", value); }
+    /// Where Windows' location service last said you are (rounded to a tenth of a degree, ~10 km), and when.
+    public static (double Lat, double Lon, DateTime At)? Here
+    {
+        get => data["hereLat"] is { } a && data["hereLon"] is { } o
+            ? (a.GetValue<double>(), o.GetValue<double>(), DateTime.TryParse(Get("hereAt", ""), null, System.Globalization.DateTimeStyles.RoundtripKind, out var t) ? t : DateTime.MinValue)
+            : null;
+        set { if (value is { } v) { data["hereLat"] = v.Lat; data["hereLon"] = v.Lon; data["hereAt"] = v.At.ToString("o"); Save(); } }
+    }
     /// The window has been shown once (the first launch ever shows it, even at login).
     /// Where the Settings window was last left.
     public static Rectangle? WindowBounds

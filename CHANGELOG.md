@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.3]
+
+### Windows
+- The sky over you on Windows too: Courtyard's sun and Celestial Atlas's stars follow where you are (Windows asks once
+  whether Tidewall may use your location; it's rounded to about 10 km and stays on your PC). Until then, or if you say
+  no, it keeps to your time zone's city, as before.
+- Desktop icons are read through Explorer's own shell interface instead of from inside Explorer's memory, which some
+  antivirus programs mistook for something malicious. A busy or restarting Explorer no longer holds the walls up either.
+
+### Mac
+- After the Mac has been asleep overnight, Tidewall checks where you are again on waking (it only did every six hours
+  of being awake).
+
 ## [1.5.2]
 
 ### Courtyard

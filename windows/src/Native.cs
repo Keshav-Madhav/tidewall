@@ -114,4 +114,8 @@ internal static partial class Native
         var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
         return GetLastInputInfo(ref info) ? (Environment.TickCount - (int)info.dwTime) / 1000.0 : 0;
     }
+
+    /// A window's DPI (its display's, for a window that follows it): 96 at 100 %.
+    public static int DpiOf(IntPtr h) { uint d = GetDpiForWindow(h); return d > 0 ? (int)d : 96; }
+    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
 }

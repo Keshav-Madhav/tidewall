@@ -47,7 +47,8 @@ let seed = 1;
 // Star, constellation and Milky Way data: d3-celestial by Olaf Frohn (BSD-3-Clause), see sky/LICENSE-d3-celestial.
 // where you are: the host passes the city of your time zone (from the system's time-zone table; no location permission)
 const SQ = new URLSearchParams(location.search);
-const SITE = { name: SQ.get('site') || 'Greenwich', lat: parseFloat(SQ.get('lat')) || 51.48, lon: parseFloat(SQ.get('lon')) || 0,
+const SITE = { name: SQ.has('site') ? SQ.get('site') : 'Greenwich',   // (given but empty: where you are, with no town's name for it)
+  lat: parseFloat(SQ.get('lat')) || 51.48, lon: parseFloat(SQ.get('lon')) || 0,
   tz: SQ.get('tz') || (SQ.get('lat') ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'Europe/London') };   // (no site given, as on the website: Greenwich's sky, so Greenwich's clock)
 const D2R = Math.PI / 180;
 let SKY = null;
@@ -350,7 +351,7 @@ function paintSky(date = new Date()) {
   const when = `${fmt({ day: 'numeric', month: 'short', year: 'numeric' })} · ${fmt({ hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }).replace(/GMT\+0$/, 'GMT')}`;
   const deg = (v, p, n) => `${Math.abs(v).toFixed(1)}°${v >= 0 ? p : n}`;
   x.font = `italic 11px ${SERIF}`; x.fillStyle = GOLD + '.65)';
-  x.fillText(`${SITE.name} · ${deg(SITE.lat, 'N', 'S')} ${deg(SITE.lon, 'E', 'W')}`, tx, ty + 9); x.fillText(when, tx, ty + 23);
+  x.fillText(`${SITE.name ? SITE.name + ' · ' : ''}${deg(SITE.lat, 'N', 'S')} ${deg(SITE.lon, 'E', 'W')}`, tx, ty + 9); x.fillText(when, tx, ty + 23);
   }
   return c;
 }
