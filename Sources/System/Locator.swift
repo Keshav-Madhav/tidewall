@@ -7,8 +7,9 @@ import CoreLocation
 /// of your time zone stands in.
 ///
 /// Kept rounded to a tenth of a degree (about 10 km) in Tidewall's own settings and used only on this Mac; the town's
-/// name comes from Apple's own lookup (the one Location Services already uses). Looked again every six hours and when
-/// your time zone changes; the walls are redrawn only when you've moved more than about 25 km.
+/// name comes from Apple's own lookup (the one Location Services already uses). Looked again every six hours (and on
+/// waking, if it's been that long) and when your time zone changes; the walls are redrawn only when you've moved more
+/// than about 25 km.
 final class Locator: NSObject, CLLocationManagerDelegate {
   static let shared = Locator()
   /// You moved (or the first fix came): the sky's pages need drawing again.
@@ -30,6 +31,8 @@ final class Locator: NSObject, CLLocationManagerDelegate {
     if manager.authorizationStatus == .notDetermined { manager.requestWhenInUseAuthorization() } else { look() }
     timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.look(force: true) }
     NotificationCenter.default.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in self?.look(force: true) }
+    // (a timer doesn't count time asleep: a laptop shut overnight would never reach its six hours)
+    NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.look() }
   }
 
   /// One fix, if we may and the last is old (or we're told to).
